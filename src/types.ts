@@ -47,7 +47,6 @@ export interface AppSettings {
   backgroundOpacity: number;
   gridSize: number;
   defaultNoteColor: string;
-  customNoteColors: string[];
   shortcutScreenshot: string;
   shortcutLongScreenshot: string;
   shortcutPenetrate: string;
@@ -63,6 +62,39 @@ export interface MindMapState {
   showDots: boolean;
 }
 
+export interface DiagConfig {
+  mode: string;
+  captureInterval: number;
+  captureArea: string;
+  previewEnabled: boolean;
+  previewWidth: number;
+  previewMaxFps: number;
+  previewMaxHeightMode: string;
+  previewFixedMaxHeight: number;
+}
+export interface DiagStatus {
+  type: 'diag-status'; active: boolean; mode: string;
+  captureInterval?: number; captureArea?: string;
+  previewEnabled?: boolean; logPath?: string | null;
+}
+export interface PreviewUpdate {
+  type: 'preview-update'; previewPath: string | null;
+  previewWidth: number; previewHeight: number;
+  stitchedHeight: number; tileCount: number;
+  incremental: boolean; durationMs?: number;
+}
+export interface CaptureProgress {
+  type: 'capture-progress'; tileCount: number;
+  width?: number; height?: number;
+  cumH?: number; cumW?: number;
+  tilePath?: string; stitchMs?: number;
+}
+export interface EventLoopStats {
+  type: 'eventloop-stats'; scope: string;
+  sampleCount: number; totalDurationMs: number;
+  avgMs: number; p95Ms: number; p99Ms: number;
+  maxMs: number; over50ms: number; over100ms: number;
+}
 export type ViewMode = 'notes' | 'mindmap';
 
 export const DEFAULT_COLORS = [
@@ -98,7 +130,6 @@ export const DEFAULT_SETTINGS: AppSettings = {
   backgroundOpacity: 0.3,
   gridSize: 20,
   defaultNoteColor: '#2d2d44',
-  customNoteColors: [],
   shortcutScreenshot: 'Ctrl+Shift+X',
   shortcutLongScreenshot: 'Ctrl+Shift+Alt+X',
   shortcutPenetrate: 'Ctrl+P',

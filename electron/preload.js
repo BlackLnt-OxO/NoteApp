@@ -41,12 +41,30 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   // Screenshot
   startScreenshot: () => ipcRenderer.invoke('screenshot:start'),
-  startEyedropper: () => ipcRenderer.invoke('eyedropper:start'),
   startLongScreenshot: () => ipcRenderer.invoke('screenshot:startLongScreenshot'),
   showToast: (msg) => ipcRenderer.invoke('show-toast', msg),
   cancelScreenshot: () => ipcRenderer.invoke('screenshot:cancel'),
   onScreenshotCompleted: (callback) => {
     ipcRenderer.on('screenshot:completed', (event, result) => callback(result));
+  },
+
+  // Diagnostic
+  diagSetConfig: (config) => ipcRenderer.invoke('screenshot:diag-set-config', config),
+  diagGetConfig: () => ipcRenderer.invoke('screenshot:diag-get-config'),
+  diagGetStats: () => ipcRenderer.invoke('screenshot:diag-get-stats'),
+  diagGetLogPath: () => ipcRenderer.invoke('screenshot:diag-get-log-path'),
+  diagGetModes: () => ipcRenderer.invoke('screenshot:diag-get-modes'),
+  onDiagStatus: (callback) => {
+    ipcRenderer.on('screenshot:diag-status', (event, data) => callback(data));
+  },
+  onDiagStats: (callback) => {
+    ipcRenderer.on('screenshot:diag-stats', (event, data) => callback(data));
+  },
+  onCaptureProgress: (callback) => {
+    ipcRenderer.on('screenshot:capture-progress', (event, data) => callback(data));
+  },
+  onPreviewUpdate: (callback) => {
+    ipcRenderer.on('screenshot:preview-update', (event, data) => callback(data));
   },
 
   // File operations

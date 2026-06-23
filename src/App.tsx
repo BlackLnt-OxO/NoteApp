@@ -5,6 +5,7 @@ import NoteGrid from './components/NoteGrid';
 import CreateNoteDialog from './components/CreateNoteDialog';
 import SettingsDialog from './components/SettingsDialog';
 import ScreenshotTool from './components/ScreenshotTool';
+import DiagnosticPanel from './components/DiagnosticPanel';
 import { fs, fsn } from './utils';
 
 const App: React.FC = () => {
@@ -13,6 +14,7 @@ const App: React.FC = () => {
   const titleBarH = gfs >= 18 ? fsn(38, gfs) : 38;
   const [showCreateDialog, setShowCreateDialog] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
+  const [showDiagnostic, setShowDiagnostic] = useState(false);
   const [isMaximized, setIsMaximized] = useState(false);
   const [fontToast, setFontToast] = useState({ show: false, size: 14, fading: false });
 
@@ -65,6 +67,10 @@ const App: React.FC = () => {
       if (e.ctrlKey && e.shiftKey && e.key === 'X') {
         e.preventDefault();
         window.electronAPI?.startScreenshot();
+      }
+      if (e.ctrlKey && e.shiftKey && e.key === 'D') {
+        e.preventDefault();
+        setShowDiagnostic(v => !v);
       }
     };
     window.addEventListener('keydown', onKey);
@@ -146,7 +152,7 @@ const App: React.FC = () => {
           <NoteGrid />
 
           <button onClick={() => setShowSettings(true)} title="设置" style={{
-            position: 'absolute', bottom: '16px', left: '16px',
+            position: 'absolute', bottom: '16px', right: '16px',
             width: '36px', height: '36px', borderRadius: '50%',
             background: 'var(--glass-bg)', backdropFilter: 'blur(20px)',
             border: '1px solid var(--glass-border)',
@@ -190,6 +196,7 @@ const App: React.FC = () => {
       )}
       {showCreateDialog && <CreateNoteDialog onClose={() => setShowCreateDialog(false)} />}
       {showSettings && <SettingsDialog onClose={() => setShowSettings(false)} />}
+      <DiagnosticPanel visible={showDiagnostic} onClose={() => setShowDiagnostic(false)} />
     </div>
   );
 };

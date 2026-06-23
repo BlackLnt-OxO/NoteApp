@@ -1,8 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { useNoteStore } from '../store';
 import { fs, fsn } from '../utils';
-import { DEFAULT_COLORS } from '../types';
-import ColorPicker from './ColorPicker';
 
 interface SettingsDialogProps { onClose: () => void; }
 
@@ -50,10 +48,6 @@ const SettingsDialog: React.FC<SettingsDialogProps> = ({ onClose }) => {
   const gfs = settings.fontSize;
   const [localSettings, setLocalSettings] = useState({ ...settings });
   const [fontOpen, setFontOpen] = useState(false);
-  const [showPicker, setShowPicker] = useState(false);
-  const [pickerColor, setPickerColor] = useState('#6b5ce7');
-  const [hoverSwatch, setHoverSwatch] = useState<string | null>(null);
-  const [hoverDelete, setHoverDelete] = useState<string | null>(null);
   const fontDropdownRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -172,70 +166,12 @@ const SettingsDialog: React.FC<SettingsDialogProps> = ({ onClose }) => {
 
         <div style={sectionStyle}>
           <label style={labelStyle(gfs)}>默认便笺颜色</label>
-          <div style={{ display: 'flex', gap: fs(5, gfs), flexWrap: 'wrap', alignItems: 'center' }}>
-            {DEFAULT_COLORS.map((c) => (
+          <div style={{ display: 'flex', gap: fs(5, gfs), flexWrap: 'wrap' }}>
+            {['#6b5ce7','#e74c3c','#e67e22','#2ecc71','#3498db','#1abc9c','#e91e63','#9b59b6','#34495e','#2d2d44'].map((c) => (
               <div key={c} className={`color-swatch ${localSettings.defaultNoteColor === c ? 'selected' : ''}`}
                 style={{ background: c, width: fsn(26, gfs), height: fsn(26, gfs) }} onClick={() => handleChange('defaultNoteColor', c)} />
             ))}
-            {(localSettings.customNoteColors || []).map((c) => (
-              <div key={c} style={{ position: 'relative', display: 'inline-block' }}
-                onMouseEnter={() => setHoverSwatch(c)} onMouseLeave={() => { setHoverSwatch(null); setHoverDelete(null); }}>
-                <div className={`color-swatch ${localSettings.defaultNoteColor === c ? 'selected' : ''}`}
-                  style={{ background: c, width: fsn(26, gfs), height: fsn(26, gfs) }} onClick={() => handleChange('defaultNoteColor', c)} />
-                <button onClick={(e) => {
-                  e.stopPropagation();
-                  const newCustom = (localSettings.customNoteColors || []).filter(x => x !== c);
-                  handleChange('customNoteColors', newCustom);
-                  if (localSettings.defaultNoteColor === c) handleChange('defaultNoteColor', DEFAULT_COLORS[0]);
-                }} onMouseEnter={() => setHoverDelete(c)} onMouseLeave={() => setHoverDelete(null)} style={{
-                  position: 'absolute', top: '-5px', right: '-5px',
-                  width: fsn(14, gfs), height: fsn(14, gfs), borderRadius: '50%',
-                  border: 'none', color: '#fff',
-                  fontSize: fs(8, gfs), cursor: hoverSwatch === c ? 'pointer' : 'default',
-                  display: 'flex', transition: 'opacity 0.15s',
-                  opacity: hoverSwatch === c ? 1 : 0,
-                  background: hoverDelete === c ? 'var(--danger)' : 'rgba(120,120,120,0.7)',
-                  alignItems: 'center', justifyContent: 'center', lineHeight: 1,
-                }}>x</button>
-              </div>
-            ))}
-            {/* + button to open color picker */}
-            <div style={{ position: 'relative' }}>
-              <button className="glass-btn" onClick={() => setShowPicker(true)} style={{
-                width: fsn(26, gfs), height: fsn(26, gfs), borderRadius: '50%',
-                padding: 0, fontSize: fs(18, gfs), display: 'flex', lineHeight: 1,
-                alignItems: 'center', justifyContent: 'center',
-                background: 'var(--glass-bg-light)',
-                color: 'var(--text-muted)', border: '1px dashed var(--glass-border)',
-              }}>+</button>
-            </div>
           </div>
-
-          {/* Color picker overlay */}
-          {showPicker && (
-            <div className="dialog-overlay" style={{ zIndex: 10002 }}
-              onMouseDown={(e) => { (e.currentTarget as HTMLElement).dataset.mdTarget = e.target === e.currentTarget ? '1' : '0'; }}
-              onMouseUp={(e) => {
-                if (e.target === e.currentTarget && (e.currentTarget as HTMLElement).dataset.mdTarget === '1') {
-                  if (!(localSettings.customNoteColors || []).includes(pickerColor)) {
-                    handleChange('customNoteColors', [...(localSettings.customNoteColors || []), pickerColor]);
-                  }
-                  setShowPicker(false);
-                }
-              }}>
-              <ColorPicker
-                color={pickerColor}
-                onChange={setPickerColor}
-                onClose={() => {
-                  if (!(localSettings.customNoteColors || []).includes(pickerColor)) {
-                    handleChange('customNoteColors', [...(localSettings.customNoteColors || []), pickerColor]);
-                  }
-                  setShowPicker(false);
-                }}
-                gfs={gfs}
-              />
-            </div>
-          )}
         </div>
 
         {/* Configurable shortcuts */}
