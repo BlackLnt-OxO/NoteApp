@@ -162,16 +162,17 @@ export const ColorPicker: React.FC<Props> = ({ color, onChange, gfs }) => {
         {/* Old/New + Eyedropper */}
         <div style={{ display:'flex',flexDirection:'column',gap:fs(4,gfs) }}>
           <div style={{ display:'flex',gap:fs(4,gfs) }}>
-            <div style={{ width:fsn(60,gfs),height:fsn(80,gfs),borderRadius:fsn(4,gfs),
-              background:color,border:'1px solid rgba(255,255,255,0.08)' }} />
-            <div style={{ width:fsn(60,gfs),height:fsn(80,gfs),borderRadius:fsn(4,gfs),
-              background:hex,border:'1px solid rgba(255,255,255,0.08)' }} />
+            <div style={{ display:'flex',flexDirection:'column',alignItems:'center',gap:fs(2,gfs) }}>
+              <span style={{ fontSize:fs(10,gfs),color:'rgba(255,255,255,0.5)' }}>旧</span>
+              <div style={{ width:fsn(60,gfs),height:fsn(80,gfs),borderRadius:fsn(4,gfs),
+                background:color,border:'1px solid rgba(255,255,255,0.08)' }} />
+            </div>
+            <div style={{ display:'flex',flexDirection:'column',alignItems:'center',gap:fs(2,gfs) }}>
+              <span style={{ fontSize:fs(10,gfs),color:'rgba(255,255,255,0.5)' }}>新</span>
+              <div style={{ width:fsn(60,gfs),height:fsn(80,gfs),borderRadius:fsn(4,gfs),
+                background:hex,border:'1px solid rgba(255,255,255,0.08)' }} />
+            </div>
           </div>
-          <label style={{ display:'flex',alignItems:'center',gap:fs(4,gfs),cursor:'pointer',
-            fontSize:fs(11,gfs),color:'rgba(255,255,255,0.7)' }}>
-            <input type="checkbox" defaultChecked style={{ width:fsn(12,gfs),height:fsn(12,gfs) }} />
-            sRGB Preview
-          </label>
           <button onClick={startEyedropper} title="吸管取色" style={{
             background:'rgba(255,255,255,0.08)',border:'1px solid rgba(255,255,255,0.15)',
             borderRadius:fsn(4,gfs),cursor:'pointer',color:'rgba(255,255,255,0.8)',
