@@ -2,6 +2,7 @@ const { app, BrowserWindow, ipcMain, screen, desktopCapturer, globalShortcut, na
 const path = require('path');
 const fs = require('fs');
 const floatingManager = require('./floatingManager');
+const diagnostic = require('./diagnostic');
 
 let mainWindow = null;
 let screenshotWindows = [];
@@ -94,7 +95,7 @@ function saveWindowBounds(key, bounds) {
   fs.writeFileSync(filePath, JSON.stringify(data), 'utf-8');
 }
 
-// Call Python script with JSON input, return parsed output
+// Call Python script with JSON input, return parsed output (legacy — prefer daemon)
 function callPython(scriptName, input) {
   try {
     // Copy script from asar to temp (Python can't read asar)
@@ -108,6 +109,114 @@ function callPython(scriptName, input) {
     );
     return JSON.parse(result.trim());
   } catch(e) { console.error(`Python ${scriptName} error:`, e.message); return null; }
+}
+
+// ── Capture Daemon (persistent Python process for mss GDI capture + stitch) ──
+let capDaemon = null;
+let capDaemonBuffer = '';
+let capDaemonPending = [];  // queue of resolve callbacks
+
+function spawnCapDaemon() {
+  const daemonSrc = path.join(__dirname, 'longshot', 'capture_daemon.py');
+  const mssSrc = path.join(__dirname, 'mss');
+  const tmpDir = path.join(app.getPath('temp'), 'sticky-notes-py');
+  if (!fs.existsSync(tmpDir)) fs.mkdirSync(tmpDir, { recursive: true });
+  const daemonDst = path.join(tmpDir, 'capture_daemon.py');
+  const mssDst = path.join(tmpDir, 'mss');
+  fs.copyFileSync(daemonSrc, daemonDst);
+  // Copy bundled mss library so Python can import it (cannot read from asar)
+  try { fs.cpSync(mssSrc, mssDst, { recursive: true }); } catch(e) {
+    // If mss is already there from a previous run, that's fine
+    if (e.code !== 'ERR_FS_CP_EEXIST') console.error('[cap-daemon] mss copy warning:', e.message);
+  }
+
+  capDaemon = require('child_process').spawn('python', [daemonDst], {
+    stdio: ['pipe', 'pipe', 'pipe'],
+  });
+
+  capDaemonBuffer = '';
+  capDaemonPending = [];
+
+  // Prevent EPIPE crashes when writing to daemon stdin after it exits
+  capDaemon.stdin.on('error', (err) => {
+    if (err.code !== 'EPIPE') console.error('[cap-daemon] stdin error:', err.message);
+  });
+
+  capDaemon.on('error', (err) => {
+    console.error('[cap-daemon] spawn error:', err.message);
+  });
+
+  capDaemon.stdout.on('data', (chunk) => {
+    capDaemonBuffer += chunk.toString();
+    const lines = capDaemonBuffer.split('\n');
+    capDaemonBuffer = lines.pop(); // keep incomplete line
+    for (const line of lines) {
+      if (!line.trim()) continue;
+      try {
+        const msg = JSON.parse(line);
+        if (capDaemonPending.length > 0) {
+          capDaemonPending.shift()(msg);
+        }
+      } catch(e) { console.error('[cap-daemon] parse error:', e.message); }
+    }
+  });
+
+  capDaemon.stderr.on('data', (chunk) => {
+    const text = chunk.toString().trim();
+    if (text) console.error('[cap-daemon stderr]', text);
+  });
+
+  capDaemon.on('close', (code) => {
+    console.log('[cap-daemon] exited with code', code);
+    // Drain pending promises with error so callers know daemon died
+    while (capDaemonPending.length > 0) {
+      capDaemonPending.shift()(null);
+    }
+    capDaemon = null;
+  });
+
+  return new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      killCapDaemon();
+      reject(new Error('daemon start timeout'));
+    }, 15000);
+    capDaemonPending.push((msg) => {
+      clearTimeout(timeout);
+      if (msg && msg.ready) resolve();
+      else reject(new Error('daemon failed to become ready'));
+    });
+  });
+}
+
+function sendDaemon(msg) {
+  return new Promise((resolve, reject) => {
+    if (!capDaemon || capDaemon.killed) { reject(new Error('daemon not running')); return; }
+    capDaemonPending.push(resolve);
+    try {
+      capDaemon.stdin.write(JSON.stringify(msg) + '\n');
+    } catch(e) {
+      // Remove the pending resolver on write error
+      const idx = capDaemonPending.indexOf(resolve);
+      if (idx >= 0) capDaemonPending.splice(idx, 1);
+      reject(e);
+    }
+  });
+}
+
+function killCapDaemon() {
+  if (capDaemon && !capDaemon.killed) {
+    try { capDaemon.stdin.write(JSON.stringify({ action: 'shutdown' }) + '\n'); } catch(e) {}
+    setTimeout(() => {
+      if (capDaemon && !capDaemon.killed) { try { capDaemon.kill(); } catch(e) {} }
+      capDaemon = null;
+      capDaemonBuffer = '';
+      capDaemonPending = [];
+    }, 2000);
+  } else {
+    capDaemon = null;
+    capDaemonBuffer = '';
+    capDaemonPending = [];
+  }
 }
 
 // Screenshot via Windows native Win+Shift+S
@@ -242,74 +351,6 @@ function setupIPC() {
     return floatingManager.closeAll();
   });
 
-  // Eyedropper: fullscreen overlay, pick pixel color
-  ipcMain.handle('eyedropper:start', async () => {
-    return new Promise(async (resolve) => {
-      const displays = screen.getAllDisplays();
-      // Capture all displays
-      const capWins = [];
-      let resolved = false;
-
-      for (const d of displays) {
-        const ow = new BrowserWindow({
-          x: d.bounds.x, y: d.bounds.y, width: d.bounds.width, height: d.bounds.height,
-          transparent: true, frame: false, alwaysOnTop: true, skipTaskbar: true, resizable: false,
-          webPreferences: { contextIsolation: false, nodeIntegration: true },
-        });
-        ow.setAlwaysOnTop(true, 'screen-saver');
-        ow.setIgnoreMouseEvents(false);
-
-        // Take screenshot for this display
-        const sources = await desktopCapturer.getSources({
-          types: ['screen'],
-          thumbnailSize: { width: d.size.width, height: d.size.height },
-        });
-        const source = sources.find(s => s.display_id === String(d.id)) || sources[0];
-        const imgDataUrl = source ? source.thumbnail.toDataURL() : '';
-
-        const html = `<!DOCTYPE html><html><head><meta charset="UTF-8"><style>
-*{margin:0;padding:0}body{cursor:crosshair;overflow:hidden;width:100vw;height:100vh}
-#c{position:fixed;inset:0}
-#lp{position:fixed;pointer-events:none;width:120px;height:24px;background:rgba(0,0,0,0.75);color:#fff;font:12px monospace;display:flex;align-items:center;justify-content:center;border:1px solid rgba(255,255,255,0.3);border-radius:4px;z-index:100;white-space:nowrap}
-</style></head><body>
-<canvas id="c"></canvas><div id="lp"></div>
-<script>
-const {ipcRenderer}=require('electron');
-const cvs=document.getElementById('c'),ctx=cvs.getContext('2d'),lp=document.getElementById('lp');
-cvs.width=${d.size.width};cvs.height=${d.size.height};
-const img=new Image();img.src='${imgDataUrl}';
-img.onload=function(){ctx.drawImage(img,0,0);};
-document.addEventListener('mousemove',function(e){
-  lp.style.left=(e.clientX+14)+'px';lp.style.top=(e.clientY+14)+'px';
-  const px=ctx.getImageData(e.clientX,e.clientY,1,1).data;
-  const hex='#'+[px[0],px[1],px[2]].map(v=>v.toString(16).padStart(2,'0')).join('');
-  lp.style.borderColor=hex;
-  lp.innerHTML='<span style="display:inline-block;width:14px;height:14px;background:'+hex+';border:1px solid rgba(255,255,255,0.4);border-radius:2px;margin-right:4px"></span>'+hex.toUpperCase();
-});
-document.addEventListener('click',function(e){
-  const px=ctx.getImageData(e.clientX,e.clientY,1,1).data;
-  const hex='#'+[px[0],px[1],px[2]].map(v=>v.toString(16).padStart(2,'0')).join('');
-  ipcRenderer.send('eyedropper:picked',hex);
-});
-document.addEventListener('keydown',function(e){if(e.key==='Escape')ipcRenderer.send('eyedropper:picked',null);});
-</script></body></html>`;
-
-        const tmpDir = path.join(app.getPath('temp'), 'sticky-notes-screenshot');
-        if (!fs.existsSync(tmpDir)) fs.mkdirSync(tmpDir, { recursive: true });
-        const f = path.join(tmpDir, `eyedrop-${d.id}.html`);
-        fs.writeFileSync(f, html, 'utf-8');
-        ow.loadFile(f);
-        capWins.push(ow);
-      }
-
-      const close = () => { capWins.forEach(w => { if (!w.isDestroyed()) w.close(); }); };
-
-      ipcMain.once('eyedropper:picked', (event, color) => {
-        if (!resolved) { resolved = true; close(); resolve(color); }
-      });
-    });
-  });
-
   ipcMain.handle('screenshot:start', () => captureWithNativeSnipping());
 
   // Long screenshot floating toolbar actions
@@ -322,6 +363,7 @@ document.addEventListener('keydown',function(e){if(e.key==='Escape')ipcRenderer.
   ipcMain.on('screenshot:long-cancel', () => {
     longCaptureActive = false; longCaptureFrames = [];
     stopAutoCapture();
+    killCapDaemon();
     hideLongCaptureUI();
     closeScreenshotWindows();
   });
@@ -362,7 +404,24 @@ document.addEventListener('keydown',function(e){if(e.key==='Escape')ipcRenderer.
     return finishLongCapture(frames);
   });
 
-
+  // ── Diagnostic IPC handlers ──
+  ipcMain.handle('screenshot:diag-set-config', async (event, config) => {
+    diagnostic.setConfig(config);
+    return diagnostic.getConfig();
+  });
+  ipcMain.handle('screenshot:diag-get-config', async () => {
+    return diagnostic.getConfig();
+  });
+  ipcMain.handle('screenshot:diag-get-stats', async () => {
+    if (diagCaptureLoop) return diagCaptureLoop.getState();
+    return { active: false };
+  });
+  ipcMain.handle('screenshot:diag-get-log-path', async () => {
+    return diagLogPath || diagnostic.getLogFilePath();
+  });
+  ipcMain.handle('screenshot:diag-get-modes', async () => {
+    return diagnostic.DIAGNOSTIC_MODES;
+  });
 
   // File operations
   ipcMain.handle('file:saveImage', async (event, { dataUrl, fileName }) => {
@@ -507,6 +566,13 @@ let longCaptureRegion = null;
 let longCaptureCumulative = null; // incremental stitch result
 let longCapturePrevFrame = null;  // previous frame for overlap detection
 
+// ── Diagnostic state ──
+let diagCaptureLoop = null;       // diagnostic capture loop instance
+let diagPreviewWindow = null;     // preview window for low-res incremental preview
+let diagEventLoopMonitor = null;  // event loop lag monitor
+let diagLogPath = null;           // current diagnostic log file path
+let diagTilesDir = null;          // temp directory for tile files
+
 
 // Cache display bounds at app start (overwritten, not appended)
 function cacheDisplayBounds() {
@@ -568,7 +634,7 @@ body{width:100vw;height:100vh;cursor:crosshair;user-select:none;overflow:hidden;
 <button class="b" id="xb">取消</button>
 </div>
 <script>
-var startSX,startSY,selSX,selSY,selSW,selSH; // screen (physical) coords for capture
+var startSX,startSY,selSX,selSY,selSW,selSH; // screen coords for capture
 var startX,startY,selX,selY,selW,selH; // CSS coords for display
 var drawing=false,capturing=false,isLong=${isLongMode};
 dim.addEventListener('mousedown',function(e){
@@ -640,11 +706,26 @@ xb.onclick=function(){if(capturing||isLong){capturing=false;window.__capture={ac
             });
           } else if (action === 'long-start') {
             longCaptureActive = true; longCaptureFrames = [];
-            longCaptureRegion = { x: sx, y: sy, w: sw, h: sh };
-            // Keep overlays for dimming, make them click-through
+            // Convert overlay logical coords to physical for mss
+            const phys = logicalToPhysical(sx, sy, sw, sh);
+            longCaptureRegion = { x: phys.x, y: phys.y, w: phys.w, h: phys.h };
+            console.log('[longshot] region logical:', { x: sx, y: sy, w: sw, h: sh },
+              '→ physical:', phys);
+            // Transform overlay: remove dim/border, switch toolbar to capture mode
             for (const ow of screenshotOverlays) {
-              if (ow && !ow.isDestroyed()) { ow.setIgnoreMouseEvents(true, { forward: true }); }
+              if (ow && !ow.isDestroyed()) {
+                ow.setIgnoreMouseEvents(true, { forward: true });
+                ow.webContents.executeJavaScript(`
+                  var dim=document.getElementById('dim');
+                  var sel=document.getElementById('sel');
+                  var tb=document.getElementById('tb');
+                  if(dim) dim.style.display='none';
+                  if(sel){ sel.style.outline='none'; sel.style.boxShadow='0 0 0 9999px rgba(0,0,0,0.35)'; }
+                  if(tb) tb.style.display='none';
+                `).catch(()=>{});
+              }
             }
+            // Show floating toolbar at same position where overlay toolbar was
             showLongCaptureUI(sx, sy, sw, sh);
             startAutoCapture();
           } else if (action === 'long-finish') {
@@ -859,7 +940,43 @@ function getOverlayHTML() {
 }
 
 async function finishLongCaptureFromFrames(frames, region) {
-  // If we have incremental cumulative result in temp file
+  // Diagnostic routing
+  if (diagCaptureLoop && diagCaptureLoop.getState().active) return finishLongCaptureFromFramesDiag(region);
+
+  // ── Daemon path: get cumulative result from persistent process ──
+  if (capDaemon && !capDaemon.killed) {
+    try {
+      const result = await sendDaemon({ action: 'finish' });
+      killCapDaemon();
+      if (result && result.ok && result.cumPath) {
+        const cumPath = result.cumPath;
+        if (fs.existsSync(cumPath)) {
+          const buf = fs.readFileSync(cumPath);
+          const dataUrl = 'data:image/png;base64,' + buf.toString('base64');
+          const img = nativeImage.createFromDataURL(dataUrl);
+          const sz = img.getSize();
+          if (mainWindow && !mainWindow.isDestroyed()) {
+            mainWindow.webContents.send('screenshot:completed', {
+              dataUrl,
+              width: sz.width,
+              height: sz.height,
+              isStitched: true,
+            });
+          }
+          try { fs.unlinkSync(cumPath); } catch(e) {}
+          longCaptureCumulative = null;
+          longCapturePrevFrame = null;
+          longCaptureFrames = [];
+          longCaptureRegion = null;
+          closeScreenshotWindows();
+          return;
+        }
+      }
+    } catch(e) { console.error('[longshot] daemon finish error:', e.message); }
+    killCapDaemon();
+  }
+
+  // ── Legacy path: cumulative file from incrstitch.py ──
   const cumPath = path.join(app.getPath('temp'), 'sticky-notes-cumulative.png');
   if (longCaptureCumulative && fs.existsSync(cumPath)) {
     const buf = fs.readFileSync(cumPath);
@@ -921,6 +1038,7 @@ async function finishLongCaptureFromFrames(frames, region) {
 }
 
 function closeScreenshotWindows() {
+  killCapDaemon();
   for (const w of screenshotOverlays) {
     if (w && !w.isDestroyed()) w.close();
   }
@@ -930,6 +1048,34 @@ function closeScreenshotWindows() {
   longCapturePrevFrame = null;
   longCaptureFrames = [];
   longCaptureRegion = null;
+  stopAutoCaptureDiag();
+}
+
+// Convert overlay logical (DIP) screen coordinates to physical pixels for mss.
+// On mixed-DPI multi-monitor setups, e.screenX/Y returns DIP coordinates where
+// each axis band inherits the DPI of the monitor that "owns" it.
+function logicalToPhysical(logX, logY, logW, logH) {
+  const displays = screen.getAllDisplays();
+  const cx = logX + logW / 2, cy = logY + logH / 2;
+  const display = screen.getDisplayNearestPoint({ x: cx, y: cy });
+  const sf = display.scaleFactor || 1;
+  const dxLog = display.bounds.x;
+  const dyLog = display.bounds.y;
+
+  // Physical position of the display: within the primary's x/y band → no scale;
+  // outside the primary's band → scale by this display's sf.
+  const primary = screen.getPrimaryDisplay();
+  const primaryW = primary.bounds.width;
+  const primaryH = primary.bounds.height;
+  const dxPhys = (dxLog >= 0 && dxLog < primaryW) ? dxLog : Math.round(dxLog * sf);
+  const dyPhys = (dyLog >= 0 && dyLog < primaryH) ? dyLog : Math.round(dyLog * sf);
+
+  return {
+    x: dxPhys + Math.round((logX - dxLog) * sf),
+    y: dyPhys + Math.round((logY - dyLog) * sf),
+    w: Math.round(logW * sf),
+    h: Math.round(logH * sf),
+  };
 }
 
 async function captureScreenRegion(x, y, width, height, screenId) {
@@ -974,14 +1120,289 @@ let longGuideOverlay = null;
 let autoCapTimer = null;
 let stitchBusy = false;
 
+// ── Diagnostic Preview Window ──
+
+function createDiagPreviewWindow(selX, selY, selW, selH) {
+  closeDiagPreview();
+  const pw = diagnostic.getConfig().previewWidth;
+  const previewW = pw + 16;
+  const display = screen.getDisplayNearestPoint({ x: selX + selW / 2, y: selY + selH / 2 });
+  const maxH = Math.min(selH, display.bounds.height - 80);
+  const previewH = maxH;
+  let px = selX + selW + 12, py = selY;
+  if (px + previewW > display.bounds.x + display.bounds.width) px = selX - previewW - 12;
+  if (px < display.bounds.x) px = display.bounds.x + 8;
+  if (py + previewH > display.bounds.y + display.bounds.height) py = display.bounds.y + display.bounds.height - previewH - 8;
+  if (py < display.bounds.y) py = display.bounds.y + 8;
+  const previewHTML = '<!DOCTYPE html><html><head><meta charset="UTF-8"><style>' +
+    '*{margin:0;padding:0;box-sizing:border-box}' +
+    'body{background:#1a1a2e;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;overflow:hidden;display:flex;flex-direction:column;height:100vh}' +
+    '#header{color:#aaa;font-size:10px;padding:3px 6px;flex-shrink:0;text-align:center;background:#222}' +
+    '#scroll{flex:1;overflow-y:auto;overflow-x:hidden;display:flex;flex-direction:column;align-items:center}' +
+    '#preview-stack{display:flex;flex-direction:column;width:100%}' +
+    '#preview-stack img{display:block;width:100%;image-rendering:auto}' +
+    '#info{color:#888;font-size:9px;padding:2px 6px;flex-shrink:0;text-align:center;background:#222}' +
+    '::-webkit-scrollbar{width:3px}::-webkit-scrollbar-track{background:transparent}::-webkit-scrollbar-thumb{background:rgba(255,255,255,0.15);border-radius:2px}' +
+    '</style></head><body>' +
+    '<div id="header">Long Screenshot Preview</div>' +
+    '<div id="scroll"><div id="preview-stack"></div></div>' +
+    '<div id="info">Waiting...</div>' +
+    '</body></html>';
+  const tempDir = path.join(app.getPath('temp'), 'sticky-notes-screenshot');
+  if (!fs.existsSync(tempDir)) fs.mkdirSync(tempDir, { recursive: true });
+  const f = path.join(tempDir, 'diag-preview.html');
+  fs.writeFileSync(f, previewHTML, 'utf-8');
+  diagPreviewWindow = new BrowserWindow({
+    x: px, y: py, width: previewW, height: previewH,
+    transparent: false, frame: false, alwaysOnTop: true, skipTaskbar: true,
+    resizable: false, focusable: false, backgroundColor: '#1a1a2e',
+    webPreferences: { contextIsolation: false, nodeIntegration: true },
+  });
+  diagPreviewWindow.setAlwaysOnTop(true, 'screen-saver');
+  diagPreviewWindow.setIgnoreMouseEvents(true);
+  diagPreviewWindow.loadFile(f);
+  diagPreviewWindow.on('closed', () => { diagPreviewWindow = null; });
+  return diagPreviewWindow;
+}
+
+function updateDiagPreview(previewInfo) {
+  if (!diagPreviewWindow || diagPreviewWindow.isDestroyed()) return;
+  const { previewPath, tileCount, stitchedHeight } = previewInfo;
+  const now = performance.now();
+  if (!updateDiagPreview._lastUpdate) updateDiagPreview._lastUpdate = 0;
+  const minInterval = 1000 / Math.max(1, diagnostic.getConfig().previewMaxFps || 4);
+  if (now - updateDiagPreview._lastUpdate < minInterval) {
+    if (updateDiagPreview._pendingTimer) clearTimeout(updateDiagPreview._pendingTimer);
+    updateDiagPreview._pendingTimer = setTimeout(() => {
+      updateDiagPreview._pendingTimer = null;
+      updateDiagPreview._lastUpdate = 0;
+      updateDiagPreview(previewInfo);
+    }, minInterval);
+    return;
+  }
+  updateDiagPreview._lastUpdate = now;
+  const version = Date.now();
+  const imgSrc = previewPath ? 'file://' + previewPath.replace(/\\/g, '/') + '?v=' + version : '';
+  const script = '(function(){var s=document.getElementById("preview-stack");var i=document.getElementById("info");var sc=document.getElementById("scroll");if("' + imgSrc + '"!==""){s.innerHTML="";var m=document.createElement("img");m.src="' + imgSrc + '";m.style.display="block";m.style.width="100%";m.onerror=function(){this.style.display="none"};s.appendChild(m)}i.textContent="' + tileCount + ' tiles | ' + stitchedHeight + 'px";setTimeout(function(){sc.scrollTop=sc.scrollHeight},50)})();';
+  diagPreviewWindow.webContents.executeJavaScript(script).catch(() => {});
+}
+
+function closeDiagPreview() {
+  if (updateDiagPreview._pendingTimer) { clearTimeout(updateDiagPreview._pendingTimer); updateDiagPreview._pendingTimer = null; }
+  updateDiagPreview._lastUpdate = 0;
+  if (diagPreviewWindow && !diagPreviewWindow.isDestroyed()) diagPreviewWindow.close();
+  diagPreviewWindow = null;
+}
+
+// ── Diagnostic-aware auto-capture ──
+
+function startAutoCaptureDiag(region) {
+  const config = diagnostic.getConfig();
+  const mode = config.mode;
+  if (!diagLogPath) diagLogPath = diagnostic.initLogger('long-capture');
+  if (diagEventLoopMonitor) diagEventLoopMonitor.stop();
+  diagEventLoopMonitor = diagnostic.startEventLoopMonitor('main');
+  const tempDir = path.join(app.getPath('temp'), 'sticky-notes-diag');
+  diagTilesDir = path.join(tempDir, 'tiles');
+  if (!fs.existsSync(diagTilesDir)) fs.mkdirSync(diagTilesDir, { recursive: true });
+  const cumPath = path.join(tempDir, 'sticky-notes-cumulative-diag.png');
+  if (fs.existsSync(cumPath)) fs.unlinkSync(cumPath);
+  const capRegion = diagnostic.resolveCaptureArea(region) || region;
+  async function captureFn(r) { return await captureScreenRegion(r.x, r.y, r.w, r.h, null); }
+  function stitchFn(prevDataUrl, currDataUrl, cumulativePath) {
+    return callPython('incrstitch_diag.py', {
+      prev: prevDataUrl, curr: currDataUrl, cumPath: cumulativePath,
+      previewDir: diagnostic.getConfig().previewEnabled ? path.join(tempDir, 'preview-tiles') : null,
+      previewWidth: diagnostic.getConfig().previewWidth, useFilePaths: false,
+    });
+  }
+  function onPreviewUpdate(previewInfo) {
+    if (diagPreviewWindow && !diagPreviewWindow.isDestroyed()) {
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('screenshot:preview-update', {
+          type: 'preview-update', previewPath: previewInfo.previewPath,
+          previewWidth: previewInfo.previewWidth, previewHeight: previewInfo.previewHeight,
+          stitchedHeight: previewInfo.stitchedHeight, tileCount: previewInfo.tileCount,
+          incremental: previewInfo.incremental, durationMs: previewInfo.durationMs,
+        });
+      }
+      updateDiagPreview(previewInfo);
+    }
+  }
+  function onFrameCaptured(frameInfo) {
+    if (mainWindow && !mainWindow.isDestroyed())
+      mainWindow.webContents.send('screenshot:capture-progress', { type: 'capture-progress', ...frameInfo });
+  }
+  const loop = diagnostic.createDiagnosticCaptureLoop({
+    captureFn, stitchFn, onPreviewUpdate, onFrameCaptured,
+    region: capRegion, tempDir,
+  });
+  diagCaptureLoop = loop;
+  if (config.previewEnabled) {
+    diagnostic.resetPreviewState();
+    createDiagPreviewWindow(region.x, region.y, region.w, region.h);
+  }
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('screenshot:diag-status', {
+      type: 'diag-status', active: true, mode,
+      captureInterval: config.captureInterval, captureArea: config.captureArea,
+      previewEnabled: config.previewEnabled, logPath: diagLogPath,
+    });
+  }
+  loop.start();
+}
+
+function stopAutoCaptureDiag() {
+  if (diagCaptureLoop) { diagCaptureLoop.stop(); diagCaptureLoop = null; }
+  if (diagEventLoopMonitor) {
+    const stats = diagEventLoopMonitor.stop();
+    diagEventLoopMonitor = null;
+    if (mainWindow && !mainWindow.isDestroyed() && stats) {
+      mainWindow.webContents.send('screenshot:diag-stats', {
+        type: 'eventloop-stats', scope: 'main', ...stats,
+      });
+    }
+  }
+  closeDiagPreview();
+  diagnostic.resetPreviewState();
+  diagnostic.closeLogger();
+  diagLogPath = null;
+}
+
+function finishLongCaptureFromFramesDiag(region) {
+  const mode = diagnostic.getConfig().mode;
+  stopAutoCaptureDiag();
+  const tempDir = path.join(app.getPath('temp'), 'sticky-notes-diag');
+  const cumPath = path.join(tempDir, 'sticky-notes-cumulative-diag.png');
+  if (fs.existsSync(cumPath)) {
+    const buf = fs.readFileSync(cumPath);
+    const dataUrl = 'data:image/png;base64,' + buf.toString('base64');
+    const img = nativeImage.createFromDataURL(dataUrl);
+    const sz = img.getSize();
+    diagnostic.logEvent('result', 'final', {
+      width: sz.width, height: sz.height, bytes: buf.length, mode,
+    });
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('screenshot:completed', {
+        dataUrl, width: sz.width, height: sz.height, isStitched: true,
+      });
+    }
+    try { fs.unlinkSync(cumPath); } catch(e) {}
+  } else if (region) {
+    captureScreenRegion(region.x, region.y, region.w, region.h, null).then(result => {
+      if (result && result.dataUrl && mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('screenshot:completed', result);
+      }
+    });
+  }
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('screenshot:diag-status', {
+      type: 'diag-status', active: false, mode, logPath: diagLogPath,
+    });
+  }
+  closeScreenshotWindows();
+}
+
 function startAutoCapture() {
+  // Diagnostic routing: if non-baseline mode, use diagnostic loop
+  const mode = diagnostic.getConfig().mode;
+  if (mode !== 'baseline' && mode !== 'baseline-with-preview' && mode !== 'baseline-no-preview') {
+    if (longCaptureRegion) { startAutoCaptureDiag(longCaptureRegion); return; }
+  }
+  if (mode === 'baseline-with-preview' || mode === 'baseline-no-preview') {
+    if (longCaptureRegion) { startAutoCaptureDiag(longCaptureRegion); return; }
+  }
+
+  // ── Primary path: mss daemon (no GPU, no execSync) ──
   if (autoCapTimer) clearInterval(autoCapTimer);
   longCaptureCumulative = null;
   longCapturePrevFrame = null;
   stitchBusy = false;
-  // Temp file for incremental cumulative image
   const cumPath = path.join(app.getPath('temp'), 'sticky-notes-cumulative.png');
   if (fs.existsSync(cumPath)) fs.unlinkSync(cumPath);
+
+  let daemonActive = true;
+
+  spawnCapDaemon().then(() => {
+    if (!capDaemon || capDaemon.killed || !longCaptureActive || !longCaptureRegion) {
+      daemonActive = false; killCapDaemon(); return;
+    }
+    const r = longCaptureRegion;
+    // Log Electron's display info for cross-reference with mss
+    const electronDisplays = screen.getAllDisplays().map(d => ({
+      id: d.id, x: d.bounds.x, y: d.bounds.y,
+      w: d.bounds.width, h: d.bounds.height,
+      sf: d.scaleFactor,
+    }));
+    console.log('[longshot] Electron displays:', JSON.stringify(electronDisplays));
+    console.log('[longshot] capture region (from overlay):',
+      { left: r.x, top: r.y, width: r.w, height: r.h });
+    return sendDaemon({
+      action: 'configure',
+      cum_path: cumPath,
+      region: { left: r.x, top: r.y, width: r.w, height: r.h },
+    });
+  }).then((configureResult) => {
+    if (!daemonActive || !longCaptureActive) return;
+    // If configure reports an error (e.g., region outside monitors), fall back to legacy
+    if (!configureResult || !configureResult.ok) {
+      console.error('[longshot] daemon configure failed:',
+        configureResult && configureResult.error ? configureResult.error : 'unknown',
+        configureResult && configureResult.monitors ? 'mss monitors:' + JSON.stringify(configureResult.monitors) : '');
+      daemonActive = false;
+      killCapDaemon();
+      _startAutoCaptureLegacy(cumPath);
+      return;
+    }
+    console.log('[longshot] daemon configured OK, mss region:',
+      JSON.stringify(configureResult.region),
+      'monitors:', JSON.stringify(configureResult.monitors));
+    longCaptureCumulative = cumPath;
+
+    function tick() {
+      if (!longCaptureActive || !daemonActive) { autoCapTimer = null; return; }
+      if (stitchBusy) { autoCapTimer = setTimeout(tick, 50); return; }
+
+      stitchBusy = true;
+      sendDaemon({ action: 'tick' }).then(result => {
+        stitchBusy = false;
+        if (!daemonActive) return;
+        if (result && result.ok && !result.duplicate && result.stitch_ok) {
+          longCaptureCumulative = cumPath;
+        }
+        autoCapTimer = setTimeout(tick, 200);
+      }).catch(err => {
+        stitchBusy = false;
+        if (!daemonActive || !longCaptureActive) return;
+        // Daemon tick failed mid-capture — stop gracefully.
+        // We do NOT fall back to legacy here because the capture methods
+        // (mss vs desktopCapturer) produce different pixels, which would
+        // break the incremental stitch. Keep whatever was accumulated.
+        console.error('[longshot] daemon tick failed, stopping capture:', err.message);
+        daemonActive = false;
+        killCapDaemon();
+        autoCapTimer = null;
+      });
+    }
+    autoCapTimer = setTimeout(tick, 200);
+  }).catch(err => {
+    console.error('[longshot] daemon spawn failed, falling back to legacy:', err.message);
+    killCapDaemon();
+    _startAutoCaptureLegacy(cumPath);
+  });
+}
+
+// ── Legacy fallback: desktopCapturer + execSync('incrstitch.py') ──
+function _startAutoCaptureLegacy(cumPath) {
+  if (autoCapTimer) clearInterval(autoCapTimer);
+  longCaptureCumulative = null;
+  longCapturePrevFrame = null;
+  stitchBusy = false;
+
+  if (!cumPath) {
+    cumPath = path.join(app.getPath('temp'), 'sticky-notes-cumulative.png');
+    if (fs.existsSync(cumPath)) fs.unlinkSync(cumPath);
+  }
 
   function tick() {
     if (!longCaptureActive || !longCaptureRegion) { autoCapTimer = null; return; }
@@ -1023,25 +1444,19 @@ function startAutoCapture() {
 function stopAutoCapture() { if (autoCapTimer) { clearTimeout(autoCapTimer); autoCapTimer = null; } }
 
 function showLongCaptureUI(x, y, w, h) {
-  // Show overlays for dimming, click-through at normal z-order
-  for (const ow of screenshotOverlays) {
-    if (ow && !ow.isDestroyed()) {
-      ow.setIgnoreMouseEvents(true, { forward: true });
-      ow.setAlwaysOnTop(true); // normal level, not screen-saver
-      ow.show();
-    }
-  }
+  // Overlays stay hidden during capture (hidden by poll loop on long-start)
+  // so they don't appear in mss screen capture
 
   // Floating toolbar below selection, matching main app glass style
   const tbHTML = `<!DOCTYPE html><html><head><meta charset="UTF-8"><style>
 *{margin:0;padding:0;box-sizing:border-box}
 body{background:transparent;display:flex;align-items:center;justify-content:center;height:100vh;gap:6px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;overflow:hidden}
-.tb{background:rgba(30,30,30,0.92);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);border:1px solid rgba(255,255,255,0.12);border-radius:12px;padding:5px 8px;display:flex;align-items:center;gap:6px;box-shadow:0 8px 32px rgba(0,0,0,0.4)}
+.tb{background:rgba(30,30,30,0.92);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);border:1px solid rgba(255,255,255,0.12);border-radius:12px;padding:5px 8px;display:flex;align-items:center;gap:6px}
 .b{border:1px solid rgba(255,255,255,0.12);padding:7px 16px;border-radius:8px;cursor:pointer;font-size:13px;color:#fff;white-space:nowrap;background:rgba(255,255,255,0.08);transition:all .15s;font-family:inherit}
 .b:hover{background:rgba(255,255,255,0.16);border-color:rgba(255,255,255,0.22)}
 .bf{background:rgba(0,180,100,0.82);border-color:rgba(0,200,120,0.3)}.bf:hover{background:rgba(0,210,130,0.9)}
 .bc{background:rgba(200,60,60,0.7);border-color:rgba(230,80,80,0.3)}.bc:hover{background:rgba(230,80,80,0.85)}
-.hint{color:rgba(255,255,255,0.35);font-size:10px;margin:0 4px}
+.hint{color:rgba(255,255,255,0.45);font-size:10px;margin:0 4px}
 </style></head><body>
 <div class="tb">
 <span class="hint">Enter 保存 · Esc 取消</span>
@@ -1059,13 +1474,15 @@ document.addEventListener('keydown',function(e){if(e.key==='Enter'){ipcRenderer.
   const f = path.join(tempDir, 'long-toolbar.html');
   fs.writeFileSync(f, tbHTML, 'utf-8');
 
-  // Position toolbar below selection area
+  // Position toolbar at same spot as overlay's original toolbar (8px below selection)
+  // x,y,w,h and BrowserWindow coords are both in DIP (device-independent pixels)
   const tbW = 270, tbH = 48;
-  let tbx = x, tby = y + h + 8;
+  const gap = 8;
+  let tbx = x, tby = y + h + gap;
   // Keep on screen
   const disp = screen.getDisplayNearestPoint({ x: x + w / 2, y: y + h / 2 });
   if (tbx + tbW > disp.bounds.x + disp.bounds.width) tbx = disp.bounds.x + disp.bounds.width - tbW - 8;
-  if (tby + tbH > disp.bounds.y + disp.bounds.height) tby = y - tbH - 8;
+  if (tby + tbH > disp.bounds.y + disp.bounds.height) tby = y - tbH - gap;
 
   longCaptureToolbar = new BrowserWindow({
     x: tbx, y: tby, width: tbW, height: tbH,
