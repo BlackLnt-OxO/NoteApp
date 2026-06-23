@@ -49,6 +49,8 @@ const SettingsDialog: React.FC<SettingsDialogProps> = ({ onClose }) => {
   const { settings, updateSettings, saveData } = useNoteStore();
   const gfs = settings.fontSize;
   const [localSettings, setLocalSettings] = useState({ ...settings });
+  // Sync external settings changes (e.g. font size shortcut) into local state
+  useEffect(() => { setLocalSettings(prev => ({ ...prev, ...settings })); }, [settings]);
   const [fontOpen, setFontOpen] = useState(false);
   const [showPicker, setShowPicker] = useState(false);
   const [pickerColor, setPickerColor] = useState('#6b5ce7');
