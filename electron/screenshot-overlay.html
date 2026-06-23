@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html><head><meta charset="UTF-8"><style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{width:100vw;height:100vh;cursor:crosshair;user-select:none;overflow:hidden;background:transparent;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif}
+#dim{position:fixed;inset:0;background:rgba(0,0,0,0.3)}
+#sel{position:fixed;border:2px dashed #fff;background:rgba(255,255,255,0.08);display:none;pointer-events:none}
+#tb{position:fixed;background:rgba(30,30,30,0.92);backdrop-filter:blur(10px);border-radius:12px;padding:6px;display:none;gap:4px;z-index:10}
+#sz{color:#aaa;font-size:12px;padding:8px;white-space:nowrap}
+.b{border:none;padding:8px 16px;border-radius:8px;cursor:pointer;font-size:13px;color:#fff;white-space:nowrap;background:rgba(255,255,255,0.1)}
+.b:hover{background:rgba(255,255,255,0.25)}
+.bp{background:rgba(0,120,255,0.8)}.bp:hover{background:rgba(0,120,255,1)}
+</style></head><body>
+<div id="dim"></div><div id="sel"></div>
+<div id="tb"><span id="sz"></span>
+<button class="b bp" id="cb">截图</button>
+<button class="b" id="lb">长截图</button>
+<button class="b" id="xb">取消</button>
+</div>
+<script>
+// Global vars — main process sets DX/DY after page load via executeJavaScript
+var DX=0, DY=0;
+var startX,startY,selX,selY,selW,selH,drawing=false;
+
+dim.addEventListener('mousedown',function(e){
+  drawing=true;startX=e.screenX;startY=e.screenY;
+  sel.style.display='block';tb.style.display='none';
+});
+window.addEventListener('mousemove',function(e){
+  if(!drawing)return;
+  selX=Math.min(startX,e.screenX);selY=Math.min(startY,e.screenY);
+  selW=Math.abs(e.screenX-startX);selH=Math.abs(e.screenY-startY);
+  sel.style.left=(selX-DX)+'px';sel.style.top=(selY-DY)+'px';
+  sel.style.width=selW+'px';sel.style.height=selH+'px';
+});
+window.addEventListener('mouseup',function(){
+  if(!drawing)return;drawing=false;
+  if(selW<10||selH<10){sel.style.display='none';return}
+  tb.style.display='flex';tb.style.left=(selX-DX)+'px';tb.style.top=(selY-DY+selH+8)+'px';
+  document.getElementById('sz').textContent=Math.round(selW)+' × '+Math.round(selH);
+});
+document.addEventListener('keydown',function(e){if(e.key==='Escape')window.close()});
+document.getElementById('cb').onclick=function(){
+  sel.style.display='none';tb.style.display='none';
+  window.__capture={action:'capture',x:Math.round(selX),y:Math.round(selY),w:Math.round(selW),h:Math.round(selH)};
+};
+document.getElementById('lb').onclick=function(){
+  window.__capture={action:'long',x:Math.round(selX),y:Math.round(selY),w:Math.round(selW),h:Math.round(selH)};
+};
+document.getElementById('xb').onclick=function(){window.close()};
+</script></body></html>

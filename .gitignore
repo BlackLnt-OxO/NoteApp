@@ -1,0 +1,10 @@
+node_modules
+dist/
+dist-electron/
+dist-electron-v*/
+*.exe
+.env
+__pycache__/
+*.pyc
+*.png
+*.jpg

@@ -1,0 +1,1434 @@
+const { app, BrowserWindow, ipcMain, screen, desktopCapturer, globalShortcut, nativeImage, clipboard } = require('electron');
+const path = require('path');
+const fs = require('fs');
+const floatingManager = require('./floatingManager');
+
+let mainWindow = null;
+let screenshotWindows = [];
+let isDev = false;
+
+try {
+  isDev = !app.isPackaged;
+} catch (e) {
+  isDev = false;
+}
+
+function loadWindowBounds(key) {
+  const userDataPath = app.getPath('userData');
+  const filePath = path.join(userDataPath, 'window-bounds.json');
+  if (fs.existsSync(filePath)) {
+    try {
+      const data = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
+      return data[key] || null;
+    } catch(e) { return null; }
+  }
+  return null;
+}
+
+function createMainWindow() {
+  const { width, height } = screen.getPrimaryDisplay().workAreaSize;
+  const saved = loadWindowBounds('main');
+
+  mainWindow = new BrowserWindow({
+    x: saved?.x,
+    y: saved?.y,
+    width: saved?.width || Math.min(1400, width),
+    height: saved?.height || Math.min(900, height),
+    minWidth: 900,
+    minHeight: 600,
+    frame: true,
+    transparent: false,
+    titleBarStyle: 'hidden',
+    backgroundColor: '#1a1a2e',
+    webPreferences: {
+      preload: path.join(__dirname, 'preload.js'),
+      contextIsolation: true,
+      nodeIntegration: false,
+      webSecurity: false,
+    },
+    icon: path.join(__dirname, '..', 'assets', 'icon.png'),
+    show: false,
+  });
+
+  if (saved?.isMaximized) {
+    mainWindow.once('ready-to-show', () => mainWindow.maximize());
+  }
+
+  mainWindow.once('ready-to-show', () => {
+    mainWindow.show();
+  });
+
+  // Save bounds on move/resize
+  const saveBounds = () => {
+    if (mainWindow && !mainWindow.isDestroyed() && !mainWindow.isMaximized()) {
+      const b = mainWindow.getBounds();
+      b.isMaximized = false;
+      saveWindowBounds('main', b);
+    }
+  };
+  mainWindow.on('resize', saveBounds);
+  mainWindow.on('move', saveBounds);
+  mainWindow.on('maximize', () => saveWindowBounds('main', { ...mainWindow.getBounds(), isMaximized: true }));
+  mainWindow.on('unmaximize', saveBounds);
+
+  if (isDev) {
+    mainWindow.loadURL('http://localhost:5173');
+    mainWindow.webContents.openDevTools({ mode: 'detach' });
+  } else {
+    mainWindow.loadFile(path.join(__dirname, '..', 'dist', 'index.html'));
+  }
+
+  mainWindow.on('ready-to-show', () => {
+    mainWindow.setBackgroundColor('#00000000');
+  });
+}
+
+function saveWindowBounds(key, bounds) {
+  const userDataPath = app.getPath('userData');
+  const filePath = path.join(userDataPath, 'window-bounds.json');
+  let data = {};
+  if (fs.existsSync(filePath)) {
+    try { data = JSON.parse(fs.readFileSync(filePath, 'utf-8')); } catch(e) {}
+  }
+  data[key] = bounds;
+  fs.writeFileSync(filePath, JSON.stringify(data), 'utf-8');
+}
+
+// Call Python script with JSON input, return parsed output
+function callPython(scriptName, input) {
+  try {
+    // Copy script from asar to temp (Python can't read asar)
+    const tmpDir = path.join(app.getPath('temp'), 'sticky-notes-py');
+    if (!fs.existsSync(tmpDir)) fs.mkdirSync(tmpDir, { recursive: true });
+    const srcPath = path.join(__dirname, scriptName);
+    const dstPath = path.join(tmpDir, scriptName);
+    fs.copyFileSync(srcPath, dstPath);
+    const result = require('child_process').execSync(
+      `python "${dstPath}"`, { input: JSON.stringify(input), encoding: 'utf-8', timeout: 120000, maxBuffer: 50 * 1024 * 1024 }
+    );
+    return JSON.parse(result.trim());
+  } catch(e) { console.error(`Python ${scriptName} error:`, e.message); return null; }
+}
+
+// Screenshot via Windows native Win+Shift+S
+const SCREENSHOT_DIR = path.join(require('os').homedir(), 'Pictures', 'Screenshots');
+
+async function captureWithNativeSnipping() {
+  let oldFiles = [];
+  try { if (fs.existsSync(SCREENSHOT_DIR)) oldFiles = fs.readdirSync(SCREENSHOT_DIR).filter(f => f.endsWith('.png')); } catch(e) {}
+  const oldImg = clipboard.readImage();
+  const oldHash = oldImg.getSize().width > 0 ? oldImg.toDataURL().slice(-100) : '';
+  try { require('child_process').execSync('explorer ms-screenclip:', { timeout: 3000 }); } catch(e) {}
+  for (let i = 0; i < 60; i++) {
+    await new Promise(r => setTimeout(r, 500));
+    const img = clipboard.readImage();
+    const sz = img.getSize();
+    if (sz.width > 0 && sz.height > 0) {
+      const dataUrl = img.toDataURL();
+      if (dataUrl.slice(-100) !== oldHash) {
+        try {
+          const newFiles = fs.readdirSync(SCREENSHOT_DIR).filter(f => f.endsWith('.png'));
+          for (const f of newFiles) { if (!oldFiles.includes(f)) fs.unlinkSync(path.join(SCREENSHOT_DIR, f)); }
+        } catch(e) {}
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          mainWindow.webContents.send('screenshot:completed', { dataUrl, width: sz.width, height: sz.height });
+        }
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+// IPC Handlers
+function setupIPC() {
+  // Window controls - close the window that sent the request
+  ipcMain.handle('window:minimize', (event) => {
+    BrowserWindow.fromWebContents(event.sender)?.minimize();
+  });
+  ipcMain.handle('window:maximize', (event) => {
+    const win = BrowserWindow.fromWebContents(event.sender);
+    if (win) {
+      if (win.isMaximized()) win.unmaximize();
+      else win.maximize();
+      return win.isMaximized();
+    }
+    return false;
+  });
+  ipcMain.handle('window:close', (event) => {
+    BrowserWindow.fromWebContents(event.sender)?.close();
+  });
+  ipcMain.handle('window:isMaximized', (event) => {
+    return BrowserWindow.fromWebContents(event.sender)?.isMaximized() || false;
+  });
+
+  // Floating note state (separate from main note)
+  ipcMain.handle('float:loadState', (event, noteId) => {
+    const userDataPath = app.getPath('userData');
+    const filePath = path.join(userDataPath, 'floating-notes', `${noteId}.json`);
+    if (fs.existsSync(filePath)) {
+      try { return JSON.parse(fs.readFileSync(filePath, 'utf-8')); } catch(e) {}
+    }
+    return null;
+  });
+
+  ipcMain.handle('float:saveState', (event, noteId, state) => {
+    const userDataPath = app.getPath('userData');
+    const dir = path.join(userDataPath, 'floating-notes');
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    const filePath = path.join(dir, `${noteId}.json`);
+    let existing = {};
+    if (fs.existsSync(filePath)) {
+      try { existing = JSON.parse(fs.readFileSync(filePath, 'utf-8')); } catch(e) {}
+    }
+    const merged = { ...existing, ...state };
+    fs.writeFileSync(filePath, JSON.stringify(merged), 'utf-8');
+    return true;
+  });
+
+  ipcMain.handle('float:resetState', (event, noteId) => {
+    const userDataPath = app.getPath('userData');
+    const filePath = path.join(userDataPath, 'floating-notes', `${noteId}.json`);
+    if (fs.existsSync(filePath)) {
+      try { fs.unlinkSync(filePath); } catch(e) {}
+    }
+    return true;
+  });
+
+  ipcMain.handle('float:updateContent', (event, noteId, content) => {
+    // Update content in both float state and main note
+    const userDataPath = app.getPath('userData');
+    const filePath = path.join(userDataPath, 'floating-notes', `${noteId}.json`);
+    if (fs.existsSync(filePath)) {
+      try {
+        const saved = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
+        saved.content = content;
+        fs.writeFileSync(filePath, JSON.stringify(saved), 'utf-8');
+      } catch(e) {}
+    }
+    // Also update main store
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('float:contentUpdated', { noteId, content });
+    }
+    return true;
+  });
+
+  // Floating note management
+  ipcMain.handle('floating:create', (event, noteData) => {
+    return floatingManager.createFloatingNote(noteData, isDev);
+  });
+
+  ipcMain.handle('floating:close', (event, noteId) => {
+    // Notify main window to update isFloating state
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('floating:closed', noteId);
+    }
+    return floatingManager.closeFloatingNote(noteId);
+  });
+
+  ipcMain.handle('floating:update', (event, noteId, noteData) => {
+    return floatingManager.updateFloatingNote(noteId, noteData);
+  });
+
+  ipcMain.handle('floating:updateAllFontSize', (event, fontSize) => {
+    floatingManager.updateAllFontSize(fontSize);
+    return true;
+  });
+
+  ipcMain.handle('floating:closeAll', () => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('floating:allClosed');
+    }
+    return floatingManager.closeAll();
+  });
+
+  // Eyedropper: fullscreen overlay, pick pixel color
+  ipcMain.handle('eyedropper:start', async () => {
+    return new Promise(async (resolve) => {
+      const displays = screen.getAllDisplays();
+      // Capture all displays
+      const capWins = [];
+      let resolved = false;
+
+      for (const d of displays) {
+        const ow = new BrowserWindow({
+          x: d.bounds.x, y: d.bounds.y, width: d.bounds.width, height: d.bounds.height,
+          transparent: true, frame: false, alwaysOnTop: true, skipTaskbar: true, resizable: false,
+          webPreferences: { contextIsolation: false, nodeIntegration: true },
+        });
+        ow.setAlwaysOnTop(true, 'screen-saver');
+        ow.setIgnoreMouseEvents(false);
+
+        // Take screenshot for this display
+        const sources = await desktopCapturer.getSources({
+          types: ['screen'],
+          thumbnailSize: { width: d.size.width, height: d.size.height },
+        });
+        const source = sources.find(s => s.display_id === String(d.id)) || sources[0];
+        const imgDataUrl = source ? source.thumbnail.toDataURL() : '';
+
+        const html = `<!DOCTYPE html><html><head><meta charset="UTF-8"><style>
+*{margin:0;padding:0}body{cursor:crosshair;overflow:hidden;width:100vw;height:100vh}
+#c{position:fixed;inset:0}
+#lp{position:fixed;pointer-events:none;width:120px;height:24px;background:rgba(0,0,0,0.75);color:#fff;font:12px monospace;display:flex;align-items:center;justify-content:center;border:1px solid rgba(255,255,255,0.3);border-radius:4px;z-index:100;white-space:nowrap}
+</style></head><body>
+<canvas id="c"></canvas><div id="lp"></div>
+<script>
+const {ipcRenderer}=require('electron');
+const cvs=document.getElementById('c'),ctx=cvs.getContext('2d'),lp=document.getElementById('lp');
+cvs.width=${d.size.width};cvs.height=${d.size.height};
+const img=new Image();img.src='${imgDataUrl}';
+img.onload=function(){ctx.drawImage(img,0,0);};
+document.addEventListener('mousemove',function(e){
+  lp.style.left=(e.clientX+14)+'px';lp.style.top=(e.clientY+14)+'px';
+  const px=ctx.getImageData(e.clientX,e.clientY,1,1).data;
+  const hex='#'+[px[0],px[1],px[2]].map(v=>v.toString(16).padStart(2,'0')).join('');
+  lp.style.borderColor=hex;
+  lp.innerHTML='<span style="display:inline-block;width:14px;height:14px;background:'+hex+';border:1px solid rgba(255,255,255,0.4);border-radius:2px;margin-right:4px"></span>'+hex.toUpperCase();
+});
+document.addEventListener('click',function(e){
+  const px=ctx.getImageData(e.clientX,e.clientY,1,1).data;
+  const hex='#'+[px[0],px[1],px[2]].map(v=>v.toString(16).padStart(2,'0')).join('');
+  ipcRenderer.send('eyedropper:picked',hex);
+});
+document.addEventListener('keydown',function(e){if(e.key==='Escape')ipcRenderer.send('eyedropper:picked',null);});
+</script></body></html>`;
+
+        const tmpDir = path.join(app.getPath('temp'), 'sticky-notes-screenshot');
+        if (!fs.existsSync(tmpDir)) fs.mkdirSync(tmpDir, { recursive: true });
+        const f = path.join(tmpDir, `eyedrop-${d.id}.html`);
+        fs.writeFileSync(f, html, 'utf-8');
+        ow.loadFile(f);
+        capWins.push(ow);
+      }
+
+      const close = () => { capWins.forEach(w => { if (!w.isDestroyed()) w.close(); }); };
+
+      ipcMain.once('eyedropper:picked', (event, color) => {
+        if (!resolved) { resolved = true; close(); resolve(color); }
+      });
+    });
+  });
+
+  ipcMain.handle('screenshot:start', () => captureWithNativeSnipping());
+
+  // Long screenshot floating toolbar actions
+  ipcMain.on('screenshot:long-finish', () => {
+    longCaptureActive = false;
+    stopAutoCapture();
+    hideLongCaptureUI();
+    finishLongCaptureFromFrames(longCaptureFrames, longCaptureRegion);
+  });
+  ipcMain.on('screenshot:long-cancel', () => {
+    longCaptureActive = false; longCaptureFrames = [];
+    stopAutoCapture();
+    hideLongCaptureUI();
+    closeScreenshotWindows();
+  });
+
+  // Long screenshot: integrated overlay + auto-capture + preview
+  ipcMain.handle('screenshot:startLongScreenshot', async () => {
+    try {
+      return createScreenshotOverlay('long');
+    } catch(e) { console.error('Long screenshot error:', e); return false; }
+  });
+
+  ipcMain.handle('screenshot:cancel', () => {
+    closeScreenshotWindows();
+    return true;
+  });
+
+  ipcMain.handle('screenshot:capture', async (event, { x, y, width, height, screenId }) => {
+    return captureScreenRegion(x, y, width, height, screenId);
+  });
+
+  ipcMain.handle('screenshot:startLongCapture', async (event, { x, y, width, height, screenId }) => {
+    return startLongCapture(x, y, width, height, screenId);
+  });
+
+  ipcMain.handle('screenshot:captureScrollFrame', async (event, { x, y, width, height, screenId }) => {
+    return captureScrollFrame(x, y, width, height, screenId);
+  });
+
+  ipcMain.handle('screenshot:cancelLongCapture', async () => {
+    longCaptureActive = false;
+    if (longCaptureTimer) { clearInterval(longCaptureTimer); longCaptureTimer = null; }
+    if (longCaptureToolbar && !longCaptureToolbar.isDestroyed()) longCaptureToolbar.close();
+    closeScreenshotWindows();
+    return true;
+  });
+
+  ipcMain.handle('screenshot:finishLongCapture', async (event, { frames }) => {
+    return finishLongCapture(frames);
+  });
+
+
+
+  // File operations
+  ipcMain.handle('file:saveImage', async (event, { dataUrl, fileName }) => {
+    const userDataPath = app.getPath('userData');
+    const imagesDir = path.join(userDataPath, 'images');
+    if (!fs.existsSync(imagesDir)) {
+      fs.mkdirSync(imagesDir, { recursive: true });
+    }
+    const filePath = path.join(imagesDir, fileName);
+    const base64Data = dataUrl.replace(/^data:image\/\w+;base64,/, '');
+    fs.writeFileSync(filePath, base64Data, 'base64');
+    return filePath;
+  });
+
+  ipcMain.handle('file:pickImage', async () => {
+    const { dialog } = require('electron');
+    const result = await dialog.showOpenDialog(mainWindow, {
+      properties: ['openFile'],
+      filters: [{ name: 'Images', extensions: ['jpg', 'jpeg', 'png', 'gif', 'bmp', 'webp'] }],
+    });
+    if (result.canceled) return null;
+    const filePath = result.filePaths[0];
+    const data = fs.readFileSync(filePath);
+    const ext = path.extname(filePath).toLowerCase().replace('.', '');
+    const mime = ext === 'jpg' ? 'jpeg' : ext;
+    const dataUrl = `data:image/${mime};base64,${data.toString('base64')}`;
+    return { dataUrl, filePath };
+  });
+
+  ipcMain.handle('file:pickBackground', async () => {
+    const { dialog } = require('electron');
+    const result = await dialog.showOpenDialog(mainWindow, {
+      properties: ['openFile'],
+      filters: [{ name: 'Images', extensions: ['jpg', 'jpeg', 'png', 'gif', 'bmp', 'webp'] }],
+    });
+    if (result.canceled) return null;
+    const filePath = result.filePaths[0];
+    const data = fs.readFileSync(filePath);
+    const ext = path.extname(filePath).toLowerCase().replace('.', '');
+    const mime = ext === 'jpg' ? 'jpeg' : ext;
+    const dataUrl = `data:image/${mime};base64,${data.toString('base64')}`;
+    return { dataUrl, filePath };
+  });
+
+  ipcMain.handle('app:getPath', (event, name) => {
+    return app.getPath(name);
+  });
+
+  // Cross-window drag support
+  ipcMain.handle('app:getCursorScreenPoint', () => {
+    return screen.getCursorScreenPoint();
+  });
+
+  // Window bounds memory
+  ipcMain.handle('window:saveBounds', (event, bounds) => {
+    const win = BrowserWindow.fromWebContents(event.sender);
+    const key = 'main';
+    const userDataPath = app.getPath('userData');
+    const filePath = path.join(userDataPath, 'window-bounds.json');
+    let data = {};
+    if (fs.existsSync(filePath)) {
+      try { data = JSON.parse(fs.readFileSync(filePath, 'utf-8')); } catch(e) {}
+    }
+    data[key] = { x: bounds.x, y: bounds.y, width: bounds.width, height: bounds.height, isMaximized: bounds.isMaximized };
+    fs.writeFileSync(filePath, JSON.stringify(data), 'utf-8');
+  });
+
+  ipcMain.handle('window:getBounds', (event) => {
+    const win = BrowserWindow.fromWebContents(event.sender);
+    const key = 'main';
+    const userDataPath = app.getPath('userData');
+    const filePath = path.join(userDataPath, 'window-bounds.json');
+    if (fs.existsSync(filePath)) {
+      try {
+        const data = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
+        return data[key] || null;
+      } catch(e) { return null; }
+    }
+    return null;
+  });
+
+  // Default background image
+  ipcMain.handle('app:getDefaultBackground', async () => {
+    // Check for default background image in app directory
+    const possiblePaths = [
+      path.join(__dirname, '..', 'LS_Camera.1184.png'),
+      path.join(__dirname, '..', '..', 'LS_Camera.1184.png'),
+      path.join(app.getAppPath(), 'LS_Camera.1184.png'),
+    ];
+
+    for (const bgPath of possiblePaths) {
+      if (fs.existsSync(bgPath)) {
+        try {
+          const data = fs.readFileSync(bgPath);
+          const dataUrl = `data:image/png;base64,${data.toString('base64')}`;
+          return dataUrl;
+        } catch (e) {
+          // continue
+        }
+      }
+    }
+    return null;
+  });
+
+  // Sync data loading (for initial render, no flash)
+  ipcMain.on('store:loadSync', (event) => {
+    const userDataPath = app.getPath('userData');
+    const filePath = path.join(userDataPath, 'notes-data.json');
+    let data = null;
+    if (fs.existsSync(filePath)) {
+      try { data = JSON.parse(fs.readFileSync(filePath, 'utf-8')); } catch(e) {}
+    }
+    event.returnValue = data;
+  });
+
+  // Data persistence
+  ipcMain.handle('store:save', async (event, data) => {
+    const userDataPath = app.getPath('userData');
+    const filePath = path.join(userDataPath, 'notes-data.json');
+    fs.writeFileSync(filePath, JSON.stringify(data, null, 2), 'utf-8');
+    return true;
+  });
+
+  ipcMain.handle('store:load', async () => {
+    const userDataPath = app.getPath('userData');
+    const filePath = path.join(userDataPath, 'notes-data.json');
+    if (fs.existsSync(filePath)) {
+      try {
+        const data = fs.readFileSync(filePath, 'utf-8');
+        return JSON.parse(data);
+      } catch (e) {
+        return null;
+      }
+    }
+    return null;
+  });
+}
+
+let longCaptureActive = false;
+let longCaptureFrames = [];
+let longCaptureRegion = null;
+let longCaptureCumulative = null; // incremental stitch result
+let longCapturePrevFrame = null;  // previous frame for overlap detection
+
+
+// Cache display bounds at app start (overwritten, not appended)
+function cacheDisplayBounds() {
+  try {
+    const displays = screen.getAllDisplays().map(d => ({ id: d.id, x: d.bounds.x, y: d.bounds.y, w: d.bounds.width, h: d.bounds.height }));
+    const f = path.join(app.getPath('userData'), 'display-cache.json');
+    fs.writeFileSync(f, JSON.stringify(displays), 'utf-8');
+  } catch(e) {}
+}
+
+function loadDisplayCache() {
+  try {
+    const f = path.join(app.getPath('userData'), 'display-cache.json');
+    if (fs.existsSync(f)) return JSON.parse(fs.readFileSync(f, 'utf-8'));
+  } catch(e) {}
+  return null;
+}
+
+let screenshotOverlays = [];
+
+function createScreenshotOverlay(mode = 'normal') {
+  closeScreenshotWindows();
+
+  const isLongMode = mode === 'long';
+  const displays = screen.getAllDisplays();
+
+  // Create one overlay per display (no resize flicker - each is already correct size)
+  for (const d of displays) {
+    const { x, y, width, height } = d.bounds;
+    const sf = d.scaleFactor || 1;
+
+    const ow = new BrowserWindow({
+      x, y, width, height,
+      transparent: true,
+      frame: false,
+      alwaysOnTop: true,
+      skipTaskbar: true,
+      resizable: false,
+      webPreferences: { contextIsolation: false, nodeIntegration: true },
+    });
+    ow.setAlwaysOnTop(true, 'screen-saver');
+    ow.setVisibleOnAllWorkspaces(true);
+
+    const html = `<!DOCTYPE html><html><head><meta charset="UTF-8"><style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{width:100vw;height:100vh;cursor:crosshair;user-select:none;overflow:hidden;background:transparent;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif}
+#dim{position:fixed;inset:0;background:rgba(0,0,0,0.3)}
+#sel{position:fixed;outline:2px dashed #fff;box-shadow:0 0 0 9999px rgba(0,0,0,0.4);display:none;pointer-events:none}
+#tb{position:fixed;background:rgba(30,30,30,0.92);backdrop-filter:blur(10px);border-radius:12px;padding:6px;display:none;gap:4px;z-index:10}
+#sz{color:#aaa;font-size:12px;padding:8px;white-space:nowrap}
+.b{border:none;padding:8px 16px;border-radius:8px;cursor:pointer;font-size:13px;color:#fff;white-space:nowrap;background:rgba(255,255,255,0.1)}
+.b:hover{background:rgba(255,255,255,0.25)}
+.bp{background:rgba(0,120,255,0.8)}.bp:hover{background:rgba(0,120,255,1)}
+</style></head><body>
+<div id="dim"></div><div id="sel"></div>
+<div id="tb"><span id="sz"></span>
+<button class="b bp" id="cb">截图</button>
+<button class="b" id="lb">长截图</button>
+<button class="b" id="xb">取消</button>
+</div>
+<script>
+var startSX,startSY,selSX,selSY,selSW,selSH; // screen (physical) coords for capture
+var startX,startY,selX,selY,selW,selH; // CSS coords for display
+var drawing=false,capturing=false,isLong=${isLongMode};
+dim.addEventListener('mousedown',function(e){
+  drawing=true;
+  startSX=e.screenX;startSY=e.screenY;
+  startX=e.offsetX;startY=e.offsetY;
+  dim.style.display='none';sel.style.display='block';tb.style.display='none';
+});
+window.addEventListener('mousemove',function(e){
+  if(!drawing)return;
+  selSX=Math.min(startSX,e.screenX);selSY=Math.min(startSY,e.screenY);
+  selSW=Math.abs(e.screenX-startSX);selSH=Math.abs(e.screenY-startSY);
+  var cx=e.offsetX,cy=e.offsetY;
+  selX=Math.min(startX,cx);selY=Math.min(startY,cy);
+  selW=Math.abs(cx-startX);selH=Math.abs(cy-startY);
+  sel.style.left=(selX-2)+'px';sel.style.top=(selY-2)+'px';
+  sel.style.width=(selW+4)+'px';sel.style.height=(selH+4)+'px';
+});
+window.addEventListener('mouseup',function(){
+  if(!drawing)return;drawing=false;
+  if(selW<10||selH<10){sel.style.display='none';dim.style.display='block';return}
+  tb.style.display='flex';tb.style.left=selX+'px';tb.style.top=(selY+selH+8)+'px';
+});
+document.addEventListener('keydown',function(e){if(e.key==='Escape'){window.__capture={action:'cancel'}}});
+if(isLong){cb.textContent='开始';lb.style.display='none';}
+lb.onclick=function(){capturing=true;sel.style.outlineColor='#0f8';cb.textContent='✓ 保存';lb.style.display='none';xb.textContent='✕ 取消';document.body.style.cursor='default';window.__capture={action:'long-start',x:Math.round(selSX),y:Math.round(selSY),w:Math.round(selSW),h:Math.round(selSH)}};
+cb.onclick=function(){if(capturing||isLong){window.__capture={action:capturing?'long-finish':'long-start',x:Math.round(selSX),y:Math.round(selSY),w:Math.round(selSW),h:Math.round(selSH)}}else{window.__capture={action:'capture',x:Math.round(selSX),y:Math.round(selSY),w:Math.round(selSW),h:Math.round(selSH)}}};
+xb.onclick=function(){if(capturing||isLong){capturing=false;window.__capture={action:'cancel'}}else window.close()};
+</script></body></html>`;
+
+    const tempDir = path.join(app.getPath('temp'), 'sticky-notes-screenshot');
+    if (!fs.existsSync(tempDir)) fs.mkdirSync(tempDir, { recursive: true });
+    const f = path.join(tempDir, `overlay-${d.id}.html`);
+    fs.writeFileSync(f, html, 'utf-8');
+    ow.loadFile(f);
+
+    ow.on('closed', () => {
+      screenshotOverlays = screenshotOverlays.filter(w => w !== ow);
+    });
+    screenshotOverlays.push(ow);
+  }
+
+  // Poll all overlays for capture actions
+  const pollAll = () => {
+    let allClosed = true;
+    for (const w of screenshotOverlays) {
+      if (w && !w.isDestroyed()) { allClosed = false; break; }
+    }
+    if (allClosed) { longCaptureActive = false; stopAutoCapture(); return; }
+
+    for (const w of screenshotOverlays) {
+      if (!w || w.isDestroyed()) continue;
+      w.webContents.executeJavaScript('window.__capture').then(data => {
+        if (data) {
+          w.webContents.executeJavaScript('window.__capture=undefined').catch(()=>{});
+          const { action, x: sx, y: sy, w: sw, h: sh } = data;
+          if (action === 'cancel') {
+            longCaptureActive = false; longCaptureFrames = [];
+            stopAutoCapture();
+            hideLongCaptureUI();
+            closeScreenshotWindows();
+          } else if (action === 'capture') {
+            captureScreenRegion(sx, sy, sw, sh, null).then(result => {
+              if (result && result.dataUrl && mainWindow && !mainWindow.isDestroyed()) {
+                mainWindow.webContents.send('screenshot:completed', result);
+                try { clipboard.writeImage(nativeImage.createFromDataURL(result.dataUrl)); } catch(e) {}
+              }
+              closeScreenshotWindows();
+            });
+          } else if (action === 'long-start') {
+            longCaptureActive = true; longCaptureFrames = [];
+            longCaptureRegion = { x: sx, y: sy, w: sw, h: sh };
+            // Keep overlays for dimming, make them click-through
+            for (const ow of screenshotOverlays) {
+              if (ow && !ow.isDestroyed()) { ow.setIgnoreMouseEvents(true, { forward: true }); }
+            }
+            showLongCaptureUI(sx, sy, sw, sh);
+            startAutoCapture();
+          } else if (action === 'long-finish') {
+            longCaptureActive = false;
+            hideLongCaptureUI();
+            longCaptureActive = false;
+            for (const ow of screenshotOverlays) { if (ow&&!ow.isDestroyed()) ow.setIgnoreMouseEvents(false); }
+            finishLongCaptureFromFrames(longCaptureFrames, longCaptureRegion);
+          }
+        }
+      }).catch(()=>{});
+    }
+    setTimeout(pollAll, 150);
+  };
+  setTimeout(pollAll, 300);
+  return true;
+}
+
+function getOverlayHTML() {
+  return `<!DOCTYPE html>
+<html>
+  <head>
+  <meta charset="UTF-8">
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      width: 100vw; height: 100vh;
+      cursor: crosshair;
+      user-select: none;
+      overflow: hidden;
+      background: transparent;
+    }
+    #dim-overlay {
+      position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+      background: rgba(0,0,0,0.4);
+      z-index: 1;
+    }
+    #selection {
+      position: fixed;
+      border: 2px dashed #fff;
+      box-shadow: 0 0 0 9999px rgba(0,0,0,0.4);
+      display: none;
+      pointer-events: none;
+      z-index: 2;
+    }
+    #toolbar {
+      position: fixed;
+      background: rgba(30,30,30,0.9);
+      backdrop-filter: blur(10px);
+      border-radius: 12px;
+      padding: 6px;
+      display: none;
+      gap: 4px;
+      z-index: 1000;
+    }
+    .btn {
+      background: rgba(255,255,255,0.1);
+      border: none;
+      color: #fff;
+      padding: 8px 16px;
+      border-radius: 8px;
+      cursor: pointer;
+      font-size: 13px;
+      white-space: nowrap;
+      transition: background 0.2s;
+    }
+    .btn:hover { background: rgba(255,255,255,0.25); }
+    .btn.primary { background: rgba(0,120,255,0.8); }
+    .btn.primary:hover { background: rgba(0,120,255,1); }
+    #size-info {
+      color: #aaa;
+      font-size: 12px;
+      padding: 8px;
+    }
+  </style>
+  </head>
+  <body>
+  <div id="dim-overlay"></div>
+  <div id="selection"></div>
+  <div id="toolbar">
+    <span id="size-info"></span>
+    <button class="btn" onclick="cancelScreenshot()">取消 (Esc)</button>
+    <button class="btn primary" id="capture-btn" onclick="captureScreenshot()">截图</button>
+    <button class="btn" id="long-capture-btn" onclick="startLongCapture()">长截图</button>
+  </div>
+  <script>
+    const { ipcRenderer } = require('electron');
+    let startX, startY, selX, selY, selW, selH;
+    let isDrawing = false;
+    const DX = ${x}, DY = ${y};
+    const dimOverlay = document.getElementById('dim-overlay');
+    const selection = document.getElementById('selection');
+    const toolbar = document.getElementById('toolbar');
+    const sizeInfo = document.getElementById('size-info');
+    const captureBtn = document.getElementById('capture-btn');
+    const longCaptureBtn = document.getElementById('long-capture-btn');
+
+    dimOverlay.addEventListener('mousedown', (e) => {
+      isDrawing = true;
+      startX = e.screenX;
+      startY = e.screenY;
+      dimOverlay.style.display = 'none';
+      selection.style.display = 'block';
+      toolbar.style.display = 'none';
+    });
+
+    window.addEventListener('mousemove', (e) => {
+      if (!isDrawing) return;
+
+      const currentX = e.screenX;
+      const currentY = e.screenY;
+
+      selX = Math.min(startX, currentX);
+      selY = Math.min(startY, currentY);
+      selW = Math.abs(currentX - startX);
+      selH = Math.abs(currentY - startY);
+
+      selection.style.left = (selX - DX) + 'px';
+      selection.style.top = (selY - DY) + 'px';
+      selection.style.width = selW + 'px';
+      selection.style.height = selH + 'px';
+    });
+
+    window.addEventListener('mouseup', (e) => {
+      if (!isDrawing) return;
+      isDrawing = false;
+
+      if (selW < 10 || selH < 10) {
+        selection.style.display = 'none';
+        dimOverlay.style.display = 'block';
+        return;
+      }
+
+      // Show toolbar below selection
+      const toolbarX = selX - DX;
+      const toolbarY = selY - DY + selH + 8;
+
+      toolbar.style.left = toolbarX + 'px';
+      toolbar.style.top = toolbarY + 'px';
+      toolbar.style.display = 'flex';
+
+      sizeInfo.textContent = Math.round(selW) + ' × ' + Math.round(selH);
+
+      captureBtn.onclick = () => captureScreenshot();
+      longCaptureBtn.onclick = () => startLongCapture();
+    });
+
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') {
+        cancelScreenshot();
+      }
+    });
+
+    function cancelScreenshot() {
+      ipcRenderer.invoke('screenshot:cancel').then(() => {
+        window.close();
+      });
+    }
+
+    function captureScreenshot() {
+      // Hide selection & toolbar so they don't appear in the capture
+      selection.style.display = 'none';
+      toolbar.style.display = 'none';
+      setTimeout(() => {
+        ipcRenderer.invoke('screenshot:capture', {
+        x: Math.round(selX),
+        y: Math.round(selY),
+        width: Math.round(selW),
+        height: Math.round(selH),
+        screenId: null
+        }).then((result) => {
+          if (result && result.dataUrl) {
+            ipcRenderer.send('screenshot:result', result);
+          }
+          window.close();
+        });
+      }, 50);
+    }
+
+    function startLongCapture() {
+      ipcRenderer.invoke('screenshot:startLongCapture', {
+        x: Math.round(selX),
+        y: Math.round(selY),
+        width: Math.round(selW),
+        height: Math.round(selH),
+        screenId: null
+      }).then(() => {
+        // Main process handles auto-capture; overlay becomes click-through
+        // Show hints briefly then hide
+        selection.style.borderColor = '#00ff88';
+        document.body.style.cursor = 'default';
+        setTimeout(() => { window.close(); }, 300);
+      });
+    }
+
+    function finishLongCapture() {
+      ipcRenderer.invoke('screenshot:finishLongCapture', {}).then((result) => {
+        if (result && result.dataUrl) {
+          ipcRenderer.send('screenshot:result', result);
+        }
+        window.close();
+      });
+    }
+
+    window.cancelScreenshot = cancelScreenshot;
+    window.captureScreenshot = captureScreenshot;
+    window.startLongCapture = startLongCapture;
+    window.finishLongCapture = finishLongCapture;
+  </script>
+  </body>
+  </html>`;
+}
+
+async function finishLongCaptureFromFrames(frames, region) {
+  // If we have incremental cumulative result in temp file
+  const cumPath = path.join(app.getPath('temp'), 'sticky-notes-cumulative.png');
+  if (longCaptureCumulative && fs.existsSync(cumPath)) {
+    const buf = fs.readFileSync(cumPath);
+    const dataUrl = 'data:image/png;base64,' + buf.toString('base64');
+    const img = nativeImage.createFromDataURL(dataUrl);
+    const sz = img.getSize();
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('screenshot:completed', {
+        dataUrl,
+        width: sz.width,
+        height: sz.height,
+        isStitched: true,
+      });
+    }
+    try { fs.unlinkSync(cumPath); } catch(e) {}
+    longCaptureCumulative = null;
+    longCapturePrevFrame = null;
+    longCaptureFrames = [];
+    longCaptureRegion = null;
+    closeScreenshotWindows();
+    return;
+  }
+
+  // Fallback: batch stitching (old path)
+  if (!frames || frames.length === 0) {
+    if (region) {
+      const single = await captureScreenRegion(region.x, region.y, region.w, region.h, null);
+      if (single && single.dataUrl && mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('screenshot:completed', single);
+      }
+    }
+  } else if (frames.length === 1) {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('screenshot:completed', frames[0]);
+    }
+  } else {
+    const maxFrames = 80;
+    const useFrames = frames.length > maxFrames ? frames.slice(-maxFrames) : frames;
+    const dataUrls = useFrames.map(f => f.dataUrl);
+    const alignResult = callPython('align.py', { images: dataUrls });
+    if (alignResult && alignResult.ok) {
+      const offsets = alignResult.alignments.map(a => a.offset);
+      const stitchResult = callPython('stitch.py', { images: dataUrls, offsets });
+      if (stitchResult && stitchResult.ok && mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('screenshot:completed', {
+          dataUrl: stitchResult.dataUrl,
+          width: stitchResult.width,
+          height: stitchResult.height,
+          isStitched: true,
+        });
+      }
+    }
+  }
+  longCaptureCumulative = null;
+  longCapturePrevFrame = null;
+  longCaptureFrames = [];
+  longCaptureRegion = null;
+  closeScreenshotWindows();
+}
+
+function closeScreenshotWindows() {
+  for (const w of screenshotOverlays) {
+    if (w && !w.isDestroyed()) w.close();
+  }
+  screenshotOverlays = [];
+  longCaptureActive = false;
+  longCaptureCumulative = null;
+  longCapturePrevFrame = null;
+  longCaptureFrames = [];
+  longCaptureRegion = null;
+}
+
+async function captureScreenRegion(x, y, width, height, screenId) {
+  try {
+    // Use the display nearest to capture point for correct DPI handling
+    const capDisplay = screen.getDisplayNearestPoint({ x, y });
+    const capSF = capDisplay.scaleFactor || 1;
+
+    const sources = await desktopCapturer.getSources({
+      types: ['screen'],
+      thumbnailSize: { width: capDisplay.size.width, height: capDisplay.size.height },
+    });
+
+    if (sources.length === 0) return null;
+
+    // Find source matching the capture display
+    const source = sources.find(s => s.display_id === String(capDisplay.id)) || sources[0];
+    const fullImage = source.thumbnail;
+
+    // fullImage covers capDisplay. Crop x,y are physical screen coords relative to display origin
+    const scaleFactor = fullImage.getSize().width / capDisplay.bounds.width;
+    const cropRect = {
+      x: Math.round((x - capDisplay.bounds.x) * scaleFactor),
+      y: Math.round((y - capDisplay.bounds.y) * scaleFactor),
+      width: Math.round(width * scaleFactor),
+      height: Math.round(height * scaleFactor),
+    };
+
+    const cropped = fullImage.crop(cropRect);
+    const dataUrl = cropped.toDataURL();
+
+    return { dataUrl, width: cropped.getSize().width, height: cropped.getSize().height };
+  } catch (e) {
+    console.error('Screenshot capture error:', e);
+    return null;
+  }
+}
+
+let longCaptureToolbar = null;
+let longCaptureTimer = null;
+let longGuideOverlay = null;
+let autoCapTimer = null;
+let stitchBusy = false;
+
+function startAutoCapture() {
+  if (autoCapTimer) clearInterval(autoCapTimer);
+  longCaptureCumulative = null;
+  longCapturePrevFrame = null;
+  stitchBusy = false;
+  // Temp file for incremental cumulative image
+  const cumPath = path.join(app.getPath('temp'), 'sticky-notes-cumulative.png');
+  if (fs.existsSync(cumPath)) fs.unlinkSync(cumPath);
+
+  function tick() {
+    if (!longCaptureActive || !longCaptureRegion) { autoCapTimer = null; return; }
+    if (stitchBusy) { autoCapTimer = setTimeout(tick, 50); return; }
+    const r = longCaptureRegion;
+    stitchBusy = true;
+    captureScreenRegion(r.x, r.y, r.w, r.h, null).then(result => {
+      if (!result || !result.dataUrl) { stitchBusy = false; autoCapTimer = setTimeout(tick, 200); return; }
+      if (longCapturePrevFrame && longCapturePrevFrame.slice(0, 50000) === result.dataUrl.slice(0, 50000)) {
+        stitchBusy = false; autoCapTimer = setTimeout(tick, 200); return;
+      }
+
+      if (!longCapturePrevFrame) {
+        longCapturePrevFrame = result.dataUrl;
+        const firstImg = nativeImage.createFromDataURL(result.dataUrl);
+        fs.writeFileSync(cumPath, firstImg.toPNG());
+        stitchBusy = false;
+        autoCapTimer = setTimeout(tick, 200);
+        return;
+      }
+
+      try {
+        const stitchResult = callPython('incrstitch.py', {
+          prev: longCapturePrevFrame,
+          curr: result.dataUrl,
+          cum_path: cumPath,
+        });
+        if (stitchResult && stitchResult.ok) {
+          longCapturePrevFrame = result.dataUrl;
+          longCaptureCumulative = cumPath;
+        }
+      } catch(e) {}
+      stitchBusy = false;
+      autoCapTimer = setTimeout(tick, 200);
+    }).catch(() => { stitchBusy = false; autoCapTimer = setTimeout(tick, 200); });
+  }
+  autoCapTimer = setTimeout(tick, 200);
+}
+function stopAutoCapture() { if (autoCapTimer) { clearTimeout(autoCapTimer); autoCapTimer = null; } }
+
+function showLongCaptureUI(x, y, w, h) {
+  // Show overlays for dimming, click-through at normal z-order
+  for (const ow of screenshotOverlays) {
+    if (ow && !ow.isDestroyed()) {
+      ow.setIgnoreMouseEvents(true, { forward: true });
+      ow.setAlwaysOnTop(true); // normal level, not screen-saver
+      ow.show();
+    }
+  }
+
+  // Floating toolbar below selection, matching main app glass style
+  const tbHTML = `<!DOCTYPE html><html><head><meta charset="UTF-8"><style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{background:transparent;display:flex;align-items:center;justify-content:center;height:100vh;gap:6px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;overflow:hidden}
+.tb{background:rgba(30,30,30,0.92);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);border:1px solid rgba(255,255,255,0.12);border-radius:12px;padding:5px 8px;display:flex;align-items:center;gap:6px;box-shadow:0 8px 32px rgba(0,0,0,0.4)}
+.b{border:1px solid rgba(255,255,255,0.12);padding:7px 16px;border-radius:8px;cursor:pointer;font-size:13px;color:#fff;white-space:nowrap;background:rgba(255,255,255,0.08);transition:all .15s;font-family:inherit}
+.b:hover{background:rgba(255,255,255,0.16);border-color:rgba(255,255,255,0.22)}
+.bf{background:rgba(0,180,100,0.82);border-color:rgba(0,200,120,0.3)}.bf:hover{background:rgba(0,210,130,0.9)}
+.bc{background:rgba(200,60,60,0.7);border-color:rgba(230,80,80,0.3)}.bc:hover{background:rgba(230,80,80,0.85)}
+.hint{color:rgba(255,255,255,0.35);font-size:10px;margin:0 4px}
+</style></head><body>
+<div class="tb">
+<span class="hint">Enter 保存 · Esc 取消</span>
+<button class="b bf" id="done">保存</button>
+<button class="b bc" id="cancel">取消</button>
+</div>
+<script>const{ipcRenderer}=require('electron');
+document.getElementById('done').onclick=function(){ipcRenderer.send('screenshot:long-finish');window.close()};
+document.getElementById('cancel').onclick=function(){ipcRenderer.send('screenshot:long-cancel');window.close()};
+document.addEventListener('keydown',function(e){if(e.key==='Enter'){ipcRenderer.send('screenshot:long-finish');window.close()}else if(e.key==='Escape'){ipcRenderer.send('screenshot:long-cancel');window.close()}});
+</script></body></html>`;
+
+  const tempDir = path.join(app.getPath('temp'), 'sticky-notes-screenshot');
+  if (!fs.existsSync(tempDir)) fs.mkdirSync(tempDir, { recursive: true });
+  const f = path.join(tempDir, 'long-toolbar.html');
+  fs.writeFileSync(f, tbHTML, 'utf-8');
+
+  // Position toolbar below selection area
+  const tbW = 270, tbH = 48;
+  let tbx = x, tby = y + h + 8;
+  // Keep on screen
+  const disp = screen.getDisplayNearestPoint({ x: x + w / 2, y: y + h / 2 });
+  if (tbx + tbW > disp.bounds.x + disp.bounds.width) tbx = disp.bounds.x + disp.bounds.width - tbW - 8;
+  if (tby + tbH > disp.bounds.y + disp.bounds.height) tby = y - tbH - 8;
+
+  longCaptureToolbar = new BrowserWindow({
+    x: tbx, y: tby, width: tbW, height: tbH,
+    transparent: true, frame: false,
+    alwaysOnTop: true, skipTaskbar: true, resizable: false, focusable: true,
+    webPreferences: { contextIsolation: false, nodeIntegration: true },
+  });
+  longCaptureToolbar.setAlwaysOnTop(true, 'screen-saver');
+  longCaptureToolbar.loadFile(f);
+  longCaptureToolbar.on('closed', () => { longCaptureToolbar = null; });
+}
+
+function hideLongCaptureUI() {
+  if (longCaptureToolbar && !longCaptureToolbar.isDestroyed()) longCaptureToolbar.close();
+  if (longGuideOverlay && !longGuideOverlay.isDestroyed()) longGuideOverlay.close();
+  longCaptureToolbar = null;
+  longGuideOverlay = null;
+}
+
+function createLongCaptureToolbar() {
+  if (longCaptureToolbar && !longCaptureToolbar.isDestroyed()) {
+    longCaptureToolbar.close();
+  }
+  const cp2 = screen.getCursorScreenPoint();
+  const tdisp = screen.getDisplayNearestPoint(cp2);
+  const sw = tdisp.workArea.width;
+  const sx = tdisp.workArea.x;
+
+  longCaptureToolbar = new BrowserWindow({
+    x: sx + Math.round(sw / 2 - 105), y: tdisp.workArea.y + 60,
+    width: 210, height: 44,
+    transparent: true, frame: false,
+    alwaysOnTop: true, skipTaskbar: true,
+    resizable: false,
+    webPreferences: { contextIsolation: false, nodeIntegration: true },
+  });
+  longCaptureToolbar.setAlwaysOnTop(true, 'screen-saver');
+
+  const tHTML = `<!DOCTYPE html><html><head><meta charset="UTF-8"><style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{background:transparent;display:flex;align-items:center;justify-content:center;height:100vh;gap:8px}
+.b{border:none;padding:6px 16px;border-radius:8px;cursor:pointer;font-size:13px;color:#fff;font-family:inherit}
+.fin{background:rgba(0,190,100,0.88)}.fin:hover{background:rgba(0,210,130,0.95)}
+.can{background:rgba(200,60,60,0.82)}.can:hover{background:rgba(230,80,80,0.95)}
+</style></head><body>
+<button class="b fin" onclick="done()">完成</button>
+<button class="b can" onclick="cancel()">取消</button>
+<script>
+const {ipcRenderer}=require('electron');
+function done(){ipcRenderer.invoke('screenshot:finishLongCapture',{}).then(r=>{if(r)ipcRenderer.send('screenshot:result',r);window.close()})}
+function cancel(){ipcRenderer.invoke('screenshot:cancelLongCapture');window.close()}
+</script></body></html>`;
+
+  const tempDir = path.join(app.getPath('temp'), 'sticky-notes-screenshot');
+  if (!fs.existsSync(tempDir)) fs.mkdirSync(tempDir, { recursive: true });
+  const f = path.join(tempDir, 'long-toolbar.html');
+  fs.writeFileSync(f, tHTML, 'utf-8');
+  longCaptureToolbar.loadFile(f);
+  longCaptureToolbar.on('closed', () => { longCaptureToolbar = null; });
+}
+
+async function startLongCapture(x, y, width, height, screenId) {
+  longCaptureActive = true;
+  longCaptureFrames = [];
+  longCaptureRegion = { x, y, width, height };
+
+  // Hide all overlays so user can scroll content below
+  for (const w of screenshotOverlays) {
+    if (w && !w.isDestroyed()) {
+      w.setIgnoreMouseEvents(true, { forward: true });
+      w.hide();
+    }
+  }
+
+  createLongCaptureToolbar();
+
+  // Auto-capture every 500ms
+  longCaptureTimer = setInterval(async () => {
+    if (!longCaptureActive) return;
+    const r = longCaptureRegion;
+    // Capture current frame
+    const result = await captureScreenRegion(r.x, r.y, r.width, r.height, null);
+    if (result) {
+      const last = longCaptureFrames[longCaptureFrames.length - 1];
+      if (!last || last.dataUrl !== result.dataUrl) {
+        longCaptureFrames.push(result);
+      }
+    }
+  }, 600);
+
+  return true;
+}
+
+async function captureScrollFrame(x, y, width, height, screenId) {
+  if (!longCaptureActive) return null;
+  const result = await captureScreenRegion(x, y, width, height, screenId);
+  if (result) longCaptureFrames.push(result);
+  return result;
+}
+
+async function finishLongCapture(frames) {
+  longCaptureActive = false;
+  if (longCaptureTimer) { clearInterval(longCaptureTimer); longCaptureTimer = null; }
+  if (longCaptureToolbar && !longCaptureToolbar.isDestroyed()) longCaptureToolbar.close();
+  closeScreenshotWindows();
+
+  const allFrames = longCaptureFrames;
+  if (allFrames.length === 0) {
+    const region = longCaptureRegion;
+    if (!region) return null;
+    return await captureScreenRegion(region.x, region.y, region.width, region.height, null);
+  }
+
+  // Dedup frames
+  const uniqueFrames = [allFrames[0]];
+  for (let i = 1; i < allFrames.length; i++) {
+    const last = uniqueFrames[uniqueFrames.length - 1];
+    if (Math.abs(allFrames[i].height - last.height) > 10 ||
+        allFrames[i].dataUrl !== last.dataUrl) {
+      uniqueFrames.push(allFrames[i]);
+    }
+  }
+
+  longCaptureFrames = [];
+  longCaptureRegion = null;
+
+  if (uniqueFrames.length === 1) {
+    return uniqueFrames[0];
+  }
+
+  // Use Python OpenCV to align and stitch
+  const dataUrls = uniqueFrames.map(f => f.dataUrl);
+  const alignResult = callPython('align.py', { images: dataUrls });
+  if (alignResult && alignResult.ok) {
+    const offsets = alignResult.alignments.map(a => a.offset);
+    const stitchResult = callPython('stitch.py', { images: dataUrls, offsets });
+    if (stitchResult && stitchResult.ok) {
+      return {
+        dataUrl: stitchResult.dataUrl,
+        width: stitchResult.width,
+        height: stitchResult.height,
+        isStitched: true,
+      };
+    }
+  }
+
+  // Fallback: simple vertical stack
+  const maxWidth = Math.max(...uniqueFrames.map(f => f.width));
+  const totalHeight = uniqueFrames.reduce((sum, f) => sum + f.height, 0);
+  return {
+    dataUrl: uniqueFrames[0].dataUrl, // fallback
+    width: maxWidth,
+    height: totalHeight,
+    isStitched: false,
+  };
+  return {
+    dataUrl: null,
+    frames: uniqueFrames,
+    totalWidth: maxWidth,
+    totalHeight: totalHeight,
+    isStitched: true,
+  };
+}
+
+function calculateTotalBounds(displays) {
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  for (const display of displays) {
+    const { x, y, width, height } = display.bounds;
+    minX = Math.min(minX, x);
+    minY = Math.min(minY, y);
+    maxX = Math.max(maxX, x + width);
+    maxY = Math.max(maxY, y + height);
+  }
+  return { x: minX, y: minY, width: maxX - minX, height: maxY - minY };
+}
+
+// Convert shortcut string (e.g. 'Ctrl+Shift+X') to Electron accelerator
+function toAccelerator(shortcut) {
+  if (!shortcut) return '';
+  return shortcut
+    .replace(/\bCtrl\b/g, 'CommandOrControl')
+    .replace(/\bMeta\b/g, 'Super');
+}
+
+// Toggle states (persist across re-registrations)
+let allPenetrate = false;
+let allTransparent = false;
+
+function getShortcutActions(settings) {
+  return [
+    {
+      shortcut: settings?.shortcutScreenshot || 'Ctrl+Shift+X',
+      action: () => { captureWithNativeSnipping(); },
+    },
+    {
+      shortcut: settings?.shortcutLongScreenshot || 'Ctrl+Shift+Alt+X',
+      action: () => { createScreenshotOverlay('long'); },
+    },
+    {
+      shortcut: settings?.shortcutPenetrate || 'Ctrl+P',
+      action: () => {
+        allPenetrate = !allPenetrate;
+        for (const [id, win] of floatingManager.floatingWindows) {
+          if (win && !win.isDestroyed()) {
+            if (allPenetrate) {
+              win.setIgnoreMouseEvents(true, { forward: true });
+              win.webContents.send('float:penetrateChanged', true);
+            } else {
+              win.setIgnoreMouseEvents(false);
+              win.webContents.send('float:penetrateChanged', false);
+            }
+          }
+        }
+      },
+    },
+    {
+      shortcut: settings?.shortcutCloseAll || 'Ctrl+Shift+W',
+      action: () => {
+        floatingManager.closeAll();
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          mainWindow.webContents.send('floating:allClosed');
+        }
+      },
+    },
+    {
+      shortcut: settings?.shortcutTransparent || 'Ctrl+Shift+T',
+      action: () => {
+        allTransparent = !allTransparent;
+        for (const [id, win] of floatingManager.floatingWindows) {
+          if (win && !win.isDestroyed()) {
+            win.webContents.send('float:transparentChanged', allTransparent);
+          }
+        }
+      },
+    },
+  ];
+}
+
+let _registeredAccels = [];
+
+function registerAllShortcuts(settings) {
+  const newAccels = [];
+  for (const { shortcut, action } of getShortcutActions(settings)) {
+    const accel = toAccelerator(shortcut);
+    if (!accel) continue;
+
+    // Only re-register if changed or new
+    if (!_registeredAccels.includes(accel)) {
+      try {
+        // Unregister old if it exists
+        globalShortcut.unregister(accel);
+        globalShortcut.register(accel, action);
+      } catch(e) { console.error('Shortcut register failed:', accel, e); }
+    }
+    newAccels.push(accel);
+  }
+
+  // Unregister shortcuts that are no longer in settings
+  for (const old of _registeredAccels) {
+    if (!newAccels.includes(old)) {
+      try { globalShortcut.unregister(old); } catch(e) {}
+    }
+  }
+  _registeredAccels = newAccels;
+}
+
+// Load settings and get shortcut config
+function loadShortcutSettings() {
+  const userDataPath = app.getPath('userData');
+  const filePath = path.join(userDataPath, 'notes-data.json');
+  try {
+    if (fs.existsSync(filePath)) {
+      const data = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
+      return data.settings || {};
+    }
+  } catch(e) {}
+  return {};
+}
+
+// IPC to re-register shortcuts when settings change
+function setupShortcutIPC() {
+  ipcMain.handle('shortcuts:update', async (event, settings) => {
+    registerAllShortcuts(settings);
+    return true;
+  });
+}
+
+// App lifecycle
+app.whenReady().then(() => {
+  // Cache display bounds once at startup (overwrites each time, ~1KB)
+  cacheDisplayBounds();
+  // Also refresh on display changes
+  screen.on('display-added', cacheDisplayBounds);
+  screen.on('display-removed', cacheDisplayBounds);
+  screen.on('display-metrics-changed', cacheDisplayBounds);
+
+  setupIPC();
+  setupShortcutIPC();
+  createMainWindow();
+
+  // Register shortcuts from saved settings
+  const settings = loadShortcutSettings();
+  registerAllShortcuts(settings);
+
+  app.on('activate', () => {
+    if (BrowserWindow.getAllWindows().length === 0) {
+      createMainWindow();
+    }
+  });
+});
+
+app.on('window-all-closed', () => {
+  globalShortcut.unregisterAll();
+  if (process.platform !== 'darwin') {
+    app.quit();
+  }
+});
+
+app.on('before-quit', () => {
+  floatingManager.closeAll();
+});
+
+// Show always-on-top toast notification
+ipcMain.handle('show-toast', (event, message) => {
+  const cp = screen.getCursorScreenPoint();
+  const disp = screen.getDisplayNearestPoint(cp);
+  const { x: dx, width: dw } = disp.workArea;
+  const toastW = 220, toastH = 44;
+  const toastWin = new BrowserWindow({
+    width: toastW, height: toastH,
+    x: dx + dw - toastW - 16,
+    y: disp.workArea.y + 48,
+    transparent: true, frame: false,
+    alwaysOnTop: true, skipTaskbar: true,
+    resizable: false, focusable: false,
+    webPreferences: { contextIsolation: false, nodeIntegration: true },
+  });
+  toastWin.setAlwaysOnTop(true, 'screen-saver');
+  toastWin.setVisibleOnAllWorkspaces(true);
+  const h = `<!DOCTYPE html><html><head><meta charset="UTF-8"><style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI','Microsoft YaHei',sans-serif;background:transparent;display:flex;align-items:center;justify-content:center;height:100vh}
+.toast{padding:8px 18px;border-radius:12px;background:rgba(30,30,50,0.88);backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);border:1px solid rgba(255,255,255,0.15);color:rgba(255,255,255,0.9);font-size:13px;box-shadow:0 8px 32px rgba(0,0,0,0.4);animation:fadeIn .2s ease-out}
+@keyframes fadeIn{from{opacity:0;transform:translateY(-8px)}to{opacity:1;transform:translateY(0)}}
+</style></head><body><div class="toast">${message}</div></body></html>`;
+  const tempDir = path.join(app.getPath('temp'), 'sticky-notes-screenshot');
+  const f = path.join(tempDir, 'toast.html');
+  fs.writeFileSync(f, h, 'utf-8');
+  toastWin.loadFile(f);
+  setTimeout(() => { toastWin.close(); }, 2500);
+  return true;
+});
+
+// Listen for screenshot results from overlay
+ipcMain.on('screenshot:result', (event, result) => {
+  if (result && result.dataUrl) {
+    // Copy to clipboard
+    try {
+      const img = nativeImage.createFromDataURL(result.dataUrl);
+      clipboard.writeImage(img);
+    } catch(e) {}
+  }
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('screenshot:completed', result);
+  }
+});
