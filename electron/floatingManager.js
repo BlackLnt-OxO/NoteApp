@@ -72,12 +72,12 @@ function createFloatingNote(noteData, isDev) {
   }
 
   const floatWin = new BrowserWindow({
-    width: savedState.width || 130,
-    height: savedState.height || 110,
+    width: savedState.width || 65,
+    height: savedState.height || 55,
     x: sx != null ? sx : (noteData.x || defX),
     y: sy != null ? sy : (noteData.y || defY),
-    minWidth: 80,
-    minHeight: 60,
+    minWidth: 40,
+    minHeight: 30,
     frame: false,
     transparent: true,
     alwaysOnTop: true,

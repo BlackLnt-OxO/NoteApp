@@ -149,7 +149,7 @@ const SettingsDialog: React.FC<SettingsDialogProps> = ({ onClose }) => {
         <div style={sectionStyle}>
           <label style={labelStyle(gfs)}>字体大小: <strong>{localSettings.fontSize}px</strong></label>
           <input type="range" min="11" max="28" value={localSettings.fontSize}
-            onChange={(e) => handleChange('fontSize', parseInt(e.target.value))} style={rangeStyle} />
+            onChange={(e) => { const v = parseInt(e.target.value); handleChange('fontSize', v); updateSettings({ fontSize: v }); }} style={rangeStyle} />
         </div>
 
         <div style={sectionStyle}>
@@ -165,7 +165,7 @@ const SettingsDialog: React.FC<SettingsDialogProps> = ({ onClose }) => {
         <div style={sectionStyle}>
           <label style={labelStyle(gfs)}>背景不透明度: <strong>{Math.round(localSettings.backgroundOpacity * 100)}%</strong></label>
           <input type="range" min="0" max="100" value={Math.round(localSettings.backgroundOpacity * 100)}
-            onChange={(e) => handleChange('backgroundOpacity', parseInt(e.target.value) / 100)} style={rangeStyle} />
+            onChange={(e) => { const v = parseInt(e.target.value) / 100; handleChange('backgroundOpacity', v); updateSettings({ backgroundOpacity: v }); }} style={rangeStyle} />
         </div>
 
         <div style={sectionStyle}>
