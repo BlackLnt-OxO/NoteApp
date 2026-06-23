@@ -14,7 +14,7 @@ const NoteGrid: React.FC = () => {
   // Cell sizes: proportional to container width (same relative size on any screen)
   const TARGET_COLS = 3;
   const CELL_W = Math.round((containerW - PADDING * 2 - fsn(27, gfs) * (TARGET_COLS - 1)) / TARGET_COLS);
-  const CELL_H = Math.round(CELL_W * (fsn(250, gfs) / fsn(260, gfs)));
+  const CELL_H = Math.round(CELL_W * (fsn(100, gfs) / fsn(130, gfs)));
   const GAP = fsn(27, gfs);
 
   const [pendingDrag, setPendingDrag] = useState<{

@@ -53,7 +53,7 @@ const SettingsDialog: React.FC<SettingsDialogProps> = ({ onClose }) => {
   useEffect(() => { setLocalSettings(prev => ({ ...prev, ...settings })); }, [settings]);
   const [fontOpen, setFontOpen] = useState(false);
   const [showPicker, setShowPicker] = useState(false);
-  const [pickerColor, setPickerColor] = useState('#6b5ce7');
+  const [pickerColor, setPickerColor] = useState('#ffffff');
   const [hoverSwatch, setHoverSwatch] = useState<string | null>(null);
   const [hoverDelete, setHoverDelete] = useState<string | null>(null);
   const [hoverEdit, setHoverEdit] = useState<string | null>(null);
@@ -222,7 +222,7 @@ const SettingsDialog: React.FC<SettingsDialogProps> = ({ onClose }) => {
             ))}
             {/* + button to open color picker */}
             <div style={{ position: 'relative' }}>
-              <button className="glass-btn" onClick={() => { setEditingColor(null); setPickerColor('#6b5ce7'); setShowPicker(true); }} style={{
+              <button className="glass-btn" onClick={() => { setEditingColor(null); setPickerColor('#ffffff'); setShowPicker(true); }} style={{
                 width: fsn(26, gfs), height: fsn(26, gfs), borderRadius: '50%',
                 padding: 0, fontSize: fs(18, gfs), display: 'flex', lineHeight: 1,
                 alignItems: 'center', justifyContent: 'center',
@@ -254,7 +254,7 @@ const SettingsDialog: React.FC<SettingsDialogProps> = ({ onClose }) => {
                 }
               }}>
               <ColorPicker
-                color={editingColor || '#6b5ce7'}
+                color={editingColor || '#ffffff'}
                 onChange={setPickerColor}
                 gfs={gfs}
               />
