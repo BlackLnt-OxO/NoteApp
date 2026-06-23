@@ -54,6 +54,8 @@ const SettingsDialog: React.FC<SettingsDialogProps> = ({ onClose }) => {
   const [pickerColor, setPickerColor] = useState('#6b5ce7');
   const [hoverSwatch, setHoverSwatch] = useState<string | null>(null);
   const [hoverDelete, setHoverDelete] = useState<string | null>(null);
+  const [hoverEdit, setHoverEdit] = useState<string | null>(null);
+  const [editingColor, setEditingColor] = useState<string | null>(null);
   const fontDropdownRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -179,9 +181,26 @@ const SettingsDialog: React.FC<SettingsDialogProps> = ({ onClose }) => {
             ))}
             {(localSettings.customNoteColors || []).map((c) => (
               <div key={c} style={{ position: 'relative', display: 'inline-block' }}
-                onMouseEnter={() => setHoverSwatch(c)} onMouseLeave={() => { setHoverSwatch(null); setHoverDelete(null); }}>
+                onMouseEnter={() => setHoverSwatch(c)} onMouseLeave={() => { setHoverSwatch(null); setHoverDelete(null); setHoverEdit(null); }}>
                 <div className={`color-swatch ${localSettings.defaultNoteColor === c ? 'selected' : ''}`}
                   style={{ background: c, width: fsn(26, gfs), height: fsn(26, gfs) }} onClick={() => handleChange('defaultNoteColor', c)} />
+                {/* Pencil — bottom-left */}
+                <button onClick={(e) => {
+                  e.stopPropagation();
+                  setEditingColor(c);
+                  setPickerColor(c);
+                  setShowPicker(true);
+                }} onMouseEnter={() => setHoverEdit(c)} onMouseLeave={() => setHoverEdit(null)} style={{
+                  position: 'absolute', bottom: '-5px', left: '-5px',
+                  width: fsn(14, gfs), height: fsn(14, gfs), borderRadius: '50%',
+                  border: 'none', color: '#fff',
+                  fontSize: fs(8, gfs), cursor: hoverSwatch === c ? 'pointer' : 'default',
+                  display: 'flex', transition: 'opacity 0.15s',
+                  opacity: hoverSwatch === c ? 1 : 0,
+                  background: hoverEdit === c ? '#2196F3' : 'rgba(120,120,120,0.7)',
+                  alignItems: 'center', justifyContent: 'center', lineHeight: 1,
+                }}>✎</button>
+                {/* Delete X — top-right */}
                 <button onClick={(e) => {
                   e.stopPropagation();
                   const newCustom = (localSettings.customNoteColors || []).filter(x => x !== c);
@@ -201,7 +220,7 @@ const SettingsDialog: React.FC<SettingsDialogProps> = ({ onClose }) => {
             ))}
             {/* + button to open color picker */}
             <div style={{ position: 'relative' }}>
-              <button className="glass-btn" onClick={() => setShowPicker(true)} style={{
+              <button className="glass-btn" onClick={() => { setEditingColor(null); setPickerColor('#6b5ce7'); setShowPicker(true); }} style={{
                 width: fsn(26, gfs), height: fsn(26, gfs), borderRadius: '50%',
                 padding: 0, fontSize: fs(18, gfs), display: 'flex', lineHeight: 1,
                 alignItems: 'center', justifyContent: 'center',
@@ -217,21 +236,24 @@ const SettingsDialog: React.FC<SettingsDialogProps> = ({ onClose }) => {
               onMouseDown={(e) => { (e.currentTarget as HTMLElement).dataset.mdTarget = e.target === e.currentTarget ? '1' : '0'; }}
               onMouseUp={(e) => {
                 if (e.target === e.currentTarget && (e.currentTarget as HTMLElement).dataset.mdTarget === '1') {
-                  if (!(localSettings.customNoteColors || []).includes(pickerColor)) {
-                    handleChange('customNoteColors', [...(localSettings.customNoteColors || []), pickerColor]);
+                  const custom = localSettings.customNoteColors || [];
+                  if (editingColor) {
+                    // Editing existing color — replace old with new
+                    const replaced = custom.map(x => x === editingColor ? pickerColor : x);
+                    handleChange('customNoteColors', replaced);
+                    if (localSettings.defaultNoteColor === editingColor) handleChange('defaultNoteColor', pickerColor);
+                  } else {
+                    // Adding new color
+                    if (!custom.includes(pickerColor)) {
+                      handleChange('customNoteColors', [...custom, pickerColor]);
+                    }
                   }
                   setShowPicker(false);
                 }
               }}>
               <ColorPicker
-                color={pickerColor}
+                color={editingColor || '#6b5ce7'}
                 onChange={setPickerColor}
-                onClose={() => {
-                  if (!(localSettings.customNoteColors || []).includes(pickerColor)) {
-                    handleChange('customNoteColors', [...(localSettings.customNoteColors || []), pickerColor]);
-                  }
-                  setShowPicker(false);
-                }}
                 gfs={gfs}
               />
             </div>
