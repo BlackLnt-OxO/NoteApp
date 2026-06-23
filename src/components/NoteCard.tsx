@@ -250,16 +250,11 @@ const NoteCard: React.FC<NoteCardProps> = ({ note, isDragGhost, isExpanded, onDr
 
   const handleResizeDown = (e: React.PointerEvent) => {
     e.preventDefault(); e.stopPropagation();
-    const handleEl = e.currentTarget as HTMLElement;
     selectNote(null);
-    requestAnimationFrame(() => {
-      const newRect = handleEl.getBoundingClientRect();
-      resizing.current = true;
-      resizeState.current = { sx: newRect.left + newRect.width / 2, sy: newRect.top + newRect.height / 2, sw: cardW, sh: cardH };
-    });
+    resizing.current = true;
+    resizeState.current = { sx: e.clientX, sy: e.clientY, sw: cardW, sh: cardH };
 
     const onMove = (ev: PointerEvent) => {
-      if (!resizing.current) return;
       const dw = ev.clientX - resizeState.current.sx;
       const dh = ev.clientY - resizeState.current.sy;
       const w = Math.max(180, resizeState.current.sw + dw);
