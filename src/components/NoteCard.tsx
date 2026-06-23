@@ -251,8 +251,14 @@ const NoteCard: React.FC<NoteCardProps> = ({ note, isDragGhost, isExpanded, onDr
   const handleResizeDown = (e: React.PointerEvent) => {
     e.preventDefault(); e.stopPropagation();
     selectNote(null);
+    // Use actual rendered size (from grid cell) instead of note.width which
+    // defaults to 260 — otherwise first resize on a new note jumps.
+    const wrapper = (e.currentTarget as HTMLElement).closest('.note-card-wrapper') as HTMLElement | null;
+    const rect = wrapper ? wrapper.getBoundingClientRect() : null;
+    const actualW = rect ? rect.width : cardW;
+    const actualH = rect ? rect.height : cardH;
     resizing.current = true;
-    resizeState.current = { sx: e.clientX, sy: e.clientY, sw: cardW, sh: cardH };
+    resizeState.current = { sx: e.clientX, sy: e.clientY, sw: actualW, sh: actualH };
 
     const onMove = (ev: PointerEvent) => {
       const dw = ev.clientX - resizeState.current.sx;
