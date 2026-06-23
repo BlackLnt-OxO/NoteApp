@@ -30,7 +30,6 @@ const CreateNoteDialog: React.FC<CreateNoteDialogProps> = ({ onClose }) => {
     addNote({
       content, color: selectedColor, tag: selectedTag, images,
       gridX: 0, gridY: 0,
-      width: 0, height: 0, customSize: false,
     });
     onClose();
   };

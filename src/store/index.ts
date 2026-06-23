@@ -90,7 +90,7 @@ export const useNoteStore = create<NoteStore>((set, get) => ({
       mapY: partial.mapY ?? Math.random() * 400 - 200,
       width: partial.width || 65,
       height: partial.height || 50,
-      customSize: partial.customSize || false,
+      customSize: partial.customSize ?? true,
       isFloating: false,
     };
     set((state) => ({ notes: [...state.notes, note] }));
