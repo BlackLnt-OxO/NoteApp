@@ -88,8 +88,8 @@ export const useNoteStore = create<NoteStore>((set, get) => ({
       gridY: partial.gridY ?? 0,
       mapX: partial.mapX ?? Math.random() * 400 - 200,
       mapY: partial.mapY ?? Math.random() * 400 - 200,
-      width: partial.width || 65,
-      height: partial.height || 50,
+      width: partial.width || 260,
+      height: partial.height || 200,
       customSize: partial.customSize ?? true,
       isFloating: false,
     };
@@ -236,8 +236,8 @@ export const useNoteStore = create<NoteStore>((set, get) => ({
             gridY: 0,
             mapX: -100,
             mapY: -80,
-            width: 65,
-            height: 55,
+            width: 260,
+            height: 220,
             isFloating: false,
           },
           {
@@ -252,8 +252,8 @@ export const useNoteStore = create<NoteStore>((set, get) => ({
             gridY: 0,
             mapX: 200,
             mapY: -80,
-            width: 65,
-            height: 55,
+            width: 260,
+            height: 220,
             isFloating: false,
           },
           {
@@ -268,8 +268,8 @@ export const useNoteStore = create<NoteStore>((set, get) => ({
             gridY: 0,
             mapX: 500,
             mapY: -80,
-            width: 65,
-            height: 55,
+            width: 260,
+            height: 220,
             isFloating: false,
           },
         ];

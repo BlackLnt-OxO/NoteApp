@@ -30,8 +30,8 @@ const NoteCard: React.FC<NoteCardProps> = ({ note, isDragGhost, isExpanded, onDr
   const lbDragging = useRef(false);
   const lbOnImg = useRef(false);
   const lbStart = useRef({ x: 0, y: 0, px: 0, py: 0 });
-  const [cardW, setCardW] = useState(note.width || 65);
-  const [cardH, setCardH] = useState(note.height || 50);
+  const [cardW, setCardW] = useState(note.width || 260);
+  const [cardH, setCardH] = useState(note.height || 200);
   const contentRef = useRef<HTMLDivElement>(null);
   const undoStack = useRef<string[]>([]);
   const composing = useRef(false);
@@ -47,7 +47,7 @@ const NoteCard: React.FC<NoteCardProps> = ({ note, isDragGhost, isExpanded, onDr
   const settings = useNoteStore((s) => s.settings);
 
   useEffect(() => { setContent(note.content); }, [note.content]);
-  useEffect(() => { setCardW(note.width || 65); setCardH(note.height || 50); }, [note.width, note.height]);
+  useEffect(() => { setCardW(note.width || 260); setCardH(note.height || 200); }, [note.width, note.height]);
   useEffect(() => {
     if (showExpanded && contentRef.current) {
       contentRef.current.focus();
@@ -263,8 +263,8 @@ const NoteCard: React.FC<NoteCardProps> = ({ note, isDragGhost, isExpanded, onDr
     const onMove = (ev: PointerEvent) => {
       const dw = ev.clientX - resizeState.current.sx;
       const dh = ev.clientY - resizeState.current.sy;
-      const w = Math.max(45, resizeState.current.sw + dw);
-      const h = Math.max(30, resizeState.current.sh + dh);
+      const w = Math.max(180, resizeState.current.sw + dw);
+      const h = Math.max(120, resizeState.current.sh + dh);
       setCardW(w); setCardH(h);
       update(note.id, { width: w, height: h, customSize: true });
     };
