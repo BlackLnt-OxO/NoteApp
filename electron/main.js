@@ -351,6 +351,72 @@ function setupIPC() {
     return floatingManager.closeAll();
   });
 
+  // Eyedropper: fullscreen overlay, pick pixel color
+  ipcMain.handle('eyedropper:start', async () => {
+    return new Promise(async (resolve) => {
+      const displays = screen.getAllDisplays();
+      const capWins = [];
+      let resolved = false;
+
+      for (const d of displays) {
+        const ow = new BrowserWindow({
+          x: d.bounds.x, y: d.bounds.y, width: d.bounds.width, height: d.bounds.height,
+          transparent: true, frame: false, alwaysOnTop: true, skipTaskbar: true, resizable: false,
+          webPreferences: { contextIsolation: false, nodeIntegration: true },
+        });
+        ow.setAlwaysOnTop(true, 'screen-saver');
+        ow.setIgnoreMouseEvents(false);
+
+        const sources = await desktopCapturer.getSources({
+          types: ['screen'],
+          thumbnailSize: { width: d.size.width, height: d.size.height },
+        });
+        const source = sources.find(s => s.display_id === String(d.id)) || sources[0];
+        const imgDataUrl = source ? source.thumbnail.toDataURL() : '';
+
+        const html = `<!DOCTYPE html><html><head><meta charset="UTF-8"><style>
+*{margin:0;padding:0}body{cursor:crosshair;overflow:hidden;width:100vw;height:100vh}
+#c{position:fixed;inset:0}
+#lp{position:fixed;pointer-events:none;width:120px;height:24px;background:rgba(0,0,0,0.75);color:#fff;font:12px monospace;display:flex;align-items:center;justify-content:center;border:1px solid rgba(255,255,255,0.3);border-radius:4px;z-index:100;white-space:nowrap}
+</style></head><body>
+<canvas id="c"></canvas><div id="lp"></div>
+<script>
+const {ipcRenderer}=require('electron');
+const cvs=document.getElementById('c'),ctx=cvs.getContext('2d'),lp=document.getElementById('lp');
+cvs.width=${d.size.width};cvs.height=${d.size.height};
+const img=new Image();img.src='${imgDataUrl}';
+img.onload=function(){ctx.drawImage(img,0,0);};
+document.addEventListener('mousemove',function(e){
+  lp.style.left=(e.clientX+14)+'px';lp.style.top=(e.clientY+14)+'px';
+  const px=ctx.getImageData(e.clientX,e.clientY,1,1).data;
+  const hex='#'+[px[0],px[1],px[2]].map(v=>v.toString(16).padStart(2,'0')).join('');
+  lp.style.borderColor=hex;
+  lp.innerHTML='<span style="display:inline-block;width:14px;height:14px;background:'+hex+';border:1px solid rgba(255,255,255,0.4);border-radius:2px;margin-right:4px"></span>'+hex.toUpperCase();
+});
+document.addEventListener('click',function(e){
+  const px=ctx.getImageData(e.clientX,e.clientY,1,1).data;
+  const hex='#'+[px[0],px[1],px[2]].map(v=>v.toString(16).padStart(2,'0')).join('');
+  ipcRenderer.send('eyedropper:picked',hex);
+});
+document.addEventListener('keydown',function(e){if(e.key==='Escape')ipcRenderer.send('eyedropper:picked',null);});
+</script></body></html>`;
+
+        const tmpDir = path.join(app.getPath('temp'), 'sticky-notes-screenshot');
+        if (!fs.existsSync(tmpDir)) fs.mkdirSync(tmpDir, { recursive: true });
+        const f = path.join(tmpDir, `eyedrop-${d.id}.html`);
+        fs.writeFileSync(f, html, 'utf-8');
+        ow.loadFile(f);
+        capWins.push(ow);
+      }
+
+      const close = () => { capWins.forEach(w => { if (!w.isDestroyed()) w.close(); }); };
+
+      ipcMain.once('eyedropper:picked', (event, color) => {
+        if (!resolved) { resolved = true; close(); resolve(color); }
+      });
+    });
+  });
+
   ipcMain.handle('screenshot:start', () => captureWithNativeSnipping());
 
   // Long screenshot floating toolbar actions
@@ -963,6 +1029,7 @@ async function finishLongCaptureFromFrames(frames, region) {
               isStitched: true,
             });
           }
+          try { clipboard.writeImage(nativeImage.createFromDataURL(dataUrl)); } catch(e) {}
           try { fs.unlinkSync(cumPath); } catch(e) {}
           longCaptureCumulative = null;
           longCapturePrevFrame = null;
@@ -984,13 +1051,10 @@ async function finishLongCaptureFromFrames(frames, region) {
     const img = nativeImage.createFromDataURL(dataUrl);
     const sz = img.getSize();
     if (mainWindow && !mainWindow.isDestroyed()) {
-      mainWindow.webContents.send('screenshot:completed', {
-        dataUrl,
-        width: sz.width,
-        height: sz.height,
-        isStitched: true,
-      });
+      const result = { dataUrl, width: sz.width, height: sz.height, isStitched: true };
+      mainWindow.webContents.send('screenshot:completed', result);
     }
+    try { clipboard.writeImage(nativeImage.createFromDataURL(dataUrl)); } catch(e) {}
     try { fs.unlinkSync(cumPath); } catch(e) {}
     longCaptureCumulative = null;
     longCapturePrevFrame = null;
@@ -1006,11 +1070,13 @@ async function finishLongCaptureFromFrames(frames, region) {
       const single = await captureScreenRegion(region.x, region.y, region.w, region.h, null);
       if (single && single.dataUrl && mainWindow && !mainWindow.isDestroyed()) {
         mainWindow.webContents.send('screenshot:completed', single);
+        try { clipboard.writeImage(nativeImage.createFromDataURL(single.dataUrl)); } catch(e) {}
       }
     }
   } else if (frames.length === 1) {
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send('screenshot:completed', frames[0]);
+      try { clipboard.writeImage(nativeImage.createFromDataURL(frames[0].dataUrl)); } catch(e) {}
     }
   } else {
     const maxFrames = 80;
@@ -1027,6 +1093,7 @@ async function finishLongCaptureFromFrames(frames, region) {
           height: stitchResult.height,
           isStitched: true,
         });
+        try { clipboard.writeImage(nativeImage.createFromDataURL(stitchResult.dataUrl)); } catch(e) {}
       }
     }
   }
@@ -1287,11 +1354,13 @@ function finishLongCaptureFromFramesDiag(region) {
         dataUrl, width: sz.width, height: sz.height, isStitched: true,
       });
     }
+    try { clipboard.writeImage(nativeImage.createFromDataURL(dataUrl)); } catch(e) {}
     try { fs.unlinkSync(cumPath); } catch(e) {}
   } else if (region) {
     captureScreenRegion(region.x, region.y, region.w, region.h, null).then(result => {
       if (result && result.dataUrl && mainWindow && !mainWindow.isDestroyed()) {
         mainWindow.webContents.send('screenshot:completed', result);
+        try { clipboard.writeImage(nativeImage.createFromDataURL(result.dataUrl)); } catch(e) {}
       }
     });
   }

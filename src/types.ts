@@ -47,6 +47,7 @@ export interface AppSettings {
   backgroundOpacity: number;
   gridSize: number;
   defaultNoteColor: string;
+  customNoteColors: string[];
   shortcutScreenshot: string;
   shortcutLongScreenshot: string;
   shortcutPenetrate: string;
@@ -130,6 +131,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   backgroundOpacity: 0.3,
   gridSize: 20,
   defaultNoteColor: '#2d2d44',
+  customNoteColors: [],
   shortcutScreenshot: 'Ctrl+Shift+X',
   shortcutLongScreenshot: 'Ctrl+Shift+Alt+X',
   shortcutPenetrate: 'Ctrl+P',

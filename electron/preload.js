@@ -41,6 +41,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   // Screenshot
   startScreenshot: () => ipcRenderer.invoke('screenshot:start'),
+  startEyedropper: () => ipcRenderer.invoke('eyedropper:start'),
   startLongScreenshot: () => ipcRenderer.invoke('screenshot:startLongScreenshot'),
   showToast: (msg) => ipcRenderer.invoke('show-toast', msg),
   cancelScreenshot: () => ipcRenderer.invoke('screenshot:cancel'),

@@ -21,6 +21,7 @@ declare global {
       onAllFloatingClosed: (callback: () => void) => void;
       getCursorScreenPoint: () => Promise<{x:number,y:number}>;
       startScreenshot: () => Promise<boolean>;
+      startEyedropper: () => Promise<string | null>;
       startLongScreenshot: () => Promise<boolean>;
       cancelScreenshot: () => Promise<boolean>;
       showToast: (msg: string) => Promise<boolean>;
