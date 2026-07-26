@@ -1,131 +1,84 @@
 /**
- * StrokeEngine — Pure-function brush pipeline with simple EMA smoothing.
+ * StrokeEngine — Raw-point sampling + quadratic-bezier rendering.
  *
- * Uses a plain exponential moving average — fast, predictable, zero fuss.
- * default smoothing = 0.35 (65% raw / 35% old per frame).
+ * Principle: sample raw, smooth at render time.
+ * No EMA, no prediction, no lag — the last point always connects to the
+ * real-time pen position.
  */
 
-import type { StampPoint, PointerSample, BrushSettings } from './types';
+import type { StrokePoint, Stroke } from './types';
 
-// ---- EMA Smoother ------------------------------------------------------------
-
-export interface SmoothPoint {
-  x: number;
-  y: number;
-  pressure: number;
-}
-
-export class StrokeSmoother {
-  private point: SmoothPoint | null = null;
-  private readonly factor: number;
-
-  constructor(smoothing: number) {
-    // clamp 0-0.95 so at least 5% of raw input always comes through
-    const s = Math.max(0, Math.min(0.95, smoothing));
-    this.factor = 1 - s;
-  }
-
-  update(input: SmoothPoint): SmoothPoint {
-    if (!this.point) {
-      this.point = { ...input };
-      return this.point;
-    }
-
-    this.point = {
-      x: this.point.x + (input.x - this.point.x) * this.factor,
-      y: this.point.y + (input.y - this.point.y) * this.factor,
-      pressure: this.point.pressure + (input.pressure - this.point.pressure) * this.factor,
-    };
-
-    return { ...this.point };
-  }
-
-  reset() {
-    this.point = null;
-  }
-}
-
-// ---- Pressure extraction -----------------------------------------------------
+// ---- Pressure ----------------------------------------------------------------
 
 export function getPressure(e: { pointerType: string; pressure: number }): number {
   if (e.pointerType === 'pen') return e.pressure > 0.01 ? e.pressure : 0.05;
   return 0.5;
 }
 
-// ---- Pressure mapping --------------------------------------------------------
+// ---- Raw-point sampling (no smoothing) ---------------------------------------
 
-export function mapPressureToSize(pressure: number, baseSize: number, enabled: boolean): number {
-  if (!enabled) return baseSize;
-  return baseSize * (0.15 + Math.max(0.05, Math.min(1, pressure)) * 0.85);
+export function addRawPoint(
+  stroke: Stroke,
+  worldX: number,
+  worldY: number,
+  pressure: number,
+): void {
+  const point: StrokePoint = { x: worldX, y: worldY, pressure };
+  const last = stroke.points[stroke.points.length - 1];
+  if (last && Math.hypot(point.x - last.x, point.y - last.y) < 0.01) return;
+  stroke.points.push(point);
 }
 
-export function mapPressureToOpacity(pressure: number, baseOpacity: number, enabled: boolean): number {
-  if (!enabled) return baseOpacity;
-  return baseOpacity * (0.15 + Math.max(0.05, Math.min(1, pressure)) * 0.85);
-}
+// ---- Quadratic-bezier rendering (smooth visually, no data lag) ---------------
 
-// ---- Stamp interpolation -----------------------------------------------------
+export function drawSmoothStroke(
+  ctx: CanvasRenderingContext2D,
+  stroke: Stroke,
+): void {
+  const points = stroke.points;
+  if (points.length === 0) return;
 
-export function interpolateStamps(
-  from: StampPoint,
-  to: StampPoint,
-  brushSettings: BrushSettings,
-): StampPoint[] {
-  const results: StampPoint[] = [];
-  const avgSize = (from.size + to.size) / 2;
-  const stepSize = Math.max(0.5, avgSize * brushSettings.spacing);
-  const dx = to.x - from.x;
-  const dy = to.y - from.y;
-  const dist = Math.sqrt(dx * dx + dy * dy);
+  ctx.save();
+  ctx.strokeStyle = stroke.color;
+  ctx.lineCap = 'round';
+  ctx.lineJoin = 'round';
+  ctx.globalAlpha = stroke.opacity;
 
-  if (dist <= stepSize) { results.push(to); return results; }
-
-  const steps = Math.floor(dist / stepSize);
-  for (let i = 1; i <= steps; i++) {
-    const t = i / steps;
-    const pressure = from.pressure + (to.pressure - from.pressure) * t;
-    results.push({
-      x: from.x + dx * t,
-      y: from.y + dy * t,
-      size: mapPressureToSize(pressure, brushSettings.size, brushSettings.pressureSize),
-      opacity: mapPressureToOpacity(pressure, brushSettings.opacity, brushSettings.pressureOpacity),
-      pressure,
-      tiltX: from.tiltX + (to.tiltX - from.tiltX) * t,
-      tiltY: from.tiltY + (to.tiltY - from.tiltY) * t,
-    });
+  if (points.length === 1) {
+    ctx.beginPath();
+    ctx.arc(points[0].x, points[0].y, stroke.size / 2, 0, Math.PI * 2);
+    ctx.fillStyle = stroke.color;
+    ctx.fill();
+    ctx.restore();
+    return;
   }
-  return results;
-}
 
-// ---- Main entry point --------------------------------------------------------
+  if (points.length === 2) {
+    ctx.beginPath();
+    ctx.moveTo(points[0].x, points[0].y);
+    ctx.lineTo(points[1].x, points[1].y);
+    ctx.lineWidth = stroke.size;
+    ctx.stroke();
+    ctx.restore();
+    return;
+  }
 
-export function processSample(
-  smoother: StrokeSmoother,
-  prevStamp: StampPoint | null,
-  sample: PointerSample,
-  brushSettings: BrushSettings,
-): StampPoint[] {
-  const smoothed = smoother.update({
-    x: sample.x,
-    y: sample.y,
-    pressure: sample.pressure,
-  });
+  ctx.beginPath();
+  ctx.moveTo(points[0].x, points[0].y);
 
-  const stamp: StampPoint = {
-    x: smoothed.x,
-    y: smoothed.y,
-    size: mapPressureToSize(smoothed.pressure, brushSettings.size, brushSettings.pressureSize),
-    opacity: mapPressureToOpacity(smoothed.pressure, brushSettings.opacity, brushSettings.pressureOpacity),
-    pressure: smoothed.pressure,
-    tiltX: sample.tiltX,
-    tiltY: sample.tiltY,
-  };
+  for (let i = 1; i < points.length - 1; i++) {
+    const curr = points[i];
+    const next = points[i + 1];
+    const mx = (curr.x + next.x) / 2;
+    const my = (curr.y + next.y) / 2;
+    ctx.lineWidth = stroke.size;
+    ctx.quadraticCurveTo(curr.x, curr.y, mx, my);
+  }
 
-  if (!prevStamp) return [stamp];
+  // Last point uses live position — no lag at pen tip
+  const last = points[points.length - 1];
+  ctx.lineTo(last.x, last.y);
+  ctx.stroke();
 
-  return interpolateStamps(prevStamp, stamp, brushSettings);
-}
-
-export function stampCacheKey(size: number, color: string, hardness: number): string {
-  return `${size.toFixed(1)}|${color}|${hardness.toFixed(2)}`;
+  ctx.restore();
 }

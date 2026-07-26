@@ -208,43 +208,6 @@ const Toolbar: React.FC = () => {
           onChange={(e) => update({ opacity: Number(e.target.value) / 100 })} style={trackStyle} />
       </div>
 
-      {/* ---- Hardness ---- */}
-      <div style={sectionStyle}>
-        <div style={labelStyle}><span>硬度</span><span>{Math.round(brushSettings.hardness * 100)}%</span></div>
-        <input type="range" min={1} max={100} value={Math.round(brushSettings.hardness * 100)}
-          onChange={(e) => update({ hardness: Number(e.target.value) / 100 })} style={trackStyle} />
-      </div>
-
-      {/* ---- Spacing ---- */}
-      <div style={sectionStyle}>
-        <div style={labelStyle}><span>间距</span><span>{brushSettings.spacing.toFixed(2)}</span></div>
-        <input type="range" min={1} max={100} value={Math.round(brushSettings.spacing * 100)}
-          onChange={(e) => update({ spacing: Number(e.target.value) / 100 })} style={trackStyle} />
-      </div>
-
-      {/* ---- Smoothing ---- */}
-      <div style={sectionStyle}>
-        <div style={labelStyle}><span>平滑</span><span>{Math.round(brushSettings.smoothing * 100)}%</span></div>
-        <input type="range" min={0} max={100} value={Math.round(brushSettings.smoothing * 100)}
-          onChange={(e) => update({ smoothing: Number(e.target.value) / 100 })} style={trackStyle} />
-      </div>
-
-      {/* ---- Pressure toggles ---- */}
-      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', marginBottom: '10px' }}>
-        <label style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '10px', color: 'var(--text-secondary)', cursor: 'pointer' }}>
-          <input type="checkbox" checked={brushSettings.pressureSize}
-            onChange={(e) => update({ pressureSize: e.target.checked })}
-            style={{ accentColor: 'var(--accent)' }} />
-          压感大小
-        </label>
-        <label style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '10px', color: 'var(--text-secondary)', cursor: 'pointer' }}>
-          <input type="checkbox" checked={brushSettings.pressureOpacity}
-            onChange={(e) => update({ pressureOpacity: e.target.checked })}
-            style={{ accentColor: 'var(--accent)' }} />
-          压感透明
-        </label>
-      </div>
-
       {/* ---- Dot grid show/hide ---- */}
       <div style={sectionStyle}>
         <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '11px', color: 'var(--text-secondary)', cursor: 'pointer' }}>
