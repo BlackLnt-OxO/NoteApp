@@ -59,6 +59,8 @@ export function renderAll(params: RenderParams): void {
   ctx.restore(); // undo DPR scaling
 }
 
+export { drawStroke, drawDotGrid };
+
 // ---- Dot Grid ----------------------------------------------------------------
 // Dots keep a consistent visual spacing (screen px) at all zoom levels.
 

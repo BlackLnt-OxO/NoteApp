@@ -1,6 +1,6 @@
 import React, { useRef, useEffect, useCallback, useState } from 'react';
 import { useCanvasStore } from './useCanvasStore';
-import { renderAll } from './CanvasRenderer';
+import { renderAll, drawStroke as drawStrokeFn, drawDotGrid as drawDotGridFn } from './CanvasRenderer';
 import { processSample, getPressure, StrokeSmoother } from './StrokeEngine';
 import { screenToWorld, clampZoom, zoomAt, ERASER_RADIUS } from './constants';
 import TextNode from './TextNode';
@@ -13,8 +13,10 @@ import type { Stroke, PointerSample, TextNodeData } from './types';
 
 const InfiniteInkCanvas: React.FC = () => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const baseCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const currentStrokeRef = useRef<Stroke | null>(null);
+  const baseNeedsRedrawRef = useRef(true); // true when all objects need re-baking
   const strokeStartRef = useRef<{ world: { x: number; y: number }; pressure: number; tiltX: number; tiltY: number; isEraser: boolean } | null>(null);
   const smootherRef = useRef<StrokeSmoother>(new StrokeSmoother(0));
   const isDrawingRef = useRef(false);
@@ -49,10 +51,20 @@ const InfiniteInkCanvas: React.FC = () => {
     const dpr = window.devicePixelRatio || 1;
     dprRef.current = dpr;
     const rect = container.getBoundingClientRect();
-    canvas.width = rect.width * dpr;
-    canvas.height = rect.height * dpr;
+    const w = rect.width * dpr;
+    const h = rect.height * dpr;
+    canvas.width = w;
+    canvas.height = h;
     canvas.style.width = rect.width + 'px';
     canvas.style.height = rect.height + 'px';
+
+    // Base layer — offscreen canvas for caching completed strokes
+    if (!baseCanvasRef.current) {
+      baseCanvasRef.current = document.createElement('canvas');
+    }
+    baseCanvasRef.current.width = w;
+    baseCanvasRef.current.height = h;
+    baseNeedsRedrawRef.current = true;
 
     dirtyRef.current = true;
     scheduleRender();
@@ -73,9 +85,36 @@ const InfiniteInkCanvas: React.FC = () => {
 
   // ---- Render loop ------------------------------------------------------------
 
+  const bakeBaseLayer = useCallback(() => {
+    const base = baseCanvasRef.current;
+    if (!base) return;
+    const bctx = base.getContext('2d');
+    if (!bctx) return;
+
+    const state = useCanvasStore.getState();
+    const container = containerRef.current;
+    if (!container) return;
+    const rect = container.getBoundingClientRect();
+
+    // Render all completed objects to the offscreen base canvas
+    renderAll({
+      ctx: bctx,
+      canvasWidth: rect.width,
+      canvasHeight: rect.height,
+      camera: state.camera,
+      objects: state.objects,
+      currentStroke: null, // never bake in-progress stroke
+      showDotGrid: false,  // dots go on top
+      editingTextId: state.editingTextId,
+      dpr: dprRef.current,
+    });
+    baseNeedsRedrawRef.current = false;
+  }, []);
+
   const doRender = useCallback(() => {
     const canvas = canvasRef.current;
-    if (!canvas) return;
+    const base = baseCanvasRef.current;
+    if (!canvas || !base) return;
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
 
@@ -83,21 +122,40 @@ const InfiniteInkCanvas: React.FC = () => {
     const container = containerRef.current;
     if (!container) return;
     const rect = container.getBoundingClientRect();
+    const dpr = dprRef.current;
 
-    renderAll({
-      ctx,
-      canvasWidth: rect.width,
-      canvasHeight: rect.height,
-      camera: state.camera,
-      objects: state.objects,
-      currentStroke: currentStrokeRef.current,
-      showDotGrid: state.showDotGrid,
-      editingTextId: state.editingTextId,
-      dpr: dprRef.current,
-    });
+    // Re-bake base layer if needed (undo/redo/load)
+    if (baseNeedsRedrawRef.current) bakeBaseLayer();
+
+    // 1. Clear display canvas
+    ctx.save();
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, rect.width, rect.height);
+
+    // 2. Draw cached base layer (all completed strokes)
+    ctx.drawImage(base, 0, 0);
+
+    // 3. Draw current in-progress stroke
+    ctx.save();
+    ctx.translate(state.camera.x, state.camera.y);
+    ctx.scale(state.camera.zoom, state.camera.zoom);
+
+    const stroke = currentStrokeRef.current;
+    if (stroke && stroke.points.length > 0) {
+      drawStrokeFn(ctx, stroke);
+    }
+
+    ctx.restore();
+
+    // 4. Dot grid on top
+    if (state.showDotGrid) {
+      drawDotGridFn(ctx, state.camera, rect.width, rect.height);
+    }
+
+    ctx.restore(); // undo DPR
 
     dirtyRef.current = false;
-  }, []);
+  }, [bakeBaseLayer]);
 
   const scheduleRender = useCallback(() => {
     if (rafRef.current) return;
@@ -107,11 +165,17 @@ const InfiniteInkCanvas: React.FC = () => {
     });
   }, [doRender]);
 
-  // Re-render when store state that affects the canvas changes
+  // Re-render when store state changes. Mark base layer dirty on object changes.
+  useEffect(() => {
+    baseNeedsRedrawRef.current = true;
+    dirtyRef.current = true;
+    scheduleRender();
+  }, [objects]);
+
   useEffect(() => {
     dirtyRef.current = true;
     scheduleRender();
-  }, [objects, camera, activeTool, brushSettings, showDotGrid, editingTextId, scheduleRender]);
+  }, [camera, activeTool, brushSettings, showDotGrid, editingTextId, scheduleRender]);
 
   // ---- Keyboard shortcuts -----------------------------------------------------
 
@@ -347,11 +411,26 @@ const InfiniteInkCanvas: React.FC = () => {
         return;
       }
 
-      // Finalize stroke
+      // Finalize stroke — bake to base layer for O(1) future frames
       if (isDrawingRef.current && currentStrokeRef.current) {
         const stroke = currentStrokeRef.current;
         if (stroke.points.length > 0) {
           useCanvasStore.getState().addStroke(stroke);
+          // Draw just this stroke to the base canvas (no full re-bake needed)
+          const base = baseCanvasRef.current;
+          const bctx = base?.getContext('2d');
+          const container = containerRef.current;
+          if (bctx && container) {
+            const rect = container.getBoundingClientRect();
+            bctx.save();
+            bctx.setTransform(dprRef.current, 0, 0, dprRef.current, 0, 0);
+            bctx.save();
+            bctx.translate(camera.x, camera.y);
+            bctx.scale(camera.zoom, camera.zoom);
+            drawStrokeFn(bctx, stroke);
+            bctx.restore();
+            bctx.restore();
+          }
         }
         currentStrokeRef.current = null;
         strokeStartRef.current = null;
