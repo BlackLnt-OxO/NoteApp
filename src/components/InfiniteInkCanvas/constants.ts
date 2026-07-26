@@ -1,0 +1,132 @@
+import type { Camera, BrushSettings } from './types';
+
+// ---- Defaults ----------------------------------------------------------------
+
+export const DEFAULT_CAMERA: Camera = { x: 0, y: 0, zoom: 1 };
+
+export const DEFAULT_BRUSH: BrushSettings = {
+  size: 8,
+  opacity: 1,
+  hardness: 0.8,
+  spacing: 0.3,
+  smoothing: 0.5,
+  color: 'rgba(255,255,255,0.95)',
+  pressureSize: true,
+  pressureOpacity: false,
+};
+
+export const DOT_DENSITY_OPTIONS = [8, 12, 16, 24, 32, 48, 64];
+export const DEFAULT_DOT_DENSITY = 24;
+
+export const MIN_ZOOM = 0.1;
+export const MAX_ZOOM = 8;
+
+export const STORAGE_KEY = 'stickynotes-inkcanvas';
+
+export const ERASER_RADIUS = 20; // world units
+
+export const TEXT_DEFAULTS = {
+  fontSize: 16,
+  minWidth: 100,
+  minHeight: 40,
+  color: 'var(--text-primary)',
+  backgroundColor: 'var(--glass-bg)',
+};
+
+export const MAX_HISTORY = 50;
+
+// ---- Coordinate Transforms ---------------------------------------------------
+
+/**
+ * Convert screen (CSS-pixel) coordinates to world coordinates.
+ * `screenX/Y` are relative to the canvas element's top-left corner.
+ */
+export function screenToWorld(
+  screenX: number,
+  screenY: number,
+  camera: Camera,
+): { x: number; y: number } {
+  return {
+    x: (screenX - camera.x) / camera.zoom,
+    y: (screenY - camera.y) / camera.zoom,
+  };
+}
+
+/**
+ * Convert world coordinates to screen (CSS-pixel) coordinates,
+ * relative to the canvas element's top-left corner.
+ */
+export function worldToScreen(
+  worldX: number,
+  worldY: number,
+  camera: Camera,
+): { x: number; y: number } {
+  return {
+    x: worldX * camera.zoom + camera.x,
+    y: worldY * camera.zoom + camera.y,
+  };
+}
+
+/** Clamp zoom to allowed range. */
+export function clampZoom(zoom: number): number {
+  return Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, zoom));
+}
+
+/**
+ * Zoom the camera so that the world point under `screenX,screenY` stays fixed.
+ * `screenX/Y` are relative to the canvas top-left.
+ */
+export function zoomAt(
+  camera: Camera,
+  screenX: number,
+  screenY: number,
+  nextZoom: number,
+): Camera {
+  const worldX = (screenX - camera.x) / camera.zoom;
+  const worldY = (screenY - camera.y) / camera.zoom;
+  return {
+    zoom: nextZoom,
+    x: screenX - worldX * nextZoom,
+    y: screenY - worldY * nextZoom,
+  };
+}
+
+// ---- Utility: parse colour string to r,g,b -----------------------------------
+
+export function parseRGBA(color: string): { r: number; g: number; b: number; a: number } {
+  // rgba() / rgb()
+  const rgba = color.match(
+    /rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*(?:,\s*([\d.]+))?\s*\)/,
+  );
+  if (rgba) {
+    return {
+      r: parseInt(rgba[1], 10),
+      g: parseInt(rgba[2], 10),
+      b: parseInt(rgba[3], 10),
+      a: rgba[4] !== undefined ? parseFloat(rgba[4]) : 1,
+    };
+  }
+
+  // hex
+  const hex = color.replace('#', '');
+  if (/^[0-9a-fA-F]+$/.test(hex)) {
+    if (hex.length === 3) {
+      return {
+        r: parseInt(hex[0] + hex[0], 16),
+        g: parseInt(hex[1] + hex[1], 16),
+        b: parseInt(hex[2] + hex[2], 16),
+        a: 1,
+      };
+    }
+    if (hex.length >= 6) {
+      return {
+        r: parseInt(hex.substring(0, 2), 16),
+        g: parseInt(hex.substring(2, 4), 16),
+        b: parseInt(hex.substring(4, 6), 16),
+        a: hex.length === 8 ? parseInt(hex.substring(6, 8), 16) / 255 : 1,
+      };
+    }
+  }
+
+  return { r: 0, g: 0, b: 0, a: 1 };
+}

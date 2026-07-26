@@ -43,6 +43,8 @@ declare global {
       saveStore: (data: any) => Promise<boolean>;
       loadStore: () => Promise<any>;
       loadStoreSync: () => any;
+      saveCanvasData?: (data: any) => Promise<boolean>;
+      loadCanvasData?: () => Promise<any>;
     };
   }
 }

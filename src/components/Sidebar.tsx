@@ -7,7 +7,7 @@ interface SidebarProps {
 }
 
 const Sidebar: React.FC<SidebarProps> = ({ onCreateNote }) => {
-  const { notes, tags, activeTag, setActiveTag, addTag, deleteTag, updateTag, settings } = useNoteStore();
+  const { notes, tags, activeTag, setActiveTag, addTag, deleteTag, updateTag, settings, viewMode, setViewMode } = useNoteStore();
   const fs = settings.fontSize;
   const [editingTag, setEditingTag] = useState<string | null>(null);
   const [newTagName, setNewTagName] = useState('');
@@ -92,6 +92,35 @@ const Sidebar: React.FC<SidebarProps> = ({ onCreateNote }) => {
       >
         + 新建便笺
       </button>
+
+      {/* View mode toggle */}
+      <div style={{ display: 'flex', gap: '3px', marginBottom: '8px' }}>
+        {([
+          { id: 'notes' as const, label: '便笺' },
+          { id: 'mindmap' as const, label: '导图' },
+          { id: 'inkcanvas' as const, label: '画布' },
+        ]).map((m) => (
+          <button
+            key={m.id}
+            onClick={() => setViewMode(m.id)}
+            style={{
+              flex: 1,
+              padding: '5px 6px',
+              background: viewMode === m.id ? 'var(--accent)' : 'var(--glass-bg-light)',
+              border: viewMode === m.id ? 'none' : '1px solid var(--glass-border)',
+              borderRadius: '6px',
+              color: viewMode === m.id ? '#fff' : 'var(--text-secondary)',
+              cursor: 'pointer',
+              fontSize: Math.max(9, fs - 3) + 'px',
+              fontFamily: 'inherit',
+              transition: 'all var(--transition)',
+              fontWeight: viewMode === m.id ? 600 : 400,
+            }}
+          >
+            {m.label}
+          </button>
+        ))}
+      </div>
 
       {/* Tag list */}
       <div style={{
