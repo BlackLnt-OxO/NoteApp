@@ -439,46 +439,33 @@ const InfiniteInkCanvas: React.FC = () => {
       {/* Text node editing overlay */}
       {editingNode && <TextNode node={editingNode} camera={camera} />}
 
-      {/* Subtle zone overlay while dragging — white separator lines + tint */}
+      {/* Zone overlay while dragging — left/right halves, single white divider */}
       {isDraggingToolbar && (() => {
         const cw = containerRef.current?.clientWidth ?? window.innerWidth;
-        const leftQuarter = cw * 0.25;
-        const rightQuarter = cw * 0.75;
+        const mid = cw * 0.5;
 
         const tLeft = tSide === 'left' ? tOffset : cw - tOffset - tWidth;
         const tRight = tSide === 'left' ? tOffset + tWidth : cw - tOffset;
-        const inLeft  = tLeft < leftQuarter;
-        const inRight = tRight > rightQuarter;
+        const inLeft  = tLeft < mid;
+        const inRight = tRight > mid;
 
         return (
           <div style={{ position: 'absolute', inset: 0, zIndex: 99, pointerEvents: 'none' }}>
-            {/* Base tint with lighter zone highlight */}
             <div style={{
               position: 'absolute', top: 0, bottom: 0,
-              left: 0, width: '25%',
-              background: inLeft ? 'rgba(0,0,0,0.35)' : 'rgba(0,0,0,0.28)',
+              left: 0, width: '50%',
+              background: inLeft ? 'rgba(0,0,0,0.35)' : 'rgba(0,0,0,0.15)',
               transition: 'background 0.10s',
             }} />
             <div style={{
               position: 'absolute', top: 0, bottom: 0,
-              left: '25%', width: '50%',
-              background: 'rgba(0,0,0,0.28)',
-            }} />
-            <div style={{
-              position: 'absolute', top: 0, bottom: 0,
-              left: '75%', width: '25%',
-              background: inRight ? 'rgba(0,0,0,0.35)' : 'rgba(0,0,0,0.28)',
+              left: '50%', width: '50%',
+              background: inRight ? 'rgba(0,0,0,0.35)' : 'rgba(0,0,0,0.15)',
               transition: 'background 0.10s',
             }} />
-            {/* Thin white separator lines at zone boundaries */}
             <div style={{
               position: 'absolute', top: 0, bottom: 0,
-              left: '25%', width: 1,
-              background: 'rgba(255,255,255,0.12)',
-            }} />
-            <div style={{
-              position: 'absolute', top: 0, bottom: 0,
-              left: '75%', width: 1,
+              left: '50%', width: 1,
               background: 'rgba(255,255,255,0.12)',
             }} />
           </div>
