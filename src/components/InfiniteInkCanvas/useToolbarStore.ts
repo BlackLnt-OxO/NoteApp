@@ -1,8 +1,9 @@
 /**
- * useToolbarStore — Independent Zustand store for Blender N-panel toolbar UI state.
+ * useToolbarStore — Independent Zustand store for the Blender N-panel style
+ * collapsible, draggable, resizable toolbar.
  *
- * Manages: expand/collapse, width, resize history, position, dock side, and
- * localStorage persistence.  Does NOT touch canvas or brush state.
+ * Managed: expand/collapse, width, drag position, dock side, localStorage.
+ * Does NOT touch canvas or brush state.
  */
 
 import { create } from 'zustand';
@@ -15,9 +16,8 @@ export interface ToolbarStoreState {
   width: number;
   lastExpandedWidth: number;
   top: number;
-  left: number;
+  rightOffset: number;
   side: 'left' | 'right';
-  autoCollapseThreshold: number;
 }
 
 export interface ToolbarStoreActions {
@@ -25,7 +25,7 @@ export interface ToolbarStoreActions {
   expand: () => void;
   collapse: () => void;
   setWidth: (w: number) => void;
-  setPosition: (top: number, left: number) => void;
+  setPosition: (top: number, rightOffset: number) => void;
   clampPosition: (viewportW: number, viewportH: number) => void;
   saveState: () => void;
   loadState: () => void;
@@ -34,68 +34,76 @@ export interface ToolbarStoreActions {
 
 type ToolbarStore = ToolbarStoreState & ToolbarStoreActions;
 
+// ---- Helpers ------------------------------------------------------------------
+
+const MIN_WIDTH = 200;
+const COLLAPSE_THRESHOLD = 60; // width below which we auto-collapse
+
 // ---- Store --------------------------------------------------------------------
 
 export const useToolbarStore = create<ToolbarStore>((set, get) => ({
-  // --- initial state ---
   expanded: DEFAULT_TOOLBAR_STATE.expanded,
   width: DEFAULT_TOOLBAR_STATE.width,
   lastExpandedWidth: DEFAULT_TOOLBAR_STATE.lastExpandedWidth,
   top: DEFAULT_TOOLBAR_STATE.top,
-  left: DEFAULT_TOOLBAR_STATE.left,
+  rightOffset: DEFAULT_TOOLBAR_STATE.rightOffset,
   side: DEFAULT_TOOLBAR_STATE.side,
-  autoCollapseThreshold: 100,
 
-  // --- actions ---
+  // ------------------------------------------------------------------
+  // expand / collapse
+  // ------------------------------------------------------------------
 
   toggle: () => {
-    const { expanded, width, lastExpandedWidth, autoCollapseThreshold } = get();
+    const { expanded, width, lastExpandedWidth } = get();
     if (expanded) {
-      // collapsing — save current width as lastExpandedWidth (unless it's already tiny)
-      const savedWidth = width > autoCollapseThreshold ? width : lastExpandedWidth;
-      set({ expanded: false, lastExpandedWidth: savedWidth });
+      const saved = width > COLLAPSE_THRESHOLD ? width : lastExpandedWidth;
+      set({ expanded: false, lastExpandedWidth: saved });
     } else {
-      // expanding — restore saved width
       set({ expanded: true, width: lastExpandedWidth });
     }
   },
 
   expand: () => {
-    const { lastExpandedWidth } = get();
-    set({ expanded: true, width: lastExpandedWidth });
+    set({ expanded: true, width: get().lastExpandedWidth });
   },
 
   collapse: () => {
-    const { width, lastExpandedWidth, autoCollapseThreshold } = get();
-    const savedWidth = width > autoCollapseThreshold ? width : lastExpandedWidth;
-    set({ expanded: false, lastExpandedWidth: savedWidth });
+    const { width, lastExpandedWidth } = get();
+    const saved = width > COLLAPSE_THRESHOLD ? width : lastExpandedWidth;
+    set({ expanded: false, lastExpandedWidth: saved });
   },
+
+  // ------------------------------------------------------------------
+  // size & position
+  // ------------------------------------------------------------------
 
   setWidth: (w) => set({ width: w }),
 
-  setPosition: (top, left) => set({ top, left }),
+  setPosition: (top, rightOffset) => set({ top, rightOffset }),
 
   clampPosition: (viewportW, viewportH) => {
-    const { top, left, width, expanded } = get();
-    const effectiveW = expanded ? width : 28;
-    // Estimate toolbar height for clamping (rough)
-    const estH = 600;
+    const { top, rightOffset, expanded } = get();
+    const estH = 600; // rough toolbar panel height
     const margin = 12;
     set({
-      left: Math.max(margin, Math.min(left, viewportW - effectiveW - margin)),
-      top: Math.max(margin, Math.min(top, viewportH - estH - margin)),
+      top: Math.max(margin, Math.min(top, Math.max(margin, viewportH - estH))),
+      rightOffset: Math.max(-12, Math.min(rightOffset, viewportW - 60)),
     });
   },
 
-  // --- persistence ---
+  // ------------------------------------------------------------------
+  // persistence
+  // ------------------------------------------------------------------
 
   saveState: () => {
     try {
-      const { expanded, width, lastExpandedWidth, top, left, side } = get();
-      const data = { expanded, width, lastExpandedWidth, top, left, side };
-      localStorage.setItem(TOOLBAR_STORAGE_KEY, JSON.stringify(data));
-    } catch (e) {
-      console.error('Failed to save toolbar state:', e);
+      const { expanded, width, lastExpandedWidth, top, rightOffset, side } = get();
+      localStorage.setItem(
+        TOOLBAR_STORAGE_KEY,
+        JSON.stringify({ expanded, width, lastExpandedWidth, top, rightOffset, side }),
+      );
+    } catch {
+      /* localStorage may be unavailable */
     }
   },
 
@@ -107,21 +115,18 @@ export const useToolbarStore = create<ToolbarStore>((set, get) => ({
         set({
           expanded: data.expanded ?? DEFAULT_TOOLBAR_STATE.expanded,
           width: data.width ?? DEFAULT_TOOLBAR_STATE.width,
-          lastExpandedWidth:
-            data.lastExpandedWidth ?? DEFAULT_TOOLBAR_STATE.lastExpandedWidth,
+          lastExpandedWidth: data.lastExpandedWidth ?? DEFAULT_TOOLBAR_STATE.lastExpandedWidth,
           top: data.top ?? DEFAULT_TOOLBAR_STATE.top,
-          left: data.left ?? DEFAULT_TOOLBAR_STATE.left,
+          rightOffset: data.rightOffset ?? DEFAULT_TOOLBAR_STATE.rightOffset,
           side: data.side ?? DEFAULT_TOOLBAR_STATE.side,
         });
       }
-    } catch (e) {
-      console.error('Failed to load toolbar state:', e);
+    } catch {
+      /* corrupt data — keep defaults */
     }
   },
 
-  reset: () => {
-    set({ ...DEFAULT_TOOLBAR_STATE });
-  },
+  reset: () => set({ ...DEFAULT_TOOLBAR_STATE }),
 }));
 
 // ---- Auto-save ----------------------------------------------------------------

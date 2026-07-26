@@ -39,20 +39,21 @@ export const MAX_HISTORY = 50;
 
 export const TOOLBAR_STORAGE_KEY = 'stickynotes-inkcanvas-toolbar';
 
-export const MIN_TOOLBAR_WIDTH = 240;
+export const MIN_TOOLBAR_WIDTH = 200;
 export const MAX_TOOLBAR_WIDTH = 420;
-export const COLLAPSED_TOOLBAR_WIDTH = 28;
-export const AUTO_COLLAPSE_THRESHOLD = 100;
+export const COLLAPSED_TAB_SIZE = 6;         // thin strip visible when collapsed
+export const AUTO_COLLAPSE_EDGE_PX = 30;     // distance from right edge to auto-collapse
 export const RESIZE_HANDLE_WIDTH = 6;
-export const SIDEBAR_WIDTH = 220;
 
+/** Toolbar defaults — docked to the right side of the canvas area. */
 export const DEFAULT_TOOLBAR_STATE = {
   expanded: true,
   width: 240,
   lastExpandedWidth: 240,
   top: 16,
-  left: SIDEBAR_WIDTH + 4, // 224 — just right of the sidebar
-  side: 'left' as const,
+  /** `right` offset from the canvas container's right edge (only used when side='right'). */
+  rightOffset: 8,
+  side: 'right' as const,
 };
 
 // ---- Coordinate Transforms ---------------------------------------------------

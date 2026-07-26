@@ -1,23 +1,78 @@
 /**
  * Toolbar — Brush settings and tool panel content.
- *
- * This is the inner content that gets embedded inside ToolbarShell.
- * It does NOT manage its own positioning, collapse state, or event isolation —
- * those are handled by ToolbarShell.
+ * Embedded inside ToolbarShell — no positioning / collapse logic here.
  */
 
-import React, { useState } from 'react';
+import React from 'react';
 import { useCanvasStore } from './useCanvasStore';
 import { DOT_DENSITY_OPTIONS } from './constants';
 import type { ToolType } from './types';
 
-// ---- Constants (local to this component) --------------------------------------
+// ---- SVG Icons (no emoji) ----------------------------------------------------
 
-const TOOLS: { id: ToolType; label: string; icon: string }[] = [
-  { id: 'pen', label: '笔刷', icon: '✏️' },
-  { id: 'eraser', label: '橡皮', icon: '🧹' },
-  { id: 'text', label: '文本', icon: '📝' },
-  { id: 'pan', label: '平移', icon: '✋' },
+const PenIcon: React.FC = () => (
+  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M17 3a2.83 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z" />
+    <path d="m15 5 4 4" />
+  </svg>
+);
+
+const EraserIcon: React.FC = () => (
+  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <path d="m7 21-4.3-4.3c-1-1-1-2.5 0-3.4l9.6-9.6c1-1 2.5-1 3.4 0l5.6 5.6c1 1 1 2.5 0 3.4L13 21" />
+    <path d="M22 21H7" />
+    <path d="m5 11 9 9" />
+  </svg>
+);
+
+const TextIcon: React.FC = () => (
+  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <polyline points="4 7 4 4 20 4 20 7" />
+    <line x1="9.5" x2="14.5" y1="20" y2="20" />
+    <line x1="12" x2="12" y1="4" y2="20" />
+  </svg>
+);
+
+const HandIcon: React.FC = () => (
+  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M18 11V6a2 2 0 0 0-4 0v0" />
+    <path d="M14 10V4a2 2 0 0 0-4 0v2" />
+    <path d="M10 10.5V6a2 2 0 0 0-4 0v8" />
+    <path d="M18 8a2 2 0 0 1 4 0v6a8 8 0 0 1-8 8h-2c-2.21 0-4.21-.9-5.66-2.34l-.09-.09A1.99 1.99 0 0 1 6 18h0a2 2 0 0 1 2-2h2a2 2 0 0 0 2-2V8Z" />
+  </svg>
+);
+
+const UndoIcon: React.FC = () => (
+  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+    <polyline points="1 4 1 10 7 10" />
+    <path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10" />
+  </svg>
+);
+
+const RedoIcon: React.FC = () => (
+  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+    <polyline points="23 4 23 10 17 10" />
+    <path d="M20.49 15a9 9 0 1 1-2.13-9.36L23 10" />
+  </svg>
+);
+
+const TrashIcon: React.FC = () => (
+  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <polyline points="3 6 5 6 21 6" />
+    <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6" />
+    <line x1="10" x2="10" y1="11" y2="17" />
+    <line x1="14" x2="14" y1="11" y2="17" />
+    <path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2" />
+  </svg>
+);
+
+// ---- Local constants ---------------------------------------------------------
+
+const TOOLS: { id: ToolType; label: string; Icon: React.FC }[] = [
+  { id: 'pen', label: '笔刷', Icon: PenIcon },
+  { id: 'eraser', label: '橡皮', Icon: EraserIcon },
+  { id: 'text', label: '文本', Icon: TextIcon },
+  { id: 'pan', label: '平移', Icon: HandIcon },
 ];
 
 const PRESET_COLORS = [
@@ -29,7 +84,19 @@ const PRESET_COLORS = [
   '#845ef7', '#6b5ce7', '#111111',
 ];
 
-// ---- Shared styles ------------------------------------------------------------
+// ---- Reusable styles ---------------------------------------------------------
+
+const labelStyle: React.CSSProperties = {
+  fontSize: '10px',
+  color: 'var(--text-secondary)',
+  marginBottom: '1px',
+  display: 'flex',
+  justifyContent: 'space-between',
+};
+
+const sectionStyle: React.CSSProperties = {
+  marginBottom: '10px',
+};
 
 const trackStyle: React.CSSProperties = {
   width: '100%',
@@ -43,17 +110,24 @@ const trackStyle: React.CSSProperties = {
   margin: '2px 0 6px 0',
 };
 
-const labelStyle: React.CSSProperties = {
-  fontSize: '10px',
-  color: 'var(--text-secondary)',
-  marginBottom: '1px',
-  display: 'flex',
-  justifyContent: 'space-between',
+/** Matches the app's `glass-input` class */
+const selectStyle: React.CSSProperties = {
+  width: '100%',
+  padding: '7px 10px',
+  borderRadius: '8px',
+  border: '1px solid var(--glass-border)',
+  background: 'var(--glass-bg-light)',
+  backdropFilter: 'blur(10px)',
+  WebkitBackdropFilter: 'blur(10px)',
+  color: 'var(--text-primary)',
+  fontSize: '11px',
+  fontFamily: 'inherit',
+  outline: 'none',
+  cursor: 'pointer',
+  transition: 'all var(--transition, 0.2s ease)',
 };
 
-const sectionStyle: React.CSSProperties = {
-  marginBottom: '10px',
-};
+// ---- Component ---------------------------------------------------------------
 
 const Toolbar: React.FC = () => {
   const {
@@ -72,63 +146,38 @@ const Toolbar: React.FC = () => {
   const canUndo = history.length > 0;
   const canRedo = redoStack.length > 0;
 
-  const [colorInput, setColorInput] = useState(brushSettings.color);
-
   const update = (partial: Partial<typeof brushSettings>) =>
     setBrushSettings(partial);
 
-  const btnStyle = (active: boolean): React.CSSProperties => ({
-    flex: 1,
-    padding: '6px 4px',
-    background: active ? 'var(--accent)' : 'var(--glass-bg-light)',
-    border: active ? 'none' : '1px solid var(--glass-border)',
-    borderRadius: '6px',
-    color: active ? '#fff' : 'var(--text-secondary)',
-    cursor: 'pointer',
-    fontSize: '11px',
-    fontFamily: 'inherit',
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: '2px',
-    transition: 'all var(--transition)',
-  });
-
-  const actionBtnStyle: React.CSSProperties = {
-    flex: 1,
-    padding: '4px 6px',
-    background: 'var(--glass-bg-light)',
-    border: '1px solid var(--glass-border)',
-    borderRadius: '6px',
-    color: 'var(--text-secondary)',
-    cursor: 'pointer',
-    fontSize: '11px',
-    fontFamily: 'inherit',
-    transition: 'all var(--transition)',
-  };
-
   return (
-    <div
-      style={{
-        padding: '12px',
-        color: 'var(--text-primary)',
-      }}
-    >
-      {/* ---- Header ---- */}
-      <div style={{ fontSize: '13px', fontWeight: 600, marginBottom: '10px', color: 'var(--text-secondary)' }}>
-        笔刷工具
-      </div>
-
+    <div style={{ padding: '10px 14px 12px', color: 'var(--text-primary)' }}>
       {/* ---- Tool selector ---- */}
       <div style={{ display: 'flex', gap: '4px', ...sectionStyle }}>
         {TOOLS.map((t) => (
           <button
             key={t.id}
             onClick={() => setActiveTool(t.id)}
-            style={btnStyle(activeTool === t.id)}
             title={t.label}
+            style={{
+              flex: '1 1 auto',
+              minWidth: 32,
+              padding: '7px 6px',
+              background: activeTool === t.id ? 'var(--accent)' : 'var(--glass-bg-light)',
+              border: activeTool === t.id ? 'none' : '1px solid var(--glass-border)',
+              borderRadius: '6px',
+              color: activeTool === t.id ? '#fff' : 'var(--text-secondary)',
+              cursor: 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              gap: '3px',
+              fontFamily: 'inherit',
+              fontSize: '10px',
+              transition: 'all var(--transition, 0.2s ease)',
+            }}
           >
-            {t.icon}
+            <t.Icon />
+            <span style={{ whiteSpace: 'nowrap' }}>{t.label}</span>
           </button>
         ))}
       </div>
@@ -136,17 +185,15 @@ const Toolbar: React.FC = () => {
       {/* ---- Color palette ---- */}
       <div style={sectionStyle}>
         <div style={labelStyle}><span>颜色</span></div>
-        <div style={{ display: 'flex', gap: '3px', flexWrap: 'wrap', marginBottom: '6px' }}>
+        <div style={{ display: 'flex', gap: '2px', flexWrap: 'wrap', marginBottom: '6px' }}>
           {PRESET_COLORS.map((c) => (
             <button
               key={c}
-              onClick={() => {
-                setColorInput(c);
-                update({ color: c });
-              }}
+              onClick={() => update({ color: c })}
+              title={c}
               style={{
-                width: '20px',
-                height: '20px',
+                width: '18px',
+                height: '18px',
                 borderRadius: '50%',
                 background: c,
                 border: brushSettings.color === c ? '2px solid #fff' : '1px solid var(--glass-border)',
@@ -154,6 +201,7 @@ const Toolbar: React.FC = () => {
                 padding: 0,
                 outline: 'none',
                 boxShadow: brushSettings.color === c ? '0 0 0 2px var(--accent)' : 'none',
+                flexShrink: 0,
               }}
             />
           ))}
@@ -161,13 +209,10 @@ const Toolbar: React.FC = () => {
         <input
           type="color"
           value={brushSettings.color.startsWith('#') ? brushSettings.color : '#ffffff'}
-          onChange={(e) => {
-            setColorInput(e.target.value);
-            update({ color: e.target.value });
-          }}
+          onChange={(e) => update({ color: e.target.value })}
           style={{
             width: '100%',
-            height: '24px',
+            height: '22px',
             border: 'none',
             borderRadius: '4px',
             cursor: 'pointer',
@@ -213,14 +258,14 @@ const Toolbar: React.FC = () => {
       </div>
 
       {/* ---- Pressure toggles ---- */}
-      <div style={{ display: 'flex', gap: '6px', marginBottom: '10px' }}>
-        <label style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '11px', color: 'var(--text-secondary)', cursor: 'pointer' }}>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', marginBottom: '10px' }}>
+        <label style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '10px', color: 'var(--text-secondary)', cursor: 'pointer' }}>
           <input type="checkbox" checked={brushSettings.pressureSize}
             onChange={(e) => update({ pressureSize: e.target.checked })}
             style={{ accentColor: 'var(--accent)' }} />
           压感大小
         </label>
-        <label style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '11px', color: 'var(--text-secondary)', cursor: 'pointer' }}>
+        <label style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '10px', color: 'var(--text-secondary)', cursor: 'pointer' }}>
           <input type="checkbox" checked={brushSettings.pressureOpacity}
             onChange={(e) => update({ pressureOpacity: e.target.checked })}
             style={{ accentColor: 'var(--accent)' }} />
@@ -228,26 +273,18 @@ const Toolbar: React.FC = () => {
         </label>
       </div>
 
-      {/* ---- Dot density ---- */}
+      {/* ---- Dot density (glass-input style select) ---- */}
       <div style={sectionStyle}>
         <div style={labelStyle}><span>点阵密度</span></div>
         <select
           value={dotDensity}
           onChange={(e) => setDotDensity(Number(e.target.value))}
-          style={{
-            width: '100%',
-            padding: '4px 6px',
-            borderRadius: '6px',
-            border: '1px solid var(--glass-border)',
-            background: 'var(--glass-bg-light)',
-            color: 'var(--text-primary)',
-            fontSize: '11px',
-            fontFamily: 'inherit',
-            outline: 'none',
-          }}
+          style={selectStyle}
         >
           {DOT_DENSITY_OPTIONS.map((d) => (
-            <option key={d} value={d}>{d} px</option>
+            <option key={d} value={d} style={{ background: '#1a1a2e', color: '#e0e0e0' }}>
+              {d} px
+            </option>
           ))}
         </select>
       </div>
@@ -255,12 +292,48 @@ const Toolbar: React.FC = () => {
       {/* ---- Undo / Redo ---- */}
       <div style={{ display: 'flex', gap: '4px', marginBottom: '6px' }}>
         <button onClick={undo} disabled={!canUndo}
-          style={{ ...actionBtnStyle, opacity: canUndo ? 1 : 0.4 }}>
-          ↩ 撤销
+          style={{
+            flex: 1,
+            padding: '5px 8px',
+            background: 'var(--glass-bg-light)',
+            border: '1px solid var(--glass-border)',
+            borderRadius: '6px',
+            color: 'var(--text-secondary)',
+            cursor: canUndo ? 'pointer' : 'default',
+            fontSize: '11px',
+            fontFamily: 'inherit',
+            opacity: canUndo ? 1 : 0.35,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            gap: '3px',
+            transition: 'all var(--transition, 0.2s ease)',
+          }}
+        >
+          <UndoIcon />
+          撤销
         </button>
         <button onClick={redo} disabled={!canRedo}
-          style={{ ...actionBtnStyle, opacity: canRedo ? 1 : 0.4 }}>
-          ↪ 重做
+          style={{
+            flex: 1,
+            padding: '5px 8px',
+            background: 'var(--glass-bg-light)',
+            border: '1px solid var(--glass-border)',
+            borderRadius: '6px',
+            color: 'var(--text-secondary)',
+            cursor: canRedo ? 'pointer' : 'default',
+            fontSize: '11px',
+            fontFamily: 'inherit',
+            opacity: canRedo ? 1 : 0.35,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            gap: '3px',
+            transition: 'all var(--transition, 0.2s ease)',
+          }}
+        >
+          <RedoIcon />
+          重做
         </button>
       </div>
 
@@ -272,13 +345,24 @@ const Toolbar: React.FC = () => {
           }
         }}
         style={{
-          ...actionBtnStyle,
           width: '100%',
+          padding: '5px 8px',
+          background: 'var(--glass-bg-light)',
+          border: '1px solid rgba(231,76,60,0.3)',
+          borderRadius: '6px',
           color: 'var(--danger, #e74c3c)',
-          borderColor: 'rgba(231,76,60,0.3)',
+          cursor: 'pointer',
+          fontSize: '11px',
+          fontFamily: 'inherit',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          gap: '4px',
+          transition: 'all var(--transition, 0.2s ease)',
         }}
       >
-        🗑 清空画布
+        <TrashIcon />
+        清空画布
       </button>
     </div>
   );

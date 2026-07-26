@@ -2,19 +2,16 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { useToolbarStore } from '../useToolbarStore';
 import { DEFAULT_TOOLBAR_STATE, TOOLBAR_STORAGE_KEY } from '../constants';
 
-// Reset store before each test
 beforeEach(() => {
   useToolbarStore.setState({
     expanded: DEFAULT_TOOLBAR_STATE.expanded,
     width: DEFAULT_TOOLBAR_STATE.width,
     lastExpandedWidth: DEFAULT_TOOLBAR_STATE.lastExpandedWidth,
     top: DEFAULT_TOOLBAR_STATE.top,
-    left: DEFAULT_TOOLBAR_STATE.left,
+    rightOffset: DEFAULT_TOOLBAR_STATE.rightOffset,
     side: DEFAULT_TOOLBAR_STATE.side,
-    autoCollapseThreshold: 100,
   });
   localStorage.clear();
-  // Clear any pending save timeout
   vi.useFakeTimers();
 });
 
@@ -29,7 +26,8 @@ describe('useToolbarStore', () => {
       expect(state.expanded).toBe(true);
       expect(state.width).toBe(240);
       expect(state.lastExpandedWidth).toBe(240);
-      expect(state.side).toBe('left');
+      expect(state.side).toBe('right');
+      expect(state.rightOffset).toBe(8);
     });
   });
 
@@ -38,32 +36,30 @@ describe('useToolbarStore', () => {
       useToolbarStore.getState().toggle();
       const state = useToolbarStore.getState();
       expect(state.expanded).toBe(false);
-      // lastExpandedWidth should be preserved
       expect(state.lastExpandedWidth).toBe(240);
     });
 
-    it('expands when collapsed', () => {
+    it('expands when collapsed and restores width', () => {
       const store = useToolbarStore.getState();
-      store.toggle(); // collapse
+      store.toggle();
       expect(useToolbarStore.getState().expanded).toBe(false);
 
-      store.toggle(); // expand
+      store.toggle();
       expect(useToolbarStore.getState().expanded).toBe(true);
-      expect(useToolbarStore.getState().width).toBe(240); // restored
+      expect(useToolbarStore.getState().width).toBe(240);
     });
 
-    it('restores lastExpandedWidth on expand', () => {
+    it('restores lastExpandedWidth on expand after resize', () => {
       const store = useToolbarStore.getState();
       store.setWidth(350);
-      store.toggle(); // collapse, saves 350
-      store.setWidth(28); // simulate collapsed state
-      store.toggle(); // expand
+      store.toggle();
+      store.toggle();
       expect(useToolbarStore.getState().width).toBe(350);
     });
   });
 
   describe('expand / collapse', () => {
-    it('expand sets expanded=true and restores width', () => {
+    it('expand restores width', () => {
       useToolbarStore.getState().collapse();
       useToolbarStore.getState().expand();
       const state = useToolbarStore.getState();
@@ -71,21 +67,19 @@ describe('useToolbarStore', () => {
       expect(state.width).toBe(240);
     });
 
-    it('collapse saves current width as lastExpandedWidth', () => {
+    it('collapse saves lastExpandedWidth', () => {
       const store = useToolbarStore.getState();
       store.setWidth(400);
       store.collapse();
-      const state = useToolbarStore.getState();
-      expect(state.expanded).toBe(false);
-      expect(state.lastExpandedWidth).toBe(400);
+      expect(useToolbarStore.getState().expanded).toBe(false);
+      expect(useToolbarStore.getState().lastExpandedWidth).toBe(400);
     });
 
-    it('collapse does not save tiny width as lastExpandedWidth', () => {
+    it('collapse preserves old lastExpandedWidth if current is tiny', () => {
       const store = useToolbarStore.getState();
-      store.setWidth(50); // below threshold of 100
+      store.setWidth(50);
       store.collapse();
-      const state = useToolbarStore.getState();
-      expect(state.lastExpandedWidth).toBe(240); // preserved from before
+      expect(useToolbarStore.getState().lastExpandedWidth).toBe(240);
     });
   });
 
@@ -97,100 +91,80 @@ describe('useToolbarStore', () => {
   });
 
   describe('setPosition', () => {
-    it('sets top and left', () => {
+    it('sets top and rightOffset', () => {
       useToolbarStore.getState().setPosition(50, 100);
       const state = useToolbarStore.getState();
       expect(state.top).toBe(50);
-      expect(state.left).toBe(100);
+      expect(state.rightOffset).toBe(100);
     });
   });
 
   describe('clampPosition', () => {
     it('keeps valid position', () => {
       const store = useToolbarStore.getState();
-      store.setPosition(100, 300);
+      store.setPosition(100, 20);
       store.clampPosition(1920, 1080);
       expect(useToolbarStore.getState().top).toBe(100);
-      expect(useToolbarStore.getState().left).toBe(300);
+      expect(useToolbarStore.getState().rightOffset).toBe(20);
     });
 
-    it('clamps negative left', () => {
+    it('clamps top to margin', () => {
       const store = useToolbarStore.getState();
-      store.setPosition(50, -100);
-      store.clampPosition(1920, 1080);
-      expect(useToolbarStore.getState().left).toBe(12); // clamped to margin
-    });
-
-    it('clamps right overflow', () => {
-      const store = useToolbarStore.getState();
-      store.setPosition(50, 2000);
-      store.clampPosition(1920, 1080);
-      // Viewport=1920, effectiveW=240 (expanded), margin=12
-      // maxLeft = 1920 - 240 - 12 = 1668
-      expect(useToolbarStore.getState().left).toBe(1668);
-    });
-
-    it('clamps top negative', () => {
-      const store = useToolbarStore.getState();
-      store.setPosition(-50, 300);
+      store.setPosition(-50, 20);
       store.clampPosition(1920, 1080);
       expect(useToolbarStore.getState().top).toBe(12);
     });
+
+    it('allows rightOffset up to viewport - 60', () => {
+      const store = useToolbarStore.getState();
+      store.setPosition(50, 2000);
+      store.clampPosition(1920, 1080);
+      expect(useToolbarStore.getState().rightOffset).toBe(1860);
+    });
   });
 
-  describe('resize logic (simulated)', () => {
-    it('calculates nextWidth correctly for left side', () => {
-      // Simulate: startWidth=240, delta=60 (mouse moved right 60px)
-      const store = useToolbarStore.getState();
-      const side = 'left';
+  describe('right-side resize logic', () => {
+    it('drag left (away from right edge) increases width', () => {
+      // Resize handle is on left edge of toolbar (between canvas and toolbar).
+      // Dragging handle LEFT = toolbar gets wider.
       const startWidth = 240;
-      const delta = 60;
-      const nextWidth = side === 'left'
-        ? startWidth + delta
-        : startWidth - delta;
+      const delta = 60; // mouse moved 60px left
+      const nextWidth = startWidth + delta; // side === 'right': moving left = wider
       expect(nextWidth).toBe(300);
     });
 
-    it('calculates nextWidth correctly for right side', () => {
-      const side = 'right';
+    it('drag right (toward right edge) decreases width', () => {
       const startWidth = 240;
-      const delta = 60;
-      const nextWidth = side === 'left'
-        ? startWidth + delta
-        : startWidth - delta;
+      const delta = -60;
+      const nextWidth = startWidth + delta;
       expect(nextWidth).toBe(180);
     });
 
-    it('auto-collapses when width below threshold', () => {
-      const autoCollapseThreshold = 100;
-      const nextWidth = 80;
-      expect(nextWidth < autoCollapseThreshold).toBe(true);
-    });
-
-    it('does not auto-collapse when width above threshold', () => {
-      const autoCollapseThreshold = 100;
-      const nextWidth = 120;
-      expect(nextWidth < autoCollapseThreshold).toBe(false);
+    it('triggers collapse when width falls below collapse threshold', () => {
+      const nextWidth = 40;
+      const COLLAPSE_THRESHOLD = 60;
+      expect(nextWidth < COLLAPSE_THRESHOLD).toBe(true);
     });
   });
 
   describe('persistence', () => {
-    it('saves state to localStorage', () => {
+    it('saves to localStorage', () => {
       useToolbarStore.getState().saveState();
       const raw = localStorage.getItem(TOOLBAR_STORAGE_KEY);
       expect(raw).toBeTruthy();
       const parsed = JSON.parse(raw!);
       expect(parsed.expanded).toBe(true);
       expect(parsed.width).toBe(240);
+      expect(parsed.side).toBe('right');
     });
 
-    it('loads state from localStorage', () => {
+    it('loads from localStorage', () => {
       const saved = {
         expanded: false,
         width: 300,
         lastExpandedWidth: 300,
         top: 50,
-        left: 400,
+        rightOffset: 20,
         side: 'right',
       };
       localStorage.setItem(TOOLBAR_STORAGE_KEY, JSON.stringify(saved));
@@ -200,18 +174,16 @@ describe('useToolbarStore', () => {
       expect(state.expanded).toBe(false);
       expect(state.width).toBe(300);
       expect(state.top).toBe(50);
-      expect(state.side).toBe('right');
+      expect(state.rightOffset).toBe(20);
     });
 
-    it('handles missing localStorage gracefully', () => {
+    it('handles missing localStorage', () => {
       useToolbarStore.getState().loadState();
-      // Should keep defaults
       expect(useToolbarStore.getState().expanded).toBe(true);
     });
 
-    it('handles corrupt localStorage gracefully', () => {
+    it('handles corrupt localStorage', () => {
       localStorage.setItem(TOOLBAR_STORAGE_KEY, 'not-json{{{');
-      // Should not throw
       expect(() => useToolbarStore.getState().loadState()).not.toThrow();
     });
   });
@@ -228,16 +200,15 @@ describe('useToolbarStore', () => {
       expect(state.expanded).toBe(true);
       expect(state.width).toBe(240);
       expect(state.top).toBe(DEFAULT_TOOLBAR_STATE.top);
-      expect(state.left).toBe(DEFAULT_TOOLBAR_STATE.left);
+      expect(state.rightOffset).toBe(DEFAULT_TOOLBAR_STATE.rightOffset);
+      expect(state.side).toBe('right');
     });
   });
 
   describe('auto-save', () => {
-    it('debounces save after state change', async () => {
+    it('debounces save after state change', () => {
       useToolbarStore.getState().toggle();
-      // Advance timers past debounce period (500ms)
       vi.advanceTimersByTime(600);
-
       const raw = localStorage.getItem(TOOLBAR_STORAGE_KEY);
       expect(raw).toBeTruthy();
     });
