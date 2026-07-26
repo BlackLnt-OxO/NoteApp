@@ -1,88 +1,48 @@
 /**
- * StrokeEngine — Pure-function brush pipeline with 1€ Filter smoothing.
+ * StrokeEngine — Pure-function brush pipeline with simple EMA smoothing.
  *
- * The 1€ Filter (Géry Casiez, 2012) is the gold standard for drawing apps:
- * - Slow strokes → heavy smoothing (removes hand wobble)
- * - Fast strokes → light smoothing (preserves sharp corners)
- * - Used by Photoshop, Procreate, Clip Studio Paint
- *
- * minCutoff uses an exponential curve so low smoothing values stay responsive:
- *   smoothing 0   → minCutoff=10 Hz   (raw input)
- *   smoothing 0.1 → minCutoff≈5 Hz    (barely filtered — default)
- *   smoothing 0.5 → minCutoff≈0.3 Hz  (moderate)
- *   smoothing 1   → minCutoff=0.01 Hz (maximum stabilisation)
+ * Uses a plain exponential moving average — fast, predictable, zero fuss.
+ * default smoothing = 0.35 (65% raw / 35% old per frame).
  */
 
 import type { StampPoint, PointerSample, BrushSettings } from './types';
 
-// ---- 1€ Filter state ---------------------------------------------------------
+// ---- EMA Smoother ------------------------------------------------------------
 
-export interface OneEuroState {
-  prevX: number;
-  prevY: number;
-  prevP: number;
-  prevTimestamp: number;
-  dxHat: number; // smoothed derivative (velocity estimate)
-  dyHat: number;
+export interface SmoothPoint {
+  x: number;
+  y: number;
+  pressure: number;
 }
 
-/** Create initial state at the first input point. */
-export function initOneEuro(x: number, y: number, pressure: number, timestamp: number): OneEuroState {
-  return { prevX: x, prevY: y, prevP: pressure, prevTimestamp: timestamp, dxHat: 0, dyHat: 0 };
-}
+export class StrokeSmoother {
+  private point: SmoothPoint | null = null;
+  private readonly factor: number;
 
-// ---- 1€ Filter core ----------------------------------------------------------
-
-const BETA = 0.007;   // speed coefficient (standard value from the paper)
-const DCUTOFF = 1.0;  // derivative cutoff in Hz
-
-function oneEuroFilter(
-  state: OneEuroState,
-  x: number,
-  y: number,
-  pressure: number,
-  timestamp: number,
-  minCutoff: number,
-): { x: number; y: number; pressure: number; state: OneEuroState } {
-  let dt = (timestamp - state.prevTimestamp) / 1000;
-  if (dt <= 0 || dt > 1) {
-    const fresh = initOneEuro(x, y, pressure, timestamp);
-    return { x, y, pressure, state: fresh };
+  constructor(smoothing: number) {
+    // clamp 0-0.95 so at least 5% of raw input always comes through
+    const s = Math.max(0, Math.min(0.95, smoothing));
+    this.factor = 1 - s;
   }
-  // Clamp dt — coalesced events fire at >200 Hz which makes alpha too small
-  dt = Math.max(dt, 0.008); // min 8 ms ≈ 120 Hz
 
-  // Compute raw derivative (velocity)
-  const dx = (x - state.prevX) / dt;
-  const dy = (y - state.prevY) / dt;
-  const speed = Math.sqrt(dx * dx + dy * dy);
+  update(input: SmoothPoint): SmoothPoint {
+    if (!this.point) {
+      this.point = { ...input };
+      return this.point;
+    }
 
-  // Adapt cutoff: faster motion → higher cutoff → less smoothing
-  const cutoff = minCutoff + BETA * speed;
+    this.point = {
+      x: this.point.x + (input.x - this.point.x) * this.factor,
+      y: this.point.y + (input.y - this.point.y) * this.factor,
+      pressure: this.point.pressure + (input.pressure - this.point.pressure) * this.factor,
+    };
 
-  // Smoothing factor
-  const tau = 1 / (2 * Math.PI * cutoff);
-  const alpha = 1 / (1 + tau / dt);
+    return { ...this.point };
+  }
 
-  // Smooth position
-  const sx = state.prevX + alpha * (x - state.prevX);
-  const sy = state.prevY + alpha * (y - state.prevY);
-
-  // Smooth derivative (for next frame's speed estimate)
-  const dtau = 1 / (2 * Math.PI * DCUTOFF);
-  const dalpha = 1 / (1 + dtau / dt);
-  const sdx = state.dxHat + dalpha * (dx - state.dxHat);
-  const sdy = state.dyHat + dalpha * (dy - state.dyHat);
-
-  const sp = state.prevP + alpha * (pressure - state.prevP);
-
-  const nextState: OneEuroState = {
-    prevX: sx, prevY: sy, prevP: sp,
-    prevTimestamp: timestamp,
-    dxHat: sdx, dyHat: sdy,
-  };
-
-  return { x: sx, y: sy, pressure: sp, state: nextState };
+  reset() {
+    this.point = null;
+  }
 }
 
 // ---- Pressure extraction -----------------------------------------------------
@@ -123,14 +83,14 @@ export function interpolateStamps(
   const steps = Math.floor(dist / stepSize);
   for (let i = 1; i <= steps; i++) {
     const t = i / steps;
-    const x = from.x + dx * t;
-    const y = from.y + dy * t;
     const pressure = from.pressure + (to.pressure - from.pressure) * t;
     results.push({
-      x, y,
+      x: from.x + dx * t,
+      y: from.y + dy * t,
       size: mapPressureToSize(pressure, brushSettings.size, brushSettings.pressureSize),
       opacity: mapPressureToOpacity(pressure, brushSettings.opacity, brushSettings.pressureOpacity),
-      pressure, tiltX: from.tiltX + (to.tiltX - from.tiltX) * t,
+      pressure,
+      tiltX: from.tiltX + (to.tiltX - from.tiltX) * t,
       tiltY: from.tiltY + (to.tiltY - from.tiltY) * t,
     });
   }
@@ -139,45 +99,31 @@ export function interpolateStamps(
 
 // ---- Main entry point --------------------------------------------------------
 
-/**
- * @param oeState — per-stroke 1€ filter state (use `initOneEuro` on first call)
- * @param prevStamp — last emitted stamp
- * @param sample — current raw sample in world coords
- */
 export function processSample(
-  oeState: OneEuroState | null,
+  smoother: StrokeSmoother,
   prevStamp: StampPoint | null,
   sample: PointerSample,
   brushSettings: BrushSettings,
-): { stamps: StampPoint[]; state: OneEuroState } {
-  // Exponential: 10^(1 - smoothing*3) → 10 Hz at 0%, 5 Hz at 10%, 0.01 Hz at 100%
-  const minCutoff = Math.pow(10, 1 - brushSettings.smoothing * 3);
-  const ts = sample.timestamp || Date.now();
-
-  let state: OneEuroState;
-  let fx: number, fy: number, fp: number;
-
-  if (!oeState) {
-    state = initOneEuro(sample.x, sample.y, sample.pressure, ts);
-    fx = sample.x; fy = sample.y; fp = sample.pressure;
-  } else {
-    const result = oneEuroFilter(oeState, sample.x, sample.y, sample.pressure, ts, minCutoff);
-    state = result.state;
-    fx = result.x; fy = result.y; fp = result.pressure;
-  }
+): StampPoint[] {
+  const smoothed = smoother.update({
+    x: sample.x,
+    y: sample.y,
+    pressure: sample.pressure,
+  });
 
   const stamp: StampPoint = {
-    x: fx, y: fy,
-    size: mapPressureToSize(fp, brushSettings.size, brushSettings.pressureSize),
-    opacity: mapPressureToOpacity(fp, brushSettings.opacity, brushSettings.pressureOpacity),
-    pressure: fp,
+    x: smoothed.x,
+    y: smoothed.y,
+    size: mapPressureToSize(smoothed.pressure, brushSettings.size, brushSettings.pressureSize),
+    opacity: mapPressureToOpacity(smoothed.pressure, brushSettings.opacity, brushSettings.pressureOpacity),
+    pressure: smoothed.pressure,
     tiltX: sample.tiltX,
     tiltY: sample.tiltY,
   };
 
-  if (!prevStamp) return { stamps: [stamp], state };
+  if (!prevStamp) return [stamp];
 
-  return { stamps: interpolateStamps(prevStamp, stamp, brushSettings), state };
+  return interpolateStamps(prevStamp, stamp, brushSettings);
 }
 
 export function stampCacheKey(size: number, color: string, hardness: number): string {

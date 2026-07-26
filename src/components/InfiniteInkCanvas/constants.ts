@@ -9,7 +9,7 @@ export const DEFAULT_BRUSH: BrushSettings = {
   opacity: 1,
   hardness: 0.8,
   spacing: 0.3,
-  smoothing: 0.1,
+  smoothing: 0.35,
   color: 'rgba(255,255,255,0.95)',
   pressureSize: true,
   pressureOpacity: false,
