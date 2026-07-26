@@ -47,7 +47,7 @@ const ToolbarShell: React.FC<Props> = ({ children }) => {
     expanded, width, top, offset, side,
     toggle, collapse, expand,
     setWidth, setPosition, setSide,
-    setIsDragging,
+    setIsDragging, setDragCursorX,
     clampPosition, loadState,
   } = store;
 
@@ -111,7 +111,8 @@ const ToolbarShell: React.FC<Props> = ({ children }) => {
       e.preventDefault(); e.stopPropagation();
       (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
 
-      setIsDragging(true); // show canvas overlay
+      setIsDragging(true);
+      setDragCursorX(e.clientX); // initial cursor position for overlay
 
       dragRef.current = {
         startMouseX: e.clientX, startMouseY: e.clientY,
@@ -145,8 +146,9 @@ const ToolbarShell: React.FC<Props> = ({ children }) => {
       const nextTop = Math.max(4, Math.min(d.startTop + (e.clientY - d.startMouseY), Math.max(4, vpH - 36)));
 
       setPosition(nextTop, nextOffset);
+      setDragCursorX(e.clientX); // update for real-time overlay zone
     },
-    [setPosition],
+    [setPosition, setDragCursorX],
   );
 
   const onHeaderPointerUp = useCallback(
@@ -165,9 +167,10 @@ const ToolbarShell: React.FC<Props> = ({ children }) => {
       setPosition(d.startTop + (e.clientY - d.startMouseY), 0);
 
       setIsDragging(false);
+      setDragCursorX(0);
       dragRef.current = null;
     },
-    [setSide, setPosition, setIsDragging],
+    [setSide, setPosition, setIsDragging, setDragCursorX],
   );
 
   // ---- Resize handle -------------------------------------------------------

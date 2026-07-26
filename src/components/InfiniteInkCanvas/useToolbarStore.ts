@@ -19,6 +19,8 @@ export interface ToolbarStoreState {
   side: 'left' | 'right';
   /** Whether the user is currently dragging the toolbar (for canvas overlay). */
   isDragging: boolean;
+  /** Current cursor X during drag (for real-time overlay zone highlight). */
+  dragCursorX: number;
 }
 
 export interface ToolbarStoreActions {
@@ -29,6 +31,7 @@ export interface ToolbarStoreActions {
   setPosition: (top: number, offset: number) => void;
   setSide: (side: 'left' | 'right') => void;
   setIsDragging: (v: boolean) => void;
+  setDragCursorX: (x: number) => void;
   clampPosition: (viewportW: number, viewportH: number) => void;
   saveState: () => void;
   loadState: () => void;
@@ -49,6 +52,7 @@ export const useToolbarStore = create<ToolbarStore>((set, get) => ({
   offset: DEFAULT_TOOLBAR_STATE.offset,
   side: DEFAULT_TOOLBAR_STATE.side,
   isDragging: false,
+  dragCursorX: 0,
 
   // --- expand / collapse ---
 
@@ -79,6 +83,7 @@ export const useToolbarStore = create<ToolbarStore>((set, get) => ({
   setSide: (side) => set({ side }),
 
   setIsDragging: (v) => set({ isDragging: v }),
+  setDragCursorX: (x) => set({ dragCursorX: x }),
 
   clampPosition: (viewportW, viewportH) => {
     const { top, offset, expanded } = get();
@@ -119,7 +124,7 @@ export const useToolbarStore = create<ToolbarStore>((set, get) => ({
     } catch { /* corrupt */ }
   },
 
-  reset: () => set({ ...DEFAULT_TOOLBAR_STATE, isDragging: false }),
+  reset: () => set({ ...DEFAULT_TOOLBAR_STATE, isDragging: false, dragCursorX: 0 }),
 }));
 
 // ---- Auto-save -----------------------------------------------------------

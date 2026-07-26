@@ -32,6 +32,7 @@ const InfiniteInkCanvas: React.FC = () => {
   const dotDensity = useCanvasStore((s) => s.dotDensity);
   const editingTextId = useCanvasStore((s) => s.editingTextId);
   const isDraggingToolbar = useToolbarStore((s) => s.isDragging);
+  const dragCursorX = useToolbarStore((s) => s.dragCursorX);
 
   // ---- Canvas sizing (DPI) ----------------------------------------------------
 
@@ -436,14 +437,28 @@ const InfiniteInkCanvas: React.FC = () => {
       {/* Text node editing overlay */}
       {editingNode && <TextNode node={editingNode} camera={camera} />}
 
-      {/* Zoned overlay while dragging toolbar — lighter edges = snap zone */}
-      {isDraggingToolbar && (
-        <div style={{ position: 'absolute', inset: 0, zIndex: 99, display: 'flex', pointerEvents: 'none' }}>
-          <div style={{ width: '25%', background: 'rgba(0,0,0,0.12)' }} />
-          <div style={{ width: '50%', background: 'rgba(0,0,0,0.35)' }} />
-          <div style={{ width: '25%', background: 'rgba(0,0,0,0.12)' }} />
-        </div>
-      )}
+      {/* Dynamic overlay while dragging — zone under cursor darkens */}
+      {isDraggingToolbar && (() => {
+        const cw = containerRef.current?.clientWidth ?? window.innerWidth;
+        const zone = dragCursorX < cw * 0.25 ? 'left'
+          : dragCursorX > cw * 0.75 ? 'right'
+          : 'none';
+        return (
+          <div style={{ position: 'absolute', inset: 0, zIndex: 99, display: 'flex', pointerEvents: 'none' }}>
+            <div style={{
+              width: '25%',
+              background: zone === 'left' ? 'rgba(0,0,0,0.2)' : 'rgba(0,0,0,0.06)',
+              transition: 'background 0.12s',
+            }} />
+            <div style={{ width: '50%', background: 'rgba(0,0,0,0.06)' }} />
+            <div style={{
+              width: '25%',
+              background: zone === 'right' ? 'rgba(0,0,0,0.2)' : 'rgba(0,0,0,0.06)',
+              transition: 'background 0.12s',
+            }} />
+          </div>
+        );
+      })()}
 
       {/* Toolbar */}
       <ToolbarShell>
