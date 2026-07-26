@@ -1,43 +1,60 @@
 /**
- * StrokeEngine — Pure-function brush pipeline with SAI-style stabiliser.
+ * StrokeEngine — Pure-function brush pipeline with Apple Pencil-style
+ * input prediction.
  *
- * Smoothing uses a moving-average ring buffer (like PaintTool SAI's stabilizer):
- * the output trails behind the input like it's on a string.  Lower smoothing =
- * smaller buffer = tighter tracking.
+ * Instead of lag-inducing smoothing, we use a 3-point velocity buffer to
+ * predict where the pen *will be* 1-2 frames ahead and render there.
+ * Result: zero-latency feel — the line runs ahead of the pen tip slightly,
+ * like Apple Pencil on iPad.
  */
 
 import type { StampPoint, PointerSample, BrushSettings } from './types';
 
-// ---- Smoothing buffer (SAI-style moving average) ----------------------------
+// ---- Prediction buffer (Apple Pencil style) ----------------------------------
 
-export interface SmoothBuffer {
+export interface PredictBuffer {
   buf: { x: number; y: number; pressure: number }[];
-  size: number;
+  /** Multiplier applied to velocity for forward prediction (0-2). */
+  factor: number;
 }
 
-/** Create a per-stroke smoothing buffer.  smoothing 0 = off (size 1), 1 = max (size 20). */
-export function createSmoothBuffer(smoothing: number): SmoothBuffer {
+/** Create a per-stroke prediction buffer.  smoothing 0 = off, 1 = max predict. */
+export function createPredictBuffer(smoothing: number): PredictBuffer {
   return {
     buf: [],
-    size: Math.max(1, Math.round(smoothing * 20)),
+    factor: smoothing * 2, // 10% → 0.2x, 50% → 1.0x, 100% → 2.0x
   };
 }
 
-function smoothWithBuffer(
-  sb: SmoothBuffer,
+/**
+ * Apple Pencil-style prediction:
+ * 1. Keep last 3 raw points
+ * 2. Compute velocity from last 2 points
+ * 3. Extrapolate forward: output = current + velocity * factor
+ *
+ * The line runs AHEAD of the pen tip, compensating for display latency.
+ */
+function predict(
+  pb: PredictBuffer,
   p: { x: number; y: number; pressure: number },
 ): { x: number; y: number; pressure: number } {
-  sb.buf.push(p);
-  if (sb.buf.length > sb.size) sb.buf.shift();
+  pb.buf.push(p);
+  if (pb.buf.length > 3) pb.buf.shift();
 
-  if (sb.buf.length === 1) return p;
+  if (pb.buf.length < 2 || pb.factor <= 0) return p;
 
-  let sx = 0, sy = 0, sp = 0;
-  for (const b of sb.buf) {
-    sx += b.x; sy += b.y; sp += b.pressure;
-  }
-  const n = sb.buf.length;
-  return { x: sx / n, y: sy / n, pressure: sp / n };
+  const prev = pb.buf[pb.buf.length - 2];
+  const curr = pb.buf[pb.buf.length - 1];
+
+  const vx = curr.x - prev.x;
+  const vy = curr.y - prev.y;
+  const vp = curr.pressure - prev.pressure;
+
+  return {
+    x: curr.x + vx * pb.factor,
+    y: curr.y + vy * pb.factor,
+    pressure: Math.max(0.05, Math.min(1, curr.pressure + vp * pb.factor)),
+  };
 }
 
 // ---- Pressure extraction -----------------------------------------------------
@@ -109,35 +126,28 @@ export function interpolateStamps(
 
 // ---- Main processing entry point ---------------------------------------------
 
-/**
- * Process a raw pointer sample into stamp-ready points.
- *
- * `smoothBuf` is the per-stroke SAI-style moving-average buffer (created
- * via `createSmoothBuffer` at the start of each stroke).
- * `prevStamp` is the last *emitted* stamp (may be null for the first call).
- */
 export function processSample(
-  smoothBuf: SmoothBuffer,
+  predBuf: PredictBuffer,
   prevStamp: StampPoint | null,
   sample: PointerSample,
   brushSettings: BrushSettings,
 ): StampPoint[] {
-  // Feed the raw world position into the SAI stabiliser
-  const smoothed = smoothWithBuffer(smoothBuf, {
+  // Apple Pencil prediction: output runs ahead of input
+  const pred = predict(predBuf, {
     x: sample.x,
     y: sample.y,
     pressure: sample.pressure,
   });
 
-  const size = mapPressureToSize(smoothed.pressure, brushSettings.size, brushSettings.pressureSize);
-  const opacity = mapPressureToOpacity(smoothed.pressure, brushSettings.opacity, brushSettings.pressureOpacity);
+  const size = mapPressureToSize(pred.pressure, brushSettings.size, brushSettings.pressureSize);
+  const opacity = mapPressureToOpacity(pred.pressure, brushSettings.opacity, brushSettings.pressureOpacity);
 
   const stamp: StampPoint = {
-    x: smoothed.x,
-    y: smoothed.y,
+    x: pred.x,
+    y: pred.y,
     size,
     opacity,
-    pressure: smoothed.pressure,
+    pressure: pred.pressure,
     tiltX: sample.tiltX,
     tiltY: sample.tiltY,
   };
@@ -146,8 +156,6 @@ export function processSample(
 
   return interpolateStamps(prevStamp, stamp, brushSettings);
 }
-
-// ---- Utility -----------------------------------------------------------------
 
 export function stampCacheKey(size: number, color: string, hardness: number): string {
   return `${size.toFixed(1)}|${color}|${hardness.toFixed(2)}`;
