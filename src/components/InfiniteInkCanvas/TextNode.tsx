@@ -11,8 +11,7 @@ interface Props {
 const TextNode: React.FC<Props> = ({ node, camera }) => {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
-  const { updateTextNode, deleteTextNode, setEditingTextId, pushHistory } =
-    useCanvasStore();
+  const { updateTextNode, deleteTextNode, setEditingTextId, pushHistory } = useCanvasStore();
   const [content, setContent] = useState(node.content);
 
   // Convert world → screen position
@@ -42,21 +41,16 @@ const TextNode: React.FC<Props> = ({ node, camera }) => {
     [],
   );
 
-  // Commit on blur
+  // Commit on blur — keep node even if empty, let user delete with Escape
   const handleBlur = useCallback(() => {
-    if (content.trim() === '') {
-      // Delete empty text nodes
-      deleteTextNode(node.id);
-    } else {
-      pushHistory();
-      updateTextNode(node.id, {
-        content,
-        width: Math.max(100, containerRef.current?.offsetWidth ?? 100),
-        height: Math.max(40, containerRef.current?.offsetHeight ?? 40),
-      });
-    }
+    pushHistory();
+    updateTextNode(node.id, {
+      content,
+      width: Math.max(100, containerRef.current?.offsetWidth ?? 100),
+      height: Math.max(40, containerRef.current?.offsetHeight ?? 40),
+    });
     setEditingTextId(null);
-  }, [content, node.id, updateTextNode, deleteTextNode, pushHistory, setEditingTextId]);
+  }, [content, node.id, updateTextNode, pushHistory, setEditingTextId]);
 
   // Keyboard shortcuts
   const handleKeyDown = useCallback(

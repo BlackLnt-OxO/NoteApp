@@ -12,99 +12,88 @@ import { screenToWorld, worldToScreen, parseRGBA } from './constants';
 
 export interface RenderParams {
   ctx: CanvasRenderingContext2D;
-  canvasWidth: number;   // CSS pixels
-  canvasHeight: number;  // CSS pixels
+  canvasWidth: number;
+  canvasHeight: number;
   camera: Camera;
   objects: CanvasObject[];
   currentStroke: Stroke | null;
   activeTool: string;
   mouseWorldPos: { x: number; y: number } | null;
-  dotDensity: number;
+  showDotGrid: boolean;
   editingTextId: string | null;
   dpr: number;
 }
 
 export function renderAll(params: RenderParams): void {
   const {
-    ctx,
-    canvasWidth,
-    canvasHeight,
-    camera,
-    objects,
-    currentStroke,
-    activeTool,
-    mouseWorldPos,
-    dotDensity,
-    editingTextId,
-    dpr,
+    ctx, canvasWidth, canvasHeight, camera,
+    objects, currentStroke, activeTool, mouseWorldPos,
+    showDotGrid, editingTextId, dpr,
   } = params;
 
-  // 1. Clear
+  // 1. Clear + background
   ctx.save();
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.clearRect(0, 0, canvasWidth, canvasHeight);
-
-  // 2. Background
   ctx.fillStyle = '#1a1a2e';
   ctx.fillRect(0, 0, canvasWidth, canvasHeight);
 
-  // 3. Dot grid (drawn in screen space for crisp dots)
-  drawDotGrid(ctx, camera, canvasWidth, canvasHeight, dotDensity);
-
-  // 4. Apply camera transform so world coords become screen coords
+  // 2. Apply camera transform
   ctx.save();
   ctx.translate(camera.x, camera.y);
   ctx.scale(camera.zoom, camera.zoom);
 
-  // 5. Completed objects
+  // 3. Draw strokes & text (eraser only affects this layer)
   drawObjects(ctx, objects, editingTextId);
 
-  // 6. Current in-progress stroke
+  // 4. Current in-progress stroke
   if (currentStroke && currentStroke.points.length > 0) {
     drawStroke(ctx, currentStroke);
   }
 
-  // 7. Eraser cursor
+  // 5. Eraser cursor
   if (activeTool === 'eraser' && mouseWorldPos) {
     drawEraserCursor(ctx, mouseWorldPos);
   }
 
   ctx.restore(); // undo camera transform
+
+  // 6. Dot grid — drawn AFTER strokes so eraser can't erase it
+  if (showDotGrid) {
+    drawDotGrid(ctx, camera, canvasWidth, canvasHeight);
+  }
+
   ctx.restore(); // undo DPR scaling
 }
 
 // ---- Dot Grid ----------------------------------------------------------------
+
+const DOT_SPACING = 24; // fixed world-space grid spacing
 
 function drawDotGrid(
   ctx: CanvasRenderingContext2D,
   camera: Camera,
   canvasW: number,
   canvasH: number,
-  dotDensity: number,
 ): void {
-  // Visible world rectangle
   const topLeft = screenToWorld(0, 0, camera);
   const bottomRight = screenToWorld(canvasW, canvasH, camera);
 
-  // Adjust step based on zoom to keep visual density reasonable
-  let step = dotDensity;
-  if (camera.zoom < 0.25) step = dotDensity * 4;
-  else if (camera.zoom < 0.5) step = dotDensity * 2;
-  else if (camera.zoom > 2) step = Math.max(4, dotDensity / 2);
+  // Pick a step that looks good at current zoom
+  let step = DOT_SPACING;
+  if (camera.zoom < 0.25) step = DOT_SPACING * 4;
+  else if (camera.zoom < 0.5) step = DOT_SPACING * 2;
+  else if (camera.zoom > 2) step = Math.max(6, DOT_SPACING / 2);
 
-  // Round to grid
   const startX = Math.floor(topLeft.x / step) * step;
   const startY = Math.floor(topLeft.y / step) * step;
   const endX = bottomRight.x + step;
   const endY = bottomRight.y + step;
 
-  // Dot visual properties
-  const dotAlpha = Math.max(0.05, Math.min(0.2, camera.zoom * 0.12));
-  const dotRadius = Math.max(0.4, Math.min(1.8, camera.zoom * 0.7));
+  const dotAlpha = Math.max(0.04, Math.min(0.18, camera.zoom * 0.10));
+  const dotRadius = Math.max(0.3, Math.min(1.6, camera.zoom * 0.6));
 
   ctx.fillStyle = `rgba(255,255,255,${dotAlpha.toFixed(3)})`;
-
-  // Batch all dots in one fill call for performance
   ctx.beginPath();
   for (let wx = startX; wx <= endX; wx += step) {
     for (let wy = startY; wy <= endY; wy += step) {

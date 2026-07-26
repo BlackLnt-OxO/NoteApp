@@ -29,7 +29,7 @@ const InfiniteInkCanvas: React.FC = () => {
   const camera = useCanvasStore((s) => s.camera);
   const activeTool = useCanvasStore((s) => s.activeTool);
   const brushSettings = useCanvasStore((s) => s.brushSettings);
-  const dotDensity = useCanvasStore((s) => s.dotDensity);
+  const showDotGrid = useCanvasStore((s) => s.showDotGrid);
   const editingTextId = useCanvasStore((s) => s.editingTextId);
   const isDraggingToolbar = useToolbarStore((s) => s.isDragging);
   const tOffset = useToolbarStore((s) => s.offset);
@@ -90,7 +90,7 @@ const InfiniteInkCanvas: React.FC = () => {
       currentStroke: currentStrokeRef.current,
       activeTool: state.activeTool,
       mouseWorldPos: mouseWorldPosRef.current,
-      dotDensity: state.dotDensity,
+      showDotGrid: state.showDotGrid,
       editingTextId: state.editingTextId,
       dpr: dprRef.current,
     });
@@ -110,7 +110,7 @@ const InfiniteInkCanvas: React.FC = () => {
   useEffect(() => {
     dirtyRef.current = true;
     scheduleRender();
-  }, [objects, camera, activeTool, brushSettings, dotDensity, editingTextId, scheduleRender]);
+  }, [objects, camera, activeTool, brushSettings, showDotGrid, editingTextId, scheduleRender]);
 
   // ---- Keyboard shortcuts -----------------------------------------------------
 
@@ -381,17 +381,17 @@ const InfiniteInkCanvas: React.FC = () => {
       const { sx, sy } = getCanvasPos(e as unknown as React.PointerEvent);
 
       if (e.ctrlKey) {
-        // Zoom centered on mouse
-        const delta = -e.deltaY * 0.001;
-        const newZoom = clampZoom(state.camera.zoom * (1 + delta));
-        const nextCamera = zoomAt(state.camera, sx, sy, newZoom);
-        state.setCamera(nextCamera);
-      } else {
-        // Pan
+        // Ctrl+scroll → pan
         state.setCamera({
           x: state.camera.x - e.deltaX,
           y: state.camera.y - e.deltaY,
         });
+      } else {
+        // Scroll → zoom centered on mouse
+        const delta = -e.deltaY * 0.001;
+        const newZoom = clampZoom(state.camera.zoom * (1 + delta));
+        const nextCamera = zoomAt(state.camera, sx, sy, newZoom);
+        state.setCamera(nextCamera);
       }
     },
     [getCanvasPos],

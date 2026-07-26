@@ -97,7 +97,6 @@ const Sidebar: React.FC<SidebarProps> = ({ onCreateNote }) => {
       <div style={{ display: 'flex', gap: '3px', marginBottom: '8px' }}>
         {([
           { id: 'notes' as const, label: '便笺' },
-          { id: 'mindmap' as const, label: '导图' },
           { id: 'inkcanvas' as const, label: '画布' },
         ]).map((m) => (
           <button

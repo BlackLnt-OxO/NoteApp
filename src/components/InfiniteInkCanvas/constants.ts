@@ -15,9 +15,6 @@ export const DEFAULT_BRUSH: BrushSettings = {
   pressureOpacity: false,
 };
 
-export const DOT_DENSITY_OPTIONS = [8, 12, 16, 24, 32, 48, 64];
-export const DEFAULT_DOT_DENSITY = 24;
-
 export const MIN_ZOOM = 0.1;
 export const MAX_ZOOM = 8;
 

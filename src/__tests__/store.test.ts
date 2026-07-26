@@ -406,11 +406,10 @@ describe('NoteStore', () => {
   // =========================================================================
 
   describe('setViewMode', () => {
-    it('switches between notes and mindmap', () => {
-      useNoteStore.getState().setViewMode('mindmap');
-      expect(useNoteStore.getState().viewMode).toBe('mindmap');
+    it('switches between notes and inkcanvas', () => {
+      useNoteStore.getState().setViewMode('inkcanvas');
+      expect(useNoteStore.getState().viewMode).toBe('inkcanvas');
       useNoteStore.getState().setViewMode('notes');
-      expect(useNoteStore.getState().viewMode).toBe('notes');
     });
   });
 

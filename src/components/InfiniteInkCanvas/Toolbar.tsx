@@ -5,7 +5,6 @@
 
 import React from 'react';
 import { useCanvasStore } from './useCanvasStore';
-import { DOT_DENSITY_OPTIONS } from './constants';
 import type { ToolType } from './types';
 
 // ---- SVG Icons (no emoji) ----------------------------------------------------
@@ -110,33 +109,16 @@ const trackStyle: React.CSSProperties = {
   margin: '2px 0 6px 0',
 };
 
-/** Matches the app's `glass-input` class */
-const selectStyle: React.CSSProperties = {
-  width: '100%',
-  padding: '7px 10px',
-  borderRadius: '8px',
-  border: '1px solid var(--glass-border)',
-  background: 'var(--glass-bg-light)',
-  backdropFilter: 'blur(10px)',
-  WebkitBackdropFilter: 'blur(10px)',
-  color: 'var(--text-primary)',
-  fontSize: '11px',
-  fontFamily: 'inherit',
-  outline: 'none',
-  cursor: 'pointer',
-  transition: 'all var(--transition, 0.2s ease)',
-};
-
 // ---- Component ---------------------------------------------------------------
 
 const Toolbar: React.FC = () => {
   const {
     activeTool,
     brushSettings,
-    dotDensity,
+    showDotGrid,
     setActiveTool,
     setBrushSettings,
-    setDotDensity,
+    setShowDotGrid,
     undo,
     redo,
     history,
@@ -273,20 +255,14 @@ const Toolbar: React.FC = () => {
         </label>
       </div>
 
-      {/* ---- Dot density (glass-input style select) ---- */}
+      {/* ---- Dot grid show/hide ---- */}
       <div style={sectionStyle}>
-        <div style={labelStyle}><span>点阵密度</span></div>
-        <select
-          value={dotDensity}
-          onChange={(e) => setDotDensity(Number(e.target.value))}
-          style={selectStyle}
-        >
-          {DOT_DENSITY_OPTIONS.map((d) => (
-            <option key={d} value={d} style={{ background: '#1a1a2e', color: '#e0e0e0' }}>
-              {d} px
-            </option>
-          ))}
-        </select>
+        <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '11px', color: 'var(--text-secondary)', cursor: 'pointer' }}>
+          <input type="checkbox" checked={showDotGrid}
+            onChange={(e) => setShowDotGrid(e.target.checked)}
+            style={{ accentColor: 'var(--accent)' }} />
+          显示点阵背景
+        </label>
       </div>
 
       {/* ---- Undo / Redo ---- */}

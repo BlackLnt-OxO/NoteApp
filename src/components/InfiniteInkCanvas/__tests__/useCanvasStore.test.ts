@@ -18,7 +18,7 @@ beforeEach(() => {
       pressureSize: true,
       pressureOpacity: false,
     },
-    dotDensity: 24,
+    showDotGrid: true,
     editingTextId: null,
     history: [],
     redoStack: [],
@@ -58,7 +58,7 @@ describe('useCanvasStore', () => {
       expect(state.camera).toEqual({ x: 0, y: 0, zoom: 1 });
       expect(state.activeTool).toBe('pen');
       expect(state.brushSettings.size).toBe(8);
-      expect(state.dotDensity).toBe(24);
+      expect(state.showDotGrid).toBe(true);
       expect(state.history).toEqual([]);
       expect(state.redoStack).toEqual([]);
     });
@@ -202,7 +202,7 @@ describe('useCanvasStore', () => {
       const data = {
         objects: [makeStroke('loaded')],
         camera: { x: 5, y: 10, zoom: 2 },
-        dotDensity: 32,
+        showDotGrid: false,
       };
       localStorage.setItem('stickynotes-inkcanvas', JSON.stringify(data));
 
@@ -212,7 +212,7 @@ describe('useCanvasStore', () => {
       expect(state.objects).toHaveLength(1);
       expect(state.camera.x).toBe(5);
       expect(state.camera.zoom).toBe(2);
-      expect(state.dotDensity).toBe(32);
+      expect(state.showDotGrid).toBe(false);
     });
 
     it('handles empty localStorage on load', async () => {

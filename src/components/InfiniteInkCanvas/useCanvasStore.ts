@@ -10,7 +10,6 @@ import type {
 import {
   DEFAULT_CAMERA,
   DEFAULT_BRUSH,
-  DEFAULT_DOT_DENSITY,
   STORAGE_KEY,
   TEXT_DEFAULTS,
   MAX_HISTORY,
@@ -24,7 +23,7 @@ export interface CanvasStore {
   camera: Camera;
   activeTool: ToolType;
   brushSettings: BrushSettings;
-  dotDensity: number;
+  showDotGrid: boolean;
   editingTextId: string | null;
   history: CanvasObject[][];
   redoStack: CanvasObject[][];
@@ -39,7 +38,7 @@ export interface CanvasStore {
   setCamera: (partial: Partial<Camera>) => void;
   setActiveTool: (tool: ToolType) => void;
   setBrushSettings: (partial: Partial<BrushSettings>) => void;
-  setDotDensity: (density: number) => void;
+  setShowDotGrid: (show: boolean) => void;
   setEditingTextId: (id: string | null) => void;
   pushHistory: () => void;
   undo: () => void;
@@ -64,7 +63,7 @@ export const useCanvasStore = create<CanvasStore>((set, get) => ({
   camera: { ...DEFAULT_CAMERA },
   activeTool: 'pen',
   brushSettings: { ...DEFAULT_BRUSH },
-  dotDensity: DEFAULT_DOT_DENSITY,
+  showDotGrid: true,
   editingTextId: null,
   history: [],
   redoStack: [],
@@ -175,7 +174,7 @@ export const useCanvasStore = create<CanvasStore>((set, get) => ({
   setBrushSettings: (partial) =>
     set((s) => ({ brushSettings: { ...s.brushSettings, ...partial } })),
 
-  setDotDensity: (density) => set({ dotDensity: density }),
+  setShowDotGrid: (show) => set({ showDotGrid: show }),
 
   setEditingTextId: (id) => set({ editingTextId: id }),
 
@@ -183,8 +182,8 @@ export const useCanvasStore = create<CanvasStore>((set, get) => ({
 
   saveCanvasData: async () => {
     try {
-      const { objects, camera, dotDensity } = get();
-      const data = { objects, camera, dotDensity };
+      const { objects, camera, showDotGrid } = get();
+      const data = { objects, camera, showDotGrid };
       if (window.electronAPI?.saveCanvasData) {
         await window.electronAPI.saveCanvasData(data);
       } else {
@@ -209,7 +208,7 @@ export const useCanvasStore = create<CanvasStore>((set, get) => ({
           loaded: true,
           objects: data.objects || [],
           camera: { ...DEFAULT_CAMERA, ...data.camera },
-          dotDensity: data.dotDensity ?? DEFAULT_DOT_DENSITY,
+          showDotGrid: data.showDotGrid ?? true,
         });
       } else {
         set({ loaded: true });
