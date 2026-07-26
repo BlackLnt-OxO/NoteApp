@@ -33,17 +33,6 @@ function shouldIgnoreShortcut(target: EventTarget | null): boolean {
   );
 }
 
-/** Which side should we snap to based on cursor X position? */
-function snapTarget(
-  cursorX: number,
-  vpW: number,
-): 'left' | 'right' {
-  const third = vpW / 3;
-  if (cursorX < third) return 'left';
-  if (cursorX > vpW - third) return 'right';
-  return 'right'; // default to right in the middle zone
-}
-
 // ---- Props -----------------------------------------------------------------
 
 interface Props {
@@ -169,20 +158,16 @@ const ToolbarShell: React.FC<Props> = ({ children }) => {
 
       const vpW = containerRef.current?.clientWidth ?? window.innerWidth;
 
-      // Snap to nearest edge based on cursor position
-      const newSide = snapTarget(e.clientX, vpW);
+      // Always snap to nearest edge — never stay floating mid-canvas
+      const newSide = e.clientX < vpW / 2 ? 'left' : 'right';
       setSide(newSide);
+      // Snap flush: offset = 0 (right against the edge)
+      setPosition(d.startTop + (e.clientY - d.startMouseY), 0);
 
-      // Auto-collapse if snapped very close to the edge
-      const st = useToolbarStore.getState();
-      if (st.offset <= 2) {
-        collapse();
-      }
-
-      setIsDragging(false); // hide canvas overlay
+      setIsDragging(false);
       dragRef.current = null;
     },
-    [setSide, collapse, setIsDragging],
+    [setSide, setPosition, setIsDragging],
   );
 
   // ---- Resize handle -------------------------------------------------------
@@ -336,17 +321,14 @@ const ToolbarShell: React.FC<Props> = ({ children }) => {
               position: 'absolute',
               ...(isLeft ? { right: 0 } : { left: 0 }),
               top: 0, bottom: 0,
-              width: RESIZE_HANDLE_WIDTH, cursor: 'col-resize',
+              width: RESIZE_HANDLE_WIDTH, cursor: 'ew-resize',
               touchAction: 'none', zIndex: 2,
-              background: isResizing ? 'rgba(100,150,255,0.7)' : 'transparent',
-              transition: 'background 0.15s',
+              background: 'transparent',
             }}
             onPointerDown={onResizePointerDown}
             onPointerMove={onResizePointerMove}
             onPointerUp={onResizePointerUp}
             onPointerCancel={onResizePointerUp}
-            onMouseEnter={(e) => { if (!isResizing) (e.currentTarget as HTMLElement).style.background = 'rgba(100,150,255,0.35)'; }}
-            onMouseLeave={(e) => { if (!isResizing) (e.currentTarget as HTMLElement).style.background = 'transparent'; }}
           />
 
           {/* Header strip (drag handle) */}

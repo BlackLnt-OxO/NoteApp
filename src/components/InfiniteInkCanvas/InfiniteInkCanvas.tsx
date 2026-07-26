@@ -436,16 +436,13 @@ const InfiniteInkCanvas: React.FC = () => {
       {/* Text node editing overlay */}
       {editingNode && <TextNode node={editingNode} camera={camera} />}
 
-      {/* Dark overlay while dragging toolbar */}
+      {/* Zoned overlay while dragging toolbar — lighter edges = snap zone */}
       {isDraggingToolbar && (
-        <div
-          style={{
-            position: 'absolute', inset: 0, zIndex: 99,
-            background: 'rgba(0,0,0,0.35)',
-            pointerEvents: 'none',
-            transition: 'background 0.15s',
-          }}
-        />
+        <div style={{ position: 'absolute', inset: 0, zIndex: 99, display: 'flex', pointerEvents: 'none' }}>
+          <div style={{ width: '25%', background: 'rgba(0,0,0,0.12)' }} />
+          <div style={{ width: '50%', background: 'rgba(0,0,0,0.35)' }} />
+          <div style={{ width: '25%', background: 'rgba(0,0,0,0.12)' }} />
+        </div>
       )}
 
       {/* Toolbar */}
