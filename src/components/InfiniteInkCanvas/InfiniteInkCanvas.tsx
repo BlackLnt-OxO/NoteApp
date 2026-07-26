@@ -2,7 +2,7 @@ import React, { useRef, useEffect, useCallback } from 'react';
 import { useCanvasStore } from './useCanvasStore';
 import { renderAll } from './CanvasRenderer';
 import { processSample, getPressure } from './StrokeEngine';
-import { screenToWorld, worldToScreen, clampZoom, zoomAt, ERASER_RADIUS } from './constants';
+import { screenToWorld, clampZoom, zoomAt, ERASER_RADIUS } from './constants';
 import TextNode from './TextNode';
 import Toolbar from './Toolbar';
 import ToolbarShell from './ToolbarShell';
@@ -32,7 +32,9 @@ const InfiniteInkCanvas: React.FC = () => {
   const dotDensity = useCanvasStore((s) => s.dotDensity);
   const editingTextId = useCanvasStore((s) => s.editingTextId);
   const isDraggingToolbar = useToolbarStore((s) => s.isDragging);
-  const dragCursorX = useToolbarStore((s) => s.dragCursorX);
+  const tOffset = useToolbarStore((s) => s.offset);
+  const tWidth = useToolbarStore((s) => s.width);
+  const tSide = useToolbarStore((s) => s.side);
 
   // ---- Canvas sizing (DPI) ----------------------------------------------------
 
@@ -437,24 +439,36 @@ const InfiniteInkCanvas: React.FC = () => {
       {/* Text node editing overlay */}
       {editingNode && <TextNode node={editingNode} camera={camera} />}
 
-      {/* Dynamic overlay while dragging — zone under cursor darkens */}
+      {/* Dynamic overlay while dragging — zone under toolbar darkens */}
       {isDraggingToolbar && (() => {
         const cw = containerRef.current?.clientWidth ?? window.innerWidth;
-        const zone = dragCursorX < cw * 0.25 ? 'left'
-          : dragCursorX > cw * 0.75 ? 'right'
-          : 'none';
+        const leftQuarter = cw * 0.25;
+        const rightQuarter = cw * 0.75;
+
+        // Toolbar's screen-space bounding rect
+        const tLeft = tSide === 'left'
+          ? tOffset
+          : cw - tOffset - tWidth;
+        const tRight = tSide === 'left'
+          ? tOffset + tWidth
+          : cw - tOffset;
+
+        // Highlight zone if any part of toolbar overlaps it
+        const inLeft  = tLeft < leftQuarter;
+        const inRight = tRight > rightQuarter;
+
         return (
           <div style={{ position: 'absolute', inset: 0, zIndex: 99, display: 'flex', pointerEvents: 'none' }}>
             <div style={{
               width: '25%',
-              background: zone === 'left' ? 'rgba(0,0,0,0.2)' : 'rgba(0,0,0,0.06)',
-              transition: 'background 0.12s',
+              background: inLeft ? 'rgba(0,0,0,0.35)' : 'rgba(0,0,0,0.20)',
+              transition: 'background 0.10s',
             }} />
-            <div style={{ width: '50%', background: 'rgba(0,0,0,0.06)' }} />
+            <div style={{ width: '50%', background: 'rgba(0,0,0,0.20)' }} />
             <div style={{
               width: '25%',
-              background: zone === 'right' ? 'rgba(0,0,0,0.2)' : 'rgba(0,0,0,0.06)',
-              transition: 'background 0.12s',
+              background: inRight ? 'rgba(0,0,0,0.35)' : 'rgba(0,0,0,0.20)',
+              transition: 'background 0.10s',
             }} />
           </div>
         );

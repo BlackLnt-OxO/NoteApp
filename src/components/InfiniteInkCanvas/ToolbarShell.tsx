@@ -235,8 +235,8 @@ const ToolbarShell: React.FC<Props> = ({ children }) => {
   const isResizing = resizeRef.current !== null;
   const isLeft = side === 'left';
 
-  // Chevron direction: always points toward canvas (inward from edge)
-  const chevron = isLeft ? '◁' : '▷';
+  // Chevron direction: always points toward canvas (away from docked edge)
+  const chevron = isLeft ? '▷' : '◁';
 
   // CSS edge property
   const edgeStyle = isLeft
