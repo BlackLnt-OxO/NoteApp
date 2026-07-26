@@ -6,9 +6,10 @@
  * - Fast strokes → light smoothing (preserves sharp corners)
  * - Used by Photoshop, Procreate, Clip Studio Paint
  *
- * Parameters are mapped from a single 0-1 "smoothing" slider:
- *   smoothing 0   → minCutoff=1.0 Hz  (raw input)
- *   smoothing 0.1 → minCutoff=0.9 Hz  (slight stabilisation — default)
+ * minCutoff uses an exponential curve so low smoothing values stay responsive:
+ *   smoothing 0   → minCutoff=10 Hz   (raw input)
+ *   smoothing 0.1 → minCutoff≈5 Hz    (barely filtered — default)
+ *   smoothing 0.5 → minCutoff≈0.3 Hz  (moderate)
  *   smoothing 1   → minCutoff=0.01 Hz (maximum stabilisation)
  */
 
@@ -43,12 +44,13 @@ function oneEuroFilter(
   timestamp: number,
   minCutoff: number,
 ): { x: number; y: number; pressure: number; state: OneEuroState } {
-  const dt = (timestamp - state.prevTimestamp) / 1000;
+  let dt = (timestamp - state.prevTimestamp) / 1000;
   if (dt <= 0 || dt > 1) {
-    // First frame or huge gap — reset
     const fresh = initOneEuro(x, y, pressure, timestamp);
     return { x, y, pressure, state: fresh };
   }
+  // Clamp dt — coalesced events fire at >200 Hz which makes alpha too small
+  dt = Math.max(dt, 0.008); // min 8 ms ≈ 120 Hz
 
   // Compute raw derivative (velocity)
   const dx = (x - state.prevX) / dt;
@@ -148,8 +150,8 @@ export function processSample(
   sample: PointerSample,
   brushSettings: BrushSettings,
 ): { stamps: StampPoint[]; state: OneEuroState } {
-  // Map smoothing 0-1 → minCutoff 1.0-0.001 Hz
-  const minCutoff = 1.0 - brushSettings.smoothing * 0.999;
+  // Exponential: 10^(1 - smoothing*3) → 10 Hz at 0%, 5 Hz at 10%, 0.01 Hz at 100%
+  const minCutoff = Math.pow(10, 1 - brushSettings.smoothing * 3);
   const ts = sample.timestamp || Date.now();
 
   let state: OneEuroState;
