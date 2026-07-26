@@ -59,8 +59,6 @@ export function renderAll(params: RenderParams): void {
   ctx.restore(); // undo DPR scaling
 }
 
-export { drawStroke, drawDotGrid };
-
 // ---- Dot Grid ----------------------------------------------------------------
 // Dots keep a consistent visual spacing (screen px) at all zoom levels.
 
@@ -119,88 +117,109 @@ function drawObjects(
 
 // ---- Stroke ------------------------------------------------------------------
 
-// Off-screen canvas cache for soft stamps (keyed by size+color+hardness)
 const stampCache = new Map<string, HTMLCanvasElement>();
 
-function getOrCreateStamp(
-  size: number,
-  color: string,
-  hardness: number,
-  opacity: number,
-): HTMLCanvasElement {
+function getOrCreateStamp(size: number, color: string, hardness: number): HTMLCanvasElement {
   const key = `${size.toFixed(1)}|${color}|${hardness.toFixed(2)}`;
-  const cached = stampCache.get(key);
-  // Note: opacity is applied per-stamp via globalAlpha, so we don't key on it
+  const c = stampCache.get(key);
+  if (c) return c;
+  if (stampCache.size > 200) stampCache.delete(stampCache.keys().next().value!);
 
-  // Return cached stamp if available (we'll re-draw with correct alpha)
-  if (cached) return cached;
-
-  // Enforce cache size limit
-  if (stampCache.size > 200) {
-    const firstKey = stampCache.keys().next().value;
-    if (firstKey) stampCache.delete(firstKey);
-  }
-
-  const dpr = 2; // render stamps at 2x for quality
-  const paddedSize = Math.ceil(size * dpr) + 4;
+  const dpr = 2;
+  const padded = Math.ceil(size * dpr) + 4;
   const off = document.createElement('canvas');
-  off.width = paddedSize;
-  off.height = paddedSize;
-
+  off.width = padded; off.height = padded;
   const octx = off.getContext('2d')!;
-  const cx = paddedSize / 2;
-  const cy = paddedSize / 2;
+  const cx = padded / 2; const cy = padded / 2;
   const radius = (size / 2) * dpr;
-
   const { r, g, b } = parseRGBA(color);
 
   if (hardness >= 0.98) {
-    // Hard circle
-    octx.beginPath();
-    octx.arc(cx, cy, radius, 0, Math.PI * 2);
-    octx.fillStyle = `rgb(${r},${g},${b})`;
-    octx.fill();
+    octx.beginPath(); octx.arc(cx, cy, radius, 0, Math.PI * 2);
+    octx.fillStyle = `rgb(${r},${g},${b})`; octx.fill();
   } else {
-    // Soft radial gradient
-    const gradient = octx.createRadialGradient(cx, cy, radius * hardness, cx, cy, radius);
-    gradient.addColorStop(0, `rgb(${r},${g},${b})`);
-    gradient.addColorStop(1, `rgba(${r},${g},${b},0)`);
-    octx.fillStyle = gradient;
-    octx.fillRect(0, 0, paddedSize, paddedSize);
+    const g = octx.createRadialGradient(cx, cy, radius * hardness, cx, cy, radius);
+    g.addColorStop(0, `rgb(${r},${g},${b})`);
+    g.addColorStop(1, `rgba(${r},${g},${b},0)`);
+    octx.fillStyle = g; octx.fillRect(0, 0, padded, padded);
   }
-
   stampCache.set(key, off);
   return off;
 }
 
-function drawStroke(ctx: CanvasRenderingContext2D, stroke: Stroke): void {
-  const { points, brushSettings, compositeOperation } = stroke;
-  if (points.length === 0) return;
+// Per-stroke bitmap cache — bakes stamp set to one offscreen canvas
+interface CachedStroke {
+  bitmap: HTMLCanvasElement;
+  ox: number; oy: number; // world-space top-left of the bitmap
+}
 
-  ctx.save();
-  ctx.globalCompositeOperation = compositeOperation;
+const strokeBmp = new Map<string, CachedStroke>();
+
+function renderStrokeToBitmap(stroke: Stroke): CachedStroke {
+  const { points, brushSettings } = stroke;
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  for (const p of points) {
+    const r = p.size / 2;
+    if (p.x - r < minX) minX = p.x - r;
+    if (p.y - r < minY) minY = p.y - r;
+    if (p.x + r > maxX) maxX = p.x + r;
+    if (p.y + r > maxY) maxY = p.y + r;
+  }
+  const M = 4;
+  const w = Math.min(8192, Math.max(1, Math.ceil(maxX - minX) + M * 2));
+  const h = Math.min(8192, Math.max(1, Math.ceil(maxY - minY) + M * 2));
+
+  const off = document.createElement('canvas');
+  off.width = w; off.height = h;
+  const octx = off.getContext('2d')!;
+  const ox = minX - M;
+  const oy = minY - M;
+  octx.translate(-ox, -oy);
 
   const color = brushSettings.color;
-
-  for (const point of points) {
-    if (point.size <= 0.1) continue;
-
-    const stamp = getOrCreateStamp(point.size, color, brushSettings.hardness, point.opacity);
-    const halfW = stamp.width / 4; // DPR=2 → divide by 2 for CSS, then /2 for centering = /4
-    const halfH = stamp.height / 4;
-
-    ctx.globalAlpha = point.opacity;
-    ctx.drawImage(
-      stamp,
-      point.x - halfW,
-      point.y - halfH,
-      stamp.width / 2,  // CSS size = canvas pixels / DPR
-      stamp.height / 2,
-    );
+  for (const p of points) {
+    if (p.size <= 0.1) continue;
+    const s = getOrCreateStamp(p.size, color, brushSettings.hardness);
+    const hw = s.width / 4; const hh = s.height / 4;
+    octx.globalAlpha = p.opacity;
+    octx.drawImage(s, p.x - hw, p.y - hh, s.width / 2, s.height / 2);
   }
 
+  const entry: CachedStroke = { bitmap: off, ox, oy };
+  strokeBmp.set(stroke.id, entry);
+  if (strokeBmp.size > 500) strokeBmp.delete(strokeBmp.keys().next().value!);
+  return entry;
+}
+
+function drawStroke(ctx: CanvasRenderingContext2D, stroke: Stroke): void {
+  if (stroke.points.length === 0) return;
+
+  // Eraser always per-stamp (destination-out modifies existing pixels)
+  if (stroke.compositeOperation === 'destination-out') {
+    ctx.save();
+    ctx.globalCompositeOperation = 'destination-out';
+    for (const p of stroke.points) {
+      if (p.size <= 0.1) continue;
+      const s = getOrCreateStamp(p.size, stroke.brushSettings.color, stroke.brushSettings.hardness);
+      const hw = s.width / 4; const hh = s.height / 4;
+      ctx.globalAlpha = p.opacity;
+      ctx.drawImage(s, p.x - hw, p.y - hh, s.width / 2, s.height / 2);
+    }
+    ctx.restore();
+    return;
+  }
+
+  let c = strokeBmp.get(stroke.id);
+  if (!c) c = renderStrokeToBitmap(stroke);
+
+  ctx.save();
+  ctx.globalAlpha = 1;
+  ctx.drawImage(c.bitmap, c.ox, c.oy);
   ctx.restore();
 }
+
+export { drawStroke, drawDotGrid };
+export function clearStrokeCache() { strokeBmp.clear(); }
 
 // ---- Text on Canvas ----------------------------------------------------------
 
