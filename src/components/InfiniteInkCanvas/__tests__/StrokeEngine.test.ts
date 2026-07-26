@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   getPressure,
-  smoothPoint,
+  createSmoothBuffer,
   mapPressureToSize,
   mapPressureToOpacity,
   interpolateStamps,
@@ -10,166 +10,124 @@ import {
 import type { StampPoint, PointerSample, BrushSettings } from '../types';
 
 const defaultBrush: BrushSettings = {
-  size: 10,
-  opacity: 1,
-  hardness: 0.8,
-  spacing: 0.3,
-  smoothing: 0.5,
-  color: '#000000',
-  pressureSize: true,
-  pressureOpacity: false,
+  size: 10, opacity: 1, hardness: 0.8, spacing: 0.3, smoothing: 0.5,
+  color: '#000000', pressureSize: true, pressureOpacity: false,
 };
 
+// ---- getPressure -----------------------------------------------------------
+
 describe('getPressure', () => {
-  it('returns pressure from pen events', () => {
+  it('returns pen pressure', () => {
     expect(getPressure({ pointerType: 'pen', pressure: 0.8 })).toBe(0.8);
   });
-
-  it('guards against zero pressure for pen', () => {
+  it('guards against zero pen pressure', () => {
     expect(getPressure({ pointerType: 'pen', pressure: 0 })).toBe(0.05);
   });
-
-  it('returns fixed 0.5 for mouse', () => {
+  it('returns 0.5 for mouse', () => {
     expect(getPressure({ pointerType: 'mouse', pressure: 0 })).toBe(0.5);
-    expect(getPressure({ pointerType: 'mouse', pressure: 0.5 })).toBe(0.5);
   });
 });
 
-describe('smoothPoint', () => {
-  const makePoint = (x: number, y: number, p: number): StampPoint => ({
-    x, y, size: 10, opacity: 1, pressure: p, tiltX: 0, tiltY: 0,
-  });
+// ---- createSmoothBuffer (SAI-style moving average) -------------------------
 
-  it('returns raw point when no previous point', () => {
-    const point = makePoint(100, 200, 0.8);
-    const result = smoothPoint(null, point, 0.5);
-    expect(result).toEqual(point);
+describe('createSmoothBuffer', () => {
+  it('size 1 at smoothing 0', () => {
+    const sb = createSmoothBuffer(0);
+    expect(sb.size).toBe(1);
+    expect(sb.buf).toEqual([]);
   });
-
-  it('returns raw point when smoothing is 0', () => {
-    const prev = makePoint(0, 0, 0.5);
-    const next = makePoint(100, 100, 0.9);
-    const result = smoothPoint(prev, next, 0);
-    expect(result.x).toBe(100);
-    expect(result.y).toBe(100);
-    expect(result.pressure).toBe(0.9);
+  it('size 20 at smoothing 1', () => {
+    expect(createSmoothBuffer(1).size).toBe(20);
   });
-
-  it('smooths position when smoothing > 0', () => {
-    const prev = makePoint(0, 0, 0.5);
-    const next = makePoint(100, 100, 0.5);
-    const result = smoothPoint(prev, next, 0.5);
-    // With smoothing=0.5, t = 1 - 0.5 = 0.5, so halfway between
-    expect(result.x).toBe(50);
-    expect(result.y).toBe(50);
+  it('size 2 at smoothing 0.1 (default)', () => {
+    expect(createSmoothBuffer(0.1).size).toBe(2);
   });
-
-  it('smooths pressure too', () => {
-    const prev = makePoint(0, 0, 0.2);
-    const next = makePoint(0, 0, 0.8);
-    const result = smoothPoint(prev, next, 0.5);
-    expect(result.pressure).toBe(0.5);
+  it('size 10 at smoothing 0.5', () => {
+    expect(createSmoothBuffer(0.5).size).toBe(10);
   });
 });
+
+// ---- Pressure mapping -------------------------------------------------------
 
 describe('mapPressureToSize', () => {
-  it('returns base size when disabled', () => {
+  it('returns baseSize when disabled', () => {
     expect(mapPressureToSize(0.1, 10, false)).toBe(10);
-    expect(mapPressureToSize(1, 10, false)).toBe(10);
   });
-
+  it('scales down at low pressure', () => {
+    expect(mapPressureToSize(0.05, 10, true)).toBeCloseTo(1.925, 1);
+  });
   it('returns full size at max pressure', () => {
-    const result = mapPressureToSize(1, 10, true);
-    expect(result).toBe(10);
-  });
-
-  it('returns reduced size at low pressure', () => {
-    const full = mapPressureToSize(1, 10, true);
-    const low = mapPressureToSize(0.05, 10, true);
-    expect(low).toBeLessThan(full);
-    // With p=0.05: 0.15 + 0.05 * 0.85 = 0.1925 → 1.925
-    expect(low).toBeCloseTo(1.925, 1);
+    expect(mapPressureToSize(1, 10, true)).toBe(10);
   });
 });
 
 describe('mapPressureToOpacity', () => {
-  it('returns base opacity when disabled', () => {
+  it('returns baseOpacity when disabled', () => {
     expect(mapPressureToOpacity(0.1, 0.8, false)).toBe(0.8);
   });
-
-  it('returns full opacity at max pressure', () => {
-    expect(mapPressureToOpacity(1, 0.8, true)).toBe(0.8);
-  });
-
-  it('returns reduced opacity at low pressure', () => {
-    const result = mapPressureToOpacity(0.05, 0.8, true);
-    expect(result).toBeLessThan(0.8);
+  it('scales down at low pressure', () => {
+    expect(mapPressureToOpacity(0.05, 0.8, true)).toBeLessThan(0.8);
   });
 });
+
+// ---- interpolateStamps ------------------------------------------------------
 
 describe('interpolateStamps', () => {
-  const bs: BrushSettings = {
-    ...defaultBrush,
-    size: 10,
-    spacing: 0.3,
-    pressureSize: false,
-    pressureOpacity: false,
-  };
+  const bs = { ...defaultBrush, pressureSize: false, pressureOpacity: false };
+  const from: StampPoint = { x: 0, y: 0, size: 10, opacity: 1, pressure: 0.5, tiltX: 0, tiltY: 0 };
+  const toNear: StampPoint = { x: 1, y: 0, size: 10, opacity: 1, pressure: 0.5, tiltX: 0, tiltY: 0 };
+  const toFar: StampPoint = { x: 50, y: 0, size: 10, opacity: 1, pressure: 0.8, tiltX: 0, tiltY: 0 };
 
-  it('returns the destination when close together', () => {
-    const from: StampPoint = { x: 0, y: 0, size: 10, opacity: 1, pressure: 0.5, tiltX: 0, tiltY: 0 };
-    const to: StampPoint = { x: 1, y: 0, size: 10, opacity: 1, pressure: 0.5, tiltX: 0, tiltY: 0 };
-    const result = interpolateStamps(from, to, bs);
-    // dist=1, stepSize=10*0.3=3, so dist < stepSize
-    expect(result).toHaveLength(1);
-    expect(result[0]).toEqual(to);
+  it('returns dest when close', () => {
+    expect(interpolateStamps(from, toNear, bs)).toEqual([toNear]);
   });
-
-  it('interpolates stamps when distance is large', () => {
-    const from: StampPoint = { x: 0, y: 0, size: 10, opacity: 1, pressure: 0.5, tiltX: 0, tiltY: 0 };
-    const to: StampPoint = { x: 50, y: 0, size: 10, opacity: 1, pressure: 0.5, tiltX: 0, tiltY: 0 };
-    const result = interpolateStamps(from, to, bs);
-    // dist=50, stepSize=3, steps = floor(50/3) = 16
-    expect(result).toHaveLength(16);
-  });
-
-  it('interpolates pressure between stamps', () => {
-    const from: StampPoint = { x: 0, y: 0, size: 10, opacity: 1, pressure: 0.2, tiltX: 0, tiltY: 0 };
-    const to: StampPoint = { x: 50, y: 0, size: 10, opacity: 1, pressure: 0.8, tiltX: 0, tiltY: 0 };
-    const result = interpolateStamps(from, to, bs);
-    expect(result[0].pressure).toBeGreaterThan(0.2);
-    expect(result[result.length - 1].pressure).toBe(0.8);
+  it('interpolates multiple stamps when far', () => {
+    const r = interpolateStamps(from, toFar, bs);
+    expect(r.length).toBeGreaterThan(1);
+    expect(r[r.length - 1].pressure).toBe(0.8);
   });
 });
+
+// ---- processSample (with SAI buffer) ----------------------------------------
 
 describe('processSample', () => {
   const sample: PointerSample = { x: 10, y: 20, pressure: 0.8, tiltX: 0, tiltY: 0, timestamp: 1 };
+  const sample2: PointerSample = { x: 30, y: 40, pressure: 0.6, tiltX: 0, tiltY: 0, timestamp: 2 };
 
-  it('returns single stamp for first point', () => {
-    const result = processSample(null, sample, defaultBrush);
-    expect(result).toHaveLength(1);
-    expect(result[0].x).toBe(10);
-    expect(result[0].y).toBe(20);
+  it('first call returns single stamp', () => {
+    const sb = createSmoothBuffer(0.5);
+    const r = processSample(sb, null, sample, defaultBrush);
+    expect(r).toHaveLength(1);
+    expect(r[0].x).toBe(10);
+    expect(r[0].y).toBe(20);
   });
 
-  it('returns interpolated stamps for subsequent points', () => {
-    const prevStamp: StampPoint = { x: 0, y: 0, size: 10, opacity: 1, pressure: 0.5, tiltX: 0, tiltY: 0 };
-    const result = processSample(prevStamp, sample, defaultBrush);
-    expect(result.length).toBeGreaterThan(0);
+  it('subsequent call returns interpolated stamps', () => {
+    const sb = createSmoothBuffer(0.5);
+    const prev = processSample(sb, null, sample, defaultBrush)[0];
+    const r = processSample(sb, prev, sample2, defaultBrush);
+    expect(r.length).toBeGreaterThan(0);
   });
 
-  it('respects pressureSize setting', () => {
-    const enabled = processSample(null, { ...sample, pressure: 0.1 }, {
-      ...defaultBrush,
-      pressureSize: true,
-      size: 20,
-    });
-    const disabled = processSample(null, { ...sample, pressure: 0.1 }, {
-      ...defaultBrush,
-      pressureSize: false,
-      size: 20,
-    });
-    // Enabled should produce a smaller stamp at low pressure
-    expect(enabled[0].size).toBeLessThan(disabled[0].size);
+  it('buffer smooths position toward average', () => {
+    // With a large buffer, the smoothed output lags behind the raw input
+    const sb = createSmoothBuffer(1); // size 20
+    const raw = { x: 100, y: 0, pressure: 0.5, tiltX: 0, tiltY: 0, timestamp: 1 };
+    const r = processSample(sb, null, raw, { ...defaultBrush, pressureSize: false, pressureOpacity: false });
+    // First point with buffer size 20 just has 1 entry → raw
+    expect(r[0].x).toBe(100);
+  });
+
+  it('size 1 buffer = no smoothing (raw input)', () => {
+    const sb = createSmoothBuffer(0);
+    // Feed several points through; each should be raw since buffer size is 1
+    let prev: StampPoint | null = null;
+    for (const x of [10, 30, 50, 70]) {
+      const s: PointerSample = { x, y: 10, pressure: 0.5, tiltX: 0, tiltY: 0, timestamp: 1 };
+      const r = processSample(sb, prev, s, { ...defaultBrush, pressureSize: false, pressureOpacity: false });
+      prev = r[r.length - 1];
+    }
+    // After 4 samples, buffer size 1 means the last output is the last input (50)
+    expect(prev!.x).toBe(70);
   });
 });

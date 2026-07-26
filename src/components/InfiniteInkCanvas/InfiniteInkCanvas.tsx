@@ -1,7 +1,8 @@
 import React, { useRef, useEffect, useCallback, useState } from 'react';
 import { useCanvasStore } from './useCanvasStore';
 import { renderAll } from './CanvasRenderer';
-import { processSample, getPressure } from './StrokeEngine';
+import { processSample, getPressure, createSmoothBuffer } from './StrokeEngine';
+import type { SmoothBuffer } from './StrokeEngine';
 import { screenToWorld, clampZoom, zoomAt, ERASER_RADIUS } from './constants';
 import TextNode from './TextNode';
 import Toolbar from './Toolbar';
@@ -16,6 +17,7 @@ const InfiniteInkCanvas: React.FC = () => {
   const containerRef = useRef<HTMLDivElement>(null);
   const currentStrokeRef = useRef<Stroke | null>(null);
   const strokeStartRef = useRef<{ world: { x: number; y: number }; pressure: number; tiltX: number; tiltY: number; isEraser: boolean } | null>(null);
+  const smoothBufRef = useRef<SmoothBuffer>(createSmoothBuffer(0));
   const isDrawingRef = useRef(false);
   const panAnchorRef = useRef<{ sx: number; sy: number; camX: number; camY: number } | null>(null);
   const [cursorScreen, setCursorScreen] = useState<{ x: number; y: number } | null>(null);
@@ -206,6 +208,7 @@ const InfiniteInkCanvas: React.FC = () => {
       // Pen / eraser — capture pointer for drawing
       canvas.setPointerCapture(e.pointerId);
       isDrawingRef.current = true;
+      smoothBufRef.current = createSmoothBuffer(state.brushSettings.smoothing);
 
       const isEraser = state.activeTool === 'eraser';
       cursorSizeRef.current = isEraser ? ERASER_RADIUS : state.brushSettings.size;
@@ -305,7 +308,7 @@ const InfiniteInkCanvas: React.FC = () => {
             timestamp: Date.now(),
           };
 
-          const startStamps = processSample(null, startSample, bs);
+          const startStamps = processSample(smoothBufRef.current, null, startSample, bs);
           stroke.points.push(...startStamps);
           strokeStartRef.current = null; // consumed
         }
@@ -321,7 +324,7 @@ const InfiniteInkCanvas: React.FC = () => {
             }
           : state.brushSettings;
 
-        const newStamps = processSample(prevStamp, sample, bs);
+        const newStamps = processSample(smoothBufRef.current, prevStamp, sample, bs);
         stroke.points.push(...newStamps);
       }
 

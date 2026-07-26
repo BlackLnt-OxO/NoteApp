@@ -1,74 +1,66 @@
 /**
- * StrokeEngine — Pure-function brush pipeline.
+ * StrokeEngine — Pure-function brush pipeline with SAI-style stabiliser.
  *
- * Responsibilities:
- * 1. Extract pressure from PointerEvent
- * 2. Smooth raw points to reduce jitter
- * 3. Interpolate stamps between points based on brush spacing
- * 4. Map pressure → size / opacity
- *
- * No React, no DOM, no side effects.
+ * Smoothing uses a moving-average ring buffer (like PaintTool SAI's stabilizer):
+ * the output trails behind the input like it's on a string.  Lower smoothing =
+ * smaller buffer = tighter tracking.
  */
 
 import type { StampPoint, PointerSample, BrushSettings } from './types';
 
-// ---- Pressure extraction -----------------------------------------------------
+// ---- Smoothing buffer (SAI-style moving average) ----------------------------
 
-/** Return a sensible pressure value for any pointer type. */
-export function getPressure(e: { pointerType: string; pressure: number }): number {
-  if (e.pointerType === 'pen') {
-    // Digitizer pens report 0–1; guard against 0 which makes strokes invisible
-    return e.pressure > 0.01 ? e.pressure : 0.05;
-  }
-  // Mouse: no real pressure → fixed midpoint
-  return 0.5;
+export interface SmoothBuffer {
+  buf: { x: number; y: number; pressure: number }[];
+  size: number;
 }
 
-// ---- Smoothing ---------------------------------------------------------------
-
-/**
- * Smooth a new point toward the previous point.
- * `amount` is 0–1, where 0 = no smoothing (raw), 1 = maximum smoothing.
- */
-export function smoothPoint(
-  previous: StampPoint | null,
-  next: StampPoint,
-  amount: number,
-): StampPoint {
-  if (!previous) return next;
-  const t = 1 - amount; // blend factor toward next (t=1 → raw, t=0 → frozen)
+/** Create a per-stroke smoothing buffer.  smoothing 0 = off (size 1), 1 = max (size 20). */
+export function createSmoothBuffer(smoothing: number): SmoothBuffer {
   return {
-    ...next,
-    x: previous.x + (next.x - previous.x) * t,
-    y: previous.y + (next.y - previous.y) * t,
-    pressure: previous.pressure + (next.pressure - previous.pressure) * t,
+    buf: [],
+    size: Math.max(1, Math.round(smoothing * 20)),
   };
+}
+
+function smoothWithBuffer(
+  sb: SmoothBuffer,
+  p: { x: number; y: number; pressure: number },
+): { x: number; y: number; pressure: number } {
+  sb.buf.push(p);
+  if (sb.buf.length > sb.size) sb.buf.shift();
+
+  if (sb.buf.length === 1) return p;
+
+  let sx = 0, sy = 0, sp = 0;
+  for (const b of sb.buf) {
+    sx += b.x; sy += b.y; sp += b.pressure;
+  }
+  const n = sb.buf.length;
+  return { x: sx / n, y: sy / n, pressure: sp / n };
+}
+
+// ---- Pressure extraction -----------------------------------------------------
+
+export function getPressure(e: { pointerType: string; pressure: number }): number {
+  if (e.pointerType === 'pen') {
+    return e.pressure > 0.01 ? e.pressure : 0.05;
+  }
+  return 0.5;
 }
 
 // ---- Pressure mapping --------------------------------------------------------
 
-/**
- * Map raw pressure (0–1) to a computed brush size.
- * When disabled, returns baseSize unchanged.
- */
 export function mapPressureToSize(
-  pressure: number,
-  baseSize: number,
-  enabled: boolean,
+  pressure: number, baseSize: number, enabled: boolean,
 ): number {
   if (!enabled) return baseSize;
   const p = Math.max(0.05, Math.min(1, pressure));
   return baseSize * (0.15 + p * 0.85);
 }
 
-/**
- * Map raw pressure (0–1) to a computed opacity multiplier.
- * When disabled, returns baseOpacity unchanged.
- */
 export function mapPressureToOpacity(
-  pressure: number,
-  baseOpacity: number,
-  enabled: boolean,
+  pressure: number, baseOpacity: number, enabled: boolean,
 ): number {
   if (!enabled) return baseOpacity;
   const p = Math.max(0.05, Math.min(1, pressure));
@@ -77,13 +69,6 @@ export function mapPressureToOpacity(
 
 // ---- Stamp interpolation -----------------------------------------------------
 
-/**
- * Generate stamp points between `from` and `to` such that consecutive stamps
- * are spaced by `brushSize * spacing` world units.
- *
- * Returns an array of StampPoint including the final `to` position
- * (but NOT the `from` position — the caller already added it).
- */
 export function interpolateStamps(
   from: StampPoint,
   to: StampPoint,
@@ -99,7 +84,6 @@ export function interpolateStamps(
   const dist = Math.sqrt(dx * dx + dy * dy);
 
   if (dist <= stepSize) {
-    // Close enough — just emit the destination point
     results.push(to);
     return results;
   }
@@ -114,16 +98,8 @@ export function interpolateStamps(
     const tiltX = from.tiltX + (to.tiltX - from.tiltX) * t;
     const tiltY = from.tiltY + (to.tiltY - from.tiltY) * t;
 
-    const size = mapPressureToSize(
-      pressure,
-      brushSettings.size,
-      brushSettings.pressureSize,
-    );
-    const opacity = mapPressureToOpacity(
-      pressure,
-      brushSettings.opacity,
-      brushSettings.pressureOpacity,
-    );
+    const size = mapPressureToSize(pressure, brushSettings.size, brushSettings.pressureSize);
+    const opacity = mapPressureToOpacity(pressure, brushSettings.opacity, brushSettings.pressureOpacity);
 
     results.push({ x, y, size, opacity, pressure, tiltX, tiltY });
   }
@@ -134,59 +110,45 @@ export function interpolateStamps(
 // ---- Main processing entry point ---------------------------------------------
 
 /**
- * Process a raw pointer sample into one or more stamp-ready points.
+ * Process a raw pointer sample into stamp-ready points.
  *
- * Call this for each coalesced pointer event during a stroke.
- * `prevStamp` is the last emitted stamp (or null for the first point).
- * `sample` is the current raw (world-coordinate) pointer sample.
- *
- * Returns an array of StampPoint ready to be appended to the stroke.
+ * `smoothBuf` is the per-stroke SAI-style moving-average buffer (created
+ * via `createSmoothBuffer` at the start of each stroke).
+ * `prevStamp` is the last *emitted* stamp (may be null for the first call).
  */
 export function processSample(
+  smoothBuf: SmoothBuffer,
   prevStamp: StampPoint | null,
   sample: PointerSample,
   brushSettings: BrushSettings,
 ): StampPoint[] {
-  // Compute size & opacity for the raw point
-  const rawSize = mapPressureToSize(
-    sample.pressure,
-    brushSettings.size,
-    brushSettings.pressureSize,
-  );
-  const rawOpacity = mapPressureToOpacity(
-    sample.pressure,
-    brushSettings.opacity,
-    brushSettings.pressureOpacity,
-  );
-
-  const rawStamp: StampPoint = {
+  // Feed the raw world position into the SAI stabiliser
+  const smoothed = smoothWithBuffer(smoothBuf, {
     x: sample.x,
     y: sample.y,
-    size: rawSize,
-    opacity: rawOpacity,
     pressure: sample.pressure,
+  });
+
+  const size = mapPressureToSize(smoothed.pressure, brushSettings.size, brushSettings.pressureSize);
+  const opacity = mapPressureToOpacity(smoothed.pressure, brushSettings.opacity, brushSettings.pressureOpacity);
+
+  const stamp: StampPoint = {
+    x: smoothed.x,
+    y: smoothed.y,
+    size,
+    opacity,
+    pressure: smoothed.pressure,
     tiltX: sample.tiltX,
     tiltY: sample.tiltY,
   };
 
-  // Smooth the raw stamp toward the previous stamp
-  const smoothed = smoothPoint(prevStamp, rawStamp, brushSettings.smoothing);
+  if (!prevStamp) return [stamp];
 
-  if (!prevStamp) {
-    // First point of the stroke — just emit it
-    return [smoothed];
-  }
-
-  // Interpolate stamps between prevStamp and smoothed
-  return interpolateStamps(prevStamp, smoothed, brushSettings);
+  return interpolateStamps(prevStamp, stamp, brushSettings);
 }
 
-// ---- Utility: stamp hash for off-screen caching -------------------------------
+// ---- Utility -----------------------------------------------------------------
 
-export function stampCacheKey(
-  size: number,
-  color: string,
-  hardness: number,
-): string {
+export function stampCacheKey(size: number, color: string, hardness: number): string {
   return `${size.toFixed(1)}|${color}|${hardness.toFixed(2)}`;
 }
