@@ -60,8 +60,11 @@ export function renderAll(params: RenderParams): void {
 }
 
 // ---- Dot Grid ----------------------------------------------------------------
+// Dots keep a consistent visual spacing (screen px) at all zoom levels.
 
-const DOT_SPACING = 24; // fixed world-space grid spacing
+const DOT_SCREEN_STEP = 24;  // visual px between dots — never changes
+const DOT_ALPHA = 0.18;
+const DOT_RADIUS = 0.7;      // screen px
 
 function drawDotGrid(
   ctx: CanvasRenderingContext2D,
@@ -69,30 +72,28 @@ function drawDotGrid(
   canvasW: number,
   canvasH: number,
 ): void {
+  // World-space step that produces the desired screen spacing
+  const worldStep = DOT_SCREEN_STEP / camera.zoom;
+
   const topLeft = screenToWorld(0, 0, camera);
   const bottomRight = screenToWorld(canvasW, canvasH, camera);
 
-  // Pick a step that looks good at current zoom
-  let step = DOT_SPACING;
-  if (camera.zoom < 0.25) step = DOT_SPACING * 4;
-  else if (camera.zoom < 0.5) step = DOT_SPACING * 2;
-  else if (camera.zoom > 2) step = Math.max(6, DOT_SPACING / 2);
+  const startX = Math.floor(topLeft.x / worldStep) * worldStep;
+  const startY = Math.floor(topLeft.y / worldStep) * worldStep;
+  const endX = bottomRight.x + worldStep;
+  const endY = bottomRight.y + worldStep;
 
-  const startX = Math.floor(topLeft.x / step) * step;
-  const startY = Math.floor(topLeft.y / step) * step;
-  const endX = bottomRight.x + step;
-  const endY = bottomRight.y + step;
+  // Skip if there would be too many dots (extreme zoom-out)
+  const estDots = ((endX - startX) / worldStep) * ((endY - startY) / worldStep);
+  if (estDots > 40000) return;
 
-  const dotAlpha = Math.max(0.08, Math.min(0.25, camera.zoom * 0.18));
-  const dotRadius = Math.max(0.5, Math.min(2.0, camera.zoom * 0.9));
-
-  ctx.fillStyle = `rgba(255,255,255,${dotAlpha.toFixed(3)})`;
+  ctx.fillStyle = `rgba(255,255,255,${DOT_ALPHA.toFixed(3)})`;
   ctx.beginPath();
-  for (let wx = startX; wx <= endX; wx += step) {
-    for (let wy = startY; wy <= endY; wy += step) {
+  for (let wx = startX; wx <= endX; wx += worldStep) {
+    for (let wy = startY; wy <= endY; wy += worldStep) {
       const s = worldToScreen(wx, wy, camera);
-      ctx.moveTo(s.x + dotRadius, s.y);
-      ctx.arc(s.x, s.y, dotRadius, 0, Math.PI * 2);
+      ctx.moveTo(s.x + DOT_RADIUS, s.y);
+      ctx.arc(s.x, s.y, DOT_RADIUS, 0, Math.PI * 2);
     }
   }
   ctx.fill();
