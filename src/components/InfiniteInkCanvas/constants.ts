@@ -39,10 +39,9 @@ export const MAX_HISTORY = 50;
 
 export const TOOLBAR_STORAGE_KEY = 'stickynotes-inkcanvas-toolbar';
 
-export const MIN_TOOLBAR_WIDTH = 100;         // narrowest usable width before auto-collapse
-export const TOOLBAR_COLLAPSE_WIDTH = 50;     // below this the resize handle triggers collapse
+export const MIN_TOOLBAR_WIDTH = 180;         // narrowest before content gets cut off
+export const TOOLBAR_COLLAPSE_WIDTH = 80;     // below this the resize triggers collapse
 export const MAX_TOOLBAR_WIDTH = 420;
-export const COLLAPSED_TAB_SIZE = 6;          // thin strip visible when collapsed
 export const AUTO_COLLAPSE_EDGE_PX = 30;      // distance from right edge to auto-collapse
 export const RESIZE_HANDLE_WIDTH = 6;
 
