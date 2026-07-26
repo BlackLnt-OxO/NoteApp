@@ -1,8 +1,8 @@
 import React, { useRef, useEffect, useCallback, useState } from 'react';
 import { useCanvasStore } from './useCanvasStore';
 import { renderAll } from './CanvasRenderer';
-import { processSample, getPressure, createPredictBuffer } from './StrokeEngine';
-import type { PredictBuffer } from './StrokeEngine';
+import { processSample, getPressure, initOneEuro } from './StrokeEngine';
+import type { OneEuroState } from './StrokeEngine';
 import { screenToWorld, clampZoom, zoomAt, ERASER_RADIUS } from './constants';
 import TextNode from './TextNode';
 import Toolbar from './Toolbar';
@@ -17,7 +17,7 @@ const InfiniteInkCanvas: React.FC = () => {
   const containerRef = useRef<HTMLDivElement>(null);
   const currentStrokeRef = useRef<Stroke | null>(null);
   const strokeStartRef = useRef<{ world: { x: number; y: number }; pressure: number; tiltX: number; tiltY: number; isEraser: boolean } | null>(null);
-  const predBufRef = useRef<PredictBuffer>(createPredictBuffer(0));
+  const oeStateRef = useRef<OneEuroState | null>(null);
   const isDrawingRef = useRef(false);
   const panAnchorRef = useRef<{ sx: number; sy: number; camX: number; camY: number } | null>(null);
   const [cursorScreen, setCursorScreen] = useState<{ x: number; y: number } | null>(null);
@@ -208,7 +208,7 @@ const InfiniteInkCanvas: React.FC = () => {
       // Pen / eraser — capture pointer for drawing
       canvas.setPointerCapture(e.pointerId);
       isDrawingRef.current = true;
-      predBufRef.current = createPredictBuffer(state.brushSettings.smoothing);
+      oeStateRef.current = null; // fresh 1€ filter state per stroke
 
       const isEraser = state.activeTool === 'eraser';
       cursorSizeRef.current = isEraser ? ERASER_RADIUS : state.brushSettings.size;
@@ -308,9 +308,10 @@ const InfiniteInkCanvas: React.FC = () => {
             timestamp: Date.now(),
           };
 
-          const startStamps = processSample(predBufRef.current, null, startSample, bs);
-          stroke.points.push(...startStamps);
-          strokeStartRef.current = null; // consumed
+          const sr = processSample(oeStateRef.current, null, startSample, bs);
+          stroke.points.push(...sr.stamps);
+          oeStateRef.current = sr.state;
+          strokeStartRef.current = null;
         }
 
         const prevStamp = stroke.points.length > 0 ? stroke.points[stroke.points.length - 1] : null;
@@ -324,8 +325,9 @@ const InfiniteInkCanvas: React.FC = () => {
             }
           : state.brushSettings;
 
-        const newStamps = processSample(predBufRef.current, prevStamp, sample, bs);
-        stroke.points.push(...newStamps);
+        const result = processSample(oeStateRef.current, prevStamp, sample, bs);
+        stroke.points.push(...result.stamps);
+        oeStateRef.current = result.state;
       }
 
       dirtyRef.current = true;

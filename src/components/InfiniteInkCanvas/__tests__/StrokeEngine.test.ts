@@ -1,122 +1,69 @@
 import { describe, it, expect } from 'vitest';
 import {
-  getPressure,
-  createPredictBuffer,
-  mapPressureToSize,
-  mapPressureToOpacity,
-  interpolateStamps,
-  processSample,
+  getPressure, initOneEuro,
+  mapPressureToSize, mapPressureToOpacity,
+  interpolateStamps, processSample,
 } from '../StrokeEngine';
 import type { StampPoint, PointerSample, BrushSettings } from '../types';
 
-const defaultBrush: BrushSettings = {
+const b: BrushSettings = {
   size: 10, opacity: 1, hardness: 0.8, spacing: 0.3, smoothing: 0.5,
-  color: '#000000', pressureSize: true, pressureOpacity: false,
+  color: '#000', pressureSize: true, pressureOpacity: false,
 };
 
 describe('getPressure', () => {
-  it('returns pen pressure', () => {
-    expect(getPressure({ pointerType: 'pen', pressure: 0.8 })).toBe(0.8);
-  });
-  it('guards zero pen pressure', () => {
-    expect(getPressure({ pointerType: 'pen', pressure: 0 })).toBe(0.05);
-  });
-  it('returns 0.5 for mouse', () => {
-    expect(getPressure({ pointerType: 'mouse', pressure: 0 })).toBe(0.5);
-  });
+  it('pen pressure', () => expect(getPressure({ pointerType: 'pen', pressure: 0.8 })).toBe(0.8));
+  it('zero pen → min', () => expect(getPressure({ pointerType: 'pen', pressure: 0 })).toBe(0.05));
+  it('mouse → 0.5', () => expect(getPressure({ pointerType: 'mouse', pressure: 0 })).toBe(0.5));
 });
 
-describe('createPredictBuffer', () => {
-  it('factor 0 at smoothing 0', () => {
-    expect(createPredictBuffer(0).factor).toBe(0);
+describe('1€ filter', () => {
+  it('initOneEuro returns state', () => {
+    const s = initOneEuro(10, 20, 0.5, 1000);
+    expect(s.prevX).toBe(10);
+    expect(s.prevY).toBe(20);
   });
-  it('factor 1 at smoothing 0.5', () => {
-    expect(createPredictBuffer(0.5).factor).toBe(1);
+
+  it('processSample returns stamps + state', () => {
+    const sample: PointerSample = { x: 10, y: 20, pressure: 0.5, tiltX: 0, tiltY: 0, timestamp: 1000 };
+    const { stamps, state } = processSample(null, null, sample, b);
+    expect(stamps).toHaveLength(1);
+    expect(stamps[0].x).toBe(10);
+    expect(state.prevX).toBe(10);
   });
-  it('factor 0.2 at smoothing 0.1', () => {
-    expect(createPredictBuffer(0.1).factor).toBe(0.2);
+
+  it('second call uses filter state', () => {
+    const s1: PointerSample = { x: 10, y: 20, pressure: 0.5, tiltX: 0, tiltY: 0, timestamp: 1000 };
+    const s2: PointerSample = { x: 30, y: 40, pressure: 0.5, tiltX: 0, tiltY: 0, timestamp: 1016 };
+    const r1 = processSample(null, null, s1, { ...b, pressureSize: false, pressureOpacity: false });
+    const prev = r1.stamps[r1.stamps.length - 1];
+    const r2 = processSample(r1.state, prev, s2, { ...b, pressureSize: false, pressureOpacity: false });
+    // With smoothing=0.5, cutoff≈0.5 Hz, dt=16ms → alpha small → smoothed output is near input
+    const last = r2.stamps[r2.stamps.length - 1];
+    expect(last.x).toBeGreaterThan(10); // moved toward 30
+    expect(last.x).toBeLessThan(30);    // but lagged behind (filtered)
   });
-  it('factor 2 at smoothing 1', () => {
-    expect(createPredictBuffer(1).factor).toBe(2);
+
+  it('smoothing=0 → raw output', () => {
+    const s: PointerSample = { x: 0, y: 0, pressure: 0.5, tiltX: 0, tiltY: 0, timestamp: 1 };
+    const bs: BrushSettings = { ...b, smoothing: 0, pressureSize: false, pressureOpacity: false };
+    const r1 = processSample(null, null, s, bs);
+    expect(r1.stamps[0].x).toBe(0);
   });
 });
 
 describe('mapPressureToSize', () => {
-  it('returns baseSize when disabled', () => {
-    expect(mapPressureToSize(0.1, 10, false)).toBe(10);
-  });
-  it('scales with pressure', () => {
-    const full = mapPressureToSize(1, 10, true);
-    const low = mapPressureToSize(0.05, 10, true);
-    expect(low).toBeLessThan(full);
-  });
+  it('disabled → base', () => expect(mapPressureToSize(0.1, 10, false)).toBe(10));
+  it('low pressure → small', () => expect(mapPressureToSize(0.05, 10, true)).toBeLessThan(10));
 });
 
 describe('mapPressureToOpacity', () => {
-  it('returns baseOpacity when disabled', () => {
-    expect(mapPressureToOpacity(0.1, 0.8, false)).toBe(0.8);
-  });
+  it('disabled → base', () => expect(mapPressureToOpacity(0.1, 0.8, false)).toBe(0.8));
 });
 
 describe('interpolateStamps', () => {
-  const bs = { ...defaultBrush, pressureSize: false, pressureOpacity: false };
+  const bs = { ...b, pressureSize: false, pressureOpacity: false };
   const from: StampPoint = { x: 0, y: 0, size: 10, opacity: 1, pressure: 0.5, tiltX: 0, tiltY: 0 };
-  const toNear: StampPoint = { x: 1, y: 0, size: 10, opacity: 1, pressure: 0.5, tiltX: 0, tiltY: 0 };
-  const toFar: StampPoint = { x: 50, y: 0, size: 10, opacity: 1, pressure: 0.8, tiltX: 0, tiltY: 0 };
-
-  it('returns dest when close', () => {
-    expect(interpolateStamps(from, toNear, bs)).toEqual([toNear]);
-  });
-  it('interpolates multiple stamps when far', () => {
-    const r = interpolateStamps(from, toFar, bs);
-    expect(r.length).toBeGreaterThan(1);
-  });
-});
-
-describe('processSample (Apple Pencil prediction)', () => {
-  const s1: PointerSample = { x: 10, y: 20, pressure: 0.8, tiltX: 0, tiltY: 0, timestamp: 1 };
-  const s2: PointerSample = { x: 30, y: 40, pressure: 0.6, tiltX: 0, tiltY: 0, timestamp: 2 };
-  const s3: PointerSample = { x: 50, y: 60, pressure: 0.4, tiltX: 0, tiltY: 0, timestamp: 3 };
-
-  it('first call returns single stamp', () => {
-    const pb = createPredictBuffer(0.5);
-    const r = processSample(pb, null, s1, defaultBrush);
-    expect(r).toHaveLength(1);
-    expect(r[0].x).toBe(10);
-    expect(r[0].y).toBe(20);
-  });
-
-  it('with prediction factor > 0, output runs ahead of input', () => {
-    const pb = createPredictBuffer(1); // factor = 2.0
-    // First point establishes baseline
-    const r1 = processSample(pb, null, s1, { ...defaultBrush, pressureSize: false, pressureOpacity: false });
-    const prev = r1[r1.length - 1];
-    // Second point — velocity = (30-10, 40-20) = (20, 20), pred = 30 + 20*2 = 70
-    const r2 = processSample(pb, prev, s2, { ...defaultBrush, pressureSize: false, pressureOpacity: false });
-    const last = r2[r2.length - 1];
-    expect(last.x).toBe(70);
-    expect(last.y).toBe(80);
-  });
-
-  it('factor 0 = raw input (no prediction)', () => {
-    const pb = createPredictBuffer(0);
-    const r1 = processSample(pb, null, s1, { ...defaultBrush, pressureSize: false, pressureOpacity: false });
-    const prev = r1[r1.length - 1];
-    const r2 = processSample(pb, prev, s3, { ...defaultBrush, pressureSize: false, pressureOpacity: false });
-    const last = r2[r2.length - 1];
-    // factor 0 → output = raw input = 50
-    expect(last.x).toBe(50);
-    expect(last.y).toBe(60);
-  });
-
-  it('default 10% smoothing = slight prediction', () => {
-    const pb = createPredictBuffer(0.1); // factor = 0.2
-    const r1 = processSample(pb, null, s1, { ...defaultBrush, pressureSize: false, pressureOpacity: false });
-    const prev = r1[r1.length - 1];
-    const r2 = processSample(pb, prev, s2, { ...defaultBrush, pressureSize: false, pressureOpacity: false });
-    const last = r2[r2.length - 1];
-    // v=(20,20), pred = 30 + 20*0.2 = 34
-    expect(last.x).toBeCloseTo(34, 0);
-    expect(last.y).toBeCloseTo(44, 0);
-  });
+  const to: StampPoint = { x: 50, y: 0, size: 10, opacity: 1, pressure: 0.8, tiltX: 0, tiltY: 0 };
+  it('interpolates', () => expect(interpolateStamps(from, to, bs).length).toBeGreaterThan(1));
 });

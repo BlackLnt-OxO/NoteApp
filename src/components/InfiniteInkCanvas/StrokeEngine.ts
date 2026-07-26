@@ -1,87 +1,105 @@
 /**
- * StrokeEngine — Pure-function brush pipeline with Apple Pencil-style
- * input prediction.
+ * StrokeEngine — Pure-function brush pipeline with 1€ Filter smoothing.
  *
- * Instead of lag-inducing smoothing, we use a 3-point velocity buffer to
- * predict where the pen *will be* 1-2 frames ahead and render there.
- * Result: zero-latency feel — the line runs ahead of the pen tip slightly,
- * like Apple Pencil on iPad.
+ * The 1€ Filter (Géry Casiez, 2012) is the gold standard for drawing apps:
+ * - Slow strokes → heavy smoothing (removes hand wobble)
+ * - Fast strokes → light smoothing (preserves sharp corners)
+ * - Used by Photoshop, Procreate, Clip Studio Paint
+ *
+ * Parameters are mapped from a single 0-1 "smoothing" slider:
+ *   smoothing 0   → minCutoff=1.0 Hz  (raw input)
+ *   smoothing 0.1 → minCutoff=0.9 Hz  (slight stabilisation — default)
+ *   smoothing 1   → minCutoff=0.01 Hz (maximum stabilisation)
  */
 
 import type { StampPoint, PointerSample, BrushSettings } from './types';
 
-// ---- Prediction buffer (Apple Pencil style) ----------------------------------
+// ---- 1€ Filter state ---------------------------------------------------------
 
-export interface PredictBuffer {
-  buf: { x: number; y: number; pressure: number }[];
-  /** Multiplier applied to velocity for forward prediction (0-2). */
-  factor: number;
+export interface OneEuroState {
+  prevX: number;
+  prevY: number;
+  prevP: number;
+  prevTimestamp: number;
+  dxHat: number; // smoothed derivative (velocity estimate)
+  dyHat: number;
 }
 
-/** Create a per-stroke prediction buffer.  smoothing 0 = off, 1 = max predict. */
-export function createPredictBuffer(smoothing: number): PredictBuffer {
-  return {
-    buf: [],
-    factor: smoothing * 2, // 10% → 0.2x, 50% → 1.0x, 100% → 2.0x
-  };
+/** Create initial state at the first input point. */
+export function initOneEuro(x: number, y: number, pressure: number, timestamp: number): OneEuroState {
+  return { prevX: x, prevY: y, prevP: pressure, prevTimestamp: timestamp, dxHat: 0, dyHat: 0 };
 }
 
-/**
- * Apple Pencil-style prediction:
- * 1. Keep last 3 raw points
- * 2. Compute velocity from last 2 points
- * 3. Extrapolate forward: output = current + velocity * factor
- *
- * The line runs AHEAD of the pen tip, compensating for display latency.
- */
-function predict(
-  pb: PredictBuffer,
-  p: { x: number; y: number; pressure: number },
-): { x: number; y: number; pressure: number } {
-  pb.buf.push(p);
-  if (pb.buf.length > 3) pb.buf.shift();
+// ---- 1€ Filter core ----------------------------------------------------------
 
-  if (pb.buf.length < 2 || pb.factor <= 0) return p;
+const BETA = 0.007;   // speed coefficient (standard value from the paper)
+const DCUTOFF = 1.0;  // derivative cutoff in Hz
 
-  const prev = pb.buf[pb.buf.length - 2];
-  const curr = pb.buf[pb.buf.length - 1];
+function oneEuroFilter(
+  state: OneEuroState,
+  x: number,
+  y: number,
+  pressure: number,
+  timestamp: number,
+  minCutoff: number,
+): { x: number; y: number; pressure: number; state: OneEuroState } {
+  const dt = (timestamp - state.prevTimestamp) / 1000;
+  if (dt <= 0 || dt > 1) {
+    // First frame or huge gap — reset
+    const fresh = initOneEuro(x, y, pressure, timestamp);
+    return { x, y, pressure, state: fresh };
+  }
 
-  const vx = curr.x - prev.x;
-  const vy = curr.y - prev.y;
-  const vp = curr.pressure - prev.pressure;
+  // Compute raw derivative (velocity)
+  const dx = (x - state.prevX) / dt;
+  const dy = (y - state.prevY) / dt;
+  const speed = Math.sqrt(dx * dx + dy * dy);
 
-  return {
-    x: curr.x + vx * pb.factor,
-    y: curr.y + vy * pb.factor,
-    pressure: Math.max(0.05, Math.min(1, curr.pressure + vp * pb.factor)),
+  // Adapt cutoff: faster motion → higher cutoff → less smoothing
+  const cutoff = minCutoff + BETA * speed;
+
+  // Smoothing factor
+  const tau = 1 / (2 * Math.PI * cutoff);
+  const alpha = 1 / (1 + tau / dt);
+
+  // Smooth position
+  const sx = state.prevX + alpha * (x - state.prevX);
+  const sy = state.prevY + alpha * (y - state.prevY);
+
+  // Smooth derivative (for next frame's speed estimate)
+  const dtau = 1 / (2 * Math.PI * DCUTOFF);
+  const dalpha = 1 / (1 + dtau / dt);
+  const sdx = state.dxHat + dalpha * (dx - state.dxHat);
+  const sdy = state.dyHat + dalpha * (dy - state.dyHat);
+
+  const sp = state.prevP + alpha * (pressure - state.prevP);
+
+  const nextState: OneEuroState = {
+    prevX: sx, prevY: sy, prevP: sp,
+    prevTimestamp: timestamp,
+    dxHat: sdx, dyHat: sdy,
   };
+
+  return { x: sx, y: sy, pressure: sp, state: nextState };
 }
 
 // ---- Pressure extraction -----------------------------------------------------
 
 export function getPressure(e: { pointerType: string; pressure: number }): number {
-  if (e.pointerType === 'pen') {
-    return e.pressure > 0.01 ? e.pressure : 0.05;
-  }
+  if (e.pointerType === 'pen') return e.pressure > 0.01 ? e.pressure : 0.05;
   return 0.5;
 }
 
 // ---- Pressure mapping --------------------------------------------------------
 
-export function mapPressureToSize(
-  pressure: number, baseSize: number, enabled: boolean,
-): number {
+export function mapPressureToSize(pressure: number, baseSize: number, enabled: boolean): number {
   if (!enabled) return baseSize;
-  const p = Math.max(0.05, Math.min(1, pressure));
-  return baseSize * (0.15 + p * 0.85);
+  return baseSize * (0.15 + Math.max(0.05, Math.min(1, pressure)) * 0.85);
 }
 
-export function mapPressureToOpacity(
-  pressure: number, baseOpacity: number, enabled: boolean,
-): number {
+export function mapPressureToOpacity(pressure: number, baseOpacity: number, enabled: boolean): number {
   if (!enabled) return baseOpacity;
-  const p = Math.max(0.05, Math.min(1, pressure));
-  return baseOpacity * (0.15 + p * 0.85);
+  return baseOpacity * (0.15 + Math.max(0.05, Math.min(1, pressure)) * 0.85);
 }
 
 // ---- Stamp interpolation -----------------------------------------------------
@@ -92,69 +110,72 @@ export function interpolateStamps(
   brushSettings: BrushSettings,
 ): StampPoint[] {
   const results: StampPoint[] = [];
-
   const avgSize = (from.size + to.size) / 2;
   const stepSize = Math.max(0.5, avgSize * brushSettings.spacing);
-
   const dx = to.x - from.x;
   const dy = to.y - from.y;
   const dist = Math.sqrt(dx * dx + dy * dy);
 
-  if (dist <= stepSize) {
-    results.push(to);
-    return results;
-  }
+  if (dist <= stepSize) { results.push(to); return results; }
 
   const steps = Math.floor(dist / stepSize);
-
   for (let i = 1; i <= steps; i++) {
     const t = i / steps;
     const x = from.x + dx * t;
     const y = from.y + dy * t;
     const pressure = from.pressure + (to.pressure - from.pressure) * t;
-    const tiltX = from.tiltX + (to.tiltX - from.tiltX) * t;
-    const tiltY = from.tiltY + (to.tiltY - from.tiltY) * t;
-
-    const size = mapPressureToSize(pressure, brushSettings.size, brushSettings.pressureSize);
-    const opacity = mapPressureToOpacity(pressure, brushSettings.opacity, brushSettings.pressureOpacity);
-
-    results.push({ x, y, size, opacity, pressure, tiltX, tiltY });
+    results.push({
+      x, y,
+      size: mapPressureToSize(pressure, brushSettings.size, brushSettings.pressureSize),
+      opacity: mapPressureToOpacity(pressure, brushSettings.opacity, brushSettings.pressureOpacity),
+      pressure, tiltX: from.tiltX + (to.tiltX - from.tiltX) * t,
+      tiltY: from.tiltY + (to.tiltY - from.tiltY) * t,
+    });
   }
-
   return results;
 }
 
-// ---- Main processing entry point ---------------------------------------------
+// ---- Main entry point --------------------------------------------------------
 
+/**
+ * @param oeState — per-stroke 1€ filter state (use `initOneEuro` on first call)
+ * @param prevStamp — last emitted stamp
+ * @param sample — current raw sample in world coords
+ */
 export function processSample(
-  predBuf: PredictBuffer,
+  oeState: OneEuroState | null,
   prevStamp: StampPoint | null,
   sample: PointerSample,
   brushSettings: BrushSettings,
-): StampPoint[] {
-  // Apple Pencil prediction: output runs ahead of input
-  const pred = predict(predBuf, {
-    x: sample.x,
-    y: sample.y,
-    pressure: sample.pressure,
-  });
+): { stamps: StampPoint[]; state: OneEuroState } {
+  // Map smoothing 0-1 → minCutoff 1.0-0.001 Hz
+  const minCutoff = 1.0 - brushSettings.smoothing * 0.999;
+  const ts = sample.timestamp || Date.now();
 
-  const size = mapPressureToSize(pred.pressure, brushSettings.size, brushSettings.pressureSize);
-  const opacity = mapPressureToOpacity(pred.pressure, brushSettings.opacity, brushSettings.pressureOpacity);
+  let state: OneEuroState;
+  let fx: number, fy: number, fp: number;
+
+  if (!oeState) {
+    state = initOneEuro(sample.x, sample.y, sample.pressure, ts);
+    fx = sample.x; fy = sample.y; fp = sample.pressure;
+  } else {
+    const result = oneEuroFilter(oeState, sample.x, sample.y, sample.pressure, ts, minCutoff);
+    state = result.state;
+    fx = result.x; fy = result.y; fp = result.pressure;
+  }
 
   const stamp: StampPoint = {
-    x: pred.x,
-    y: pred.y,
-    size,
-    opacity,
-    pressure: pred.pressure,
+    x: fx, y: fy,
+    size: mapPressureToSize(fp, brushSettings.size, brushSettings.pressureSize),
+    opacity: mapPressureToOpacity(fp, brushSettings.opacity, brushSettings.pressureOpacity),
+    pressure: fp,
     tiltX: sample.tiltX,
     tiltY: sample.tiltY,
   };
 
-  if (!prevStamp) return [stamp];
+  if (!prevStamp) return { stamps: [stamp], state };
 
-  return interpolateStamps(prevStamp, stamp, brushSettings);
+  return { stamps: interpolateStamps(prevStamp, stamp, brushSettings), state };
 }
 
 export function stampCacheKey(size: number, color: string, hardness: number): string {
