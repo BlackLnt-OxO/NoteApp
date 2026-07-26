@@ -254,13 +254,12 @@ const ToolbarShell: React.FC<Props> = ({ children }) => {
           onPointerDown={(e) => e.stopPropagation()}
           style={{
             position: 'absolute',
-            top: '50%',
-            transform: 'translateY(-50%)',
+            top,
             ...(isLeft
               ? { left: 0, borderRadius: '0 6px 6px 0' }
               : { right: 0, borderRadius: '6px 0 0 6px' }),
             zIndex: 101,
-            width: 16, height: 56,
+            width: 16, height: 48,
             border: 0,
             background: 'rgba(30,30,48,0.94)',
             color: 'rgba(255,255,255,0.7)',
