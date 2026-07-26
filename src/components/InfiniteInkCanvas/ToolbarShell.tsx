@@ -17,6 +17,7 @@ import { useToolbarStore } from './useToolbarStore';
 import {
   MIN_TOOLBAR_WIDTH,
   MAX_TOOLBAR_WIDTH,
+  TOOLBAR_COLLAPSE_WIDTH,
   COLLAPSED_TAB_SIZE,
   AUTO_COLLAPSE_EDGE_PX,
   RESIZE_HANDLE_WIDTH,
@@ -265,8 +266,7 @@ const ToolbarShell: React.FC<Props> = ({ children }) => {
       const delta = rs.startMouseX - e.clientX;
       let nextWidth = rs.startWidth + delta;
 
-      if (nextWidth < MIN_TOOLBAR_WIDTH / 2) {
-        // Collapse
+      if (nextWidth < TOOLBAR_COLLAPSE_WIDTH) {
         collapse();
         resizeRef.current = null;
         try {
@@ -312,9 +312,57 @@ const ToolbarShell: React.FC<Props> = ({ children }) => {
     [rightOffset, top],
   );
 
-  // Re-use the same move handler as header drag
-  const onTabPointerMove = onHeaderPointerMove;
-  const onTabPointerUp = onHeaderPointerUp;
+  /** Dedicated handler for the collapsed tab — does NOT reuse the header move handler. */
+  const onTabPointerMove = useCallback(
+    (e: React.PointerEvent) => {
+      const d = dragRef.current;
+      if (!d || d.pointerId !== e.pointerId) return;
+
+      e.preventDefault();
+      e.stopPropagation();
+
+      const container = containerRef.current;
+      const vpW = container?.clientWidth ?? window.innerWidth;
+
+      const dx = d.startMouseX - e.clientX;
+      const nextRight = d.startRight + dx;
+
+      // Dragged inward far enough → expand and STOP tracking immediately
+      if (nextRight > AUTO_COLLAPSE_EDGE_PX + 30) {
+        useToolbarStore.getState().expand();
+        dragRef.current = null;
+        try {
+          (e.currentTarget as HTMLElement).releasePointerCapture?.(e.pointerId);
+        } catch {}
+        return;
+      }
+
+      // Keep the collapsed tab near the edge while dragging
+      setPosition(d.startTop, Math.max(-2, Math.min(nextRight, vpW - 60)));
+    },
+    [setPosition],
+  );
+
+  /** On release: if the user barely moved, treat as a simple click → toggle. */
+  const onTabPointerUp = useCallback((e: React.PointerEvent) => {
+    const d = dragRef.current;
+    if (!d || d.pointerId !== e.pointerId) return;
+
+    e.preventDefault();
+    e.stopPropagation();
+
+    try {
+      (e.currentTarget as HTMLElement).releasePointerCapture?.(e.pointerId);
+    } catch {}
+
+    // Less than 5 px total movement → click, not drag
+    const totalMove = Math.abs(e.clientX - d.startMouseX) + Math.abs(e.clientY - d.startMouseY);
+    if (totalMove < 5) {
+      toggle();
+    }
+
+    dragRef.current = null;
+  }, [toggle]);
 
   // =============================================================================
   // Event isolation  (prevent canvas drawing when interacting with toolbar)

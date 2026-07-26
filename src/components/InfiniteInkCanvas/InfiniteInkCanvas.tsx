@@ -6,7 +6,7 @@ import { screenToWorld, worldToScreen, clampZoom, zoomAt, ERASER_RADIUS } from '
 import TextNode from './TextNode';
 import Toolbar from './Toolbar';
 import ToolbarShell from './ToolbarShell';
-import type { Stroke, StampPoint, PointerSample, TextNodeData } from './types';
+import type { Stroke, PointerSample, TextNodeData } from './types';
 
 // ---- Component ---------------------------------------------------------------
 
@@ -14,6 +14,7 @@ const InfiniteInkCanvas: React.FC = () => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const currentStrokeRef = useRef<Stroke | null>(null);
+  const strokeStartRef = useRef<{ world: { x: number; y: number }; pressure: number; tiltX: number; tiltY: number; isEraser: boolean } | null>(null);
   const isDrawingRef = useRef(false);
   const panAnchorRef = useRef<{ sx: number; sy: number; camX: number; camY: number } | null>(null);
   const mouseWorldPosRef = useRef<{ x: number; y: number } | null>(null);
@@ -193,23 +194,23 @@ const InfiniteInkCanvas: React.FC = () => {
       if (state.activeTool === 'pen' || state.activeTool === 'eraser') {
         isDrawingRef.current = true;
 
-        const pressure = getPressure(e);
         const isEraser = state.activeTool === 'eraser';
 
-        const firstStamp: StampPoint = {
-          x: world.x,
-          y: world.y,
-          size: isEraser ? ERASER_RADIUS : state.brushSettings.size,
-          opacity: isEraser ? 1 : state.brushSettings.opacity,
-          pressure,
+        // Store start info — the first stamp will be emitted on pointermove
+        // so that pressure mapping and spacing are consistent with the rest
+        // of the stroke (no isolated dot on pointerdown).
+        strokeStartRef.current = {
+          world: { x: world.x, y: world.y },
+          pressure: getPressure(e),
           tiltX: e.tiltX,
           tiltY: e.tiltY,
+          isEraser,
         };
 
         currentStrokeRef.current = {
           id: `stroke_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`,
           type: 'stroke',
-          points: [firstStamp],
+          points: [], // empty — filled on first pointermove
           brushSettings: isEraser
             ? {
                 size: ERASER_RADIUS,
@@ -225,9 +226,6 @@ const InfiniteInkCanvas: React.FC = () => {
           compositeOperation: isEraser ? 'destination-out' : 'source-over',
           createdAt: Date.now(),
         };
-
-        dirtyRef.current = true;
-        scheduleRender();
       } else if (state.activeTool === 'text') {
         // Create text node at click position
         state.addTextNode(world.x, world.y);
@@ -289,20 +287,39 @@ const InfiniteInkCanvas: React.FC = () => {
           timestamp: Date.now(),
         };
 
-        const stroke = currentStrokeRef.current;
+        const stroke = currentStrokeRef.current!;
+
+        // If this is the very first move event, emit the deferred start point first
+        if (strokeStartRef.current) {
+          const ss = strokeStartRef.current;
+          const isEraser = ss.isEraser;
+          const bs = isEraser
+            ? {
+                size: ERASER_RADIUS, opacity: 1, hardness: 0.9, spacing: 0.15,
+                smoothing: 0.2, color: '#000000',
+                pressureSize: false as const, pressureOpacity: false as const,
+              }
+            : state.brushSettings;
+
+          const startSample: PointerSample = {
+            x: ss.world.x, y: ss.world.y,
+            pressure: ss.pressure, tiltX: ss.tiltX, tiltY: ss.tiltY,
+            timestamp: Date.now(),
+          };
+
+          const startStamps = processSample(null, startSample, bs);
+          stroke.points.push(...startStamps);
+          strokeStartRef.current = null; // consumed
+        }
+
         const prevStamp = stroke.points.length > 0 ? stroke.points[stroke.points.length - 1] : null;
 
         const isEraser = state.activeTool === 'eraser';
         const bs = isEraser
           ? {
-              size: ERASER_RADIUS,
-              opacity: 1,
-              hardness: 0.9,
-              spacing: 0.15,
-              smoothing: 0.2,
-              color: '#000000',
-              pressureSize: false as const,
-              pressureOpacity: false as const,
+              size: ERASER_RADIUS, opacity: 1, hardness: 0.9, spacing: 0.15,
+              smoothing: 0.2, color: '#000000',
+              pressureSize: false as const, pressureOpacity: false as const,
             }
           : state.brushSettings;
 
@@ -337,6 +354,7 @@ const InfiniteInkCanvas: React.FC = () => {
           useCanvasStore.getState().addStroke(stroke);
         }
         currentStrokeRef.current = null;
+        strokeStartRef.current = null;
         isDrawingRef.current = false;
         dirtyRef.current = true;
         scheduleRender();
