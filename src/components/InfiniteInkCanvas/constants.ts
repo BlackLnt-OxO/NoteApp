@@ -35,6 +35,26 @@ export const TEXT_DEFAULTS = {
 
 export const MAX_HISTORY = 50;
 
+// ---- Toolbar ------------------------------------------------------------------
+
+export const TOOLBAR_STORAGE_KEY = 'stickynotes-inkcanvas-toolbar';
+
+export const MIN_TOOLBAR_WIDTH = 240;
+export const MAX_TOOLBAR_WIDTH = 420;
+export const COLLAPSED_TOOLBAR_WIDTH = 28;
+export const AUTO_COLLAPSE_THRESHOLD = 100;
+export const RESIZE_HANDLE_WIDTH = 6;
+export const SIDEBAR_WIDTH = 220;
+
+export const DEFAULT_TOOLBAR_STATE = {
+  expanded: true,
+  width: 240,
+  lastExpandedWidth: 240,
+  top: 16,
+  left: SIDEBAR_WIDTH + 4, // 224 — just right of the sidebar
+  side: 'left' as const,
+};
+
 // ---- Coordinate Transforms ---------------------------------------------------
 
 /**

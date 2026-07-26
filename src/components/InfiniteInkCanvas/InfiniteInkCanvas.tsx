@@ -5,6 +5,7 @@ import { processSample, getPressure } from './StrokeEngine';
 import { screenToWorld, worldToScreen, clampZoom, zoomAt, ERASER_RADIUS } from './constants';
 import TextNode from './TextNode';
 import Toolbar from './Toolbar';
+import ToolbarShell from './ToolbarShell';
 import type { Stroke, StampPoint, PointerSample, TextNodeData } from './types';
 
 // ---- Component ---------------------------------------------------------------
@@ -415,8 +416,10 @@ const InfiniteInkCanvas: React.FC = () => {
       {/* Text node editing overlay */}
       {editingNode && <TextNode node={editingNode} camera={camera} />}
 
-      {/* Floating toolbar */}
-      <Toolbar />
+      {/* Blender N-panel style toolbar */}
+      <ToolbarShell>
+        <Toolbar />
+      </ToolbarShell>
     </div>
   );
 };
