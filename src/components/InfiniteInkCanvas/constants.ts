@@ -51,8 +51,8 @@ export const DEFAULT_TOOLBAR_STATE = {
   width: 240,
   lastExpandedWidth: 240,
   top: 16,
-  /** `right` offset from the canvas container's right edge (only used when side='right'). */
-  rightOffset: 8,
+  /** Distance from the docked edge (left or right) in px. */
+  offset: 8,
   side: 'right' as const,
 };
 

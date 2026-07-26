@@ -6,6 +6,7 @@ import { screenToWorld, worldToScreen, clampZoom, zoomAt, ERASER_RADIUS } from '
 import TextNode from './TextNode';
 import Toolbar from './Toolbar';
 import ToolbarShell from './ToolbarShell';
+import { useToolbarStore } from './useToolbarStore';
 import type { Stroke, PointerSample, TextNodeData } from './types';
 
 // ---- Component ---------------------------------------------------------------
@@ -30,6 +31,7 @@ const InfiniteInkCanvas: React.FC = () => {
   const brushSettings = useCanvasStore((s) => s.brushSettings);
   const dotDensity = useCanvasStore((s) => s.dotDensity);
   const editingTextId = useCanvasStore((s) => s.editingTextId);
+  const isDraggingToolbar = useToolbarStore((s) => s.isDragging);
 
   // ---- Canvas sizing (DPI) ----------------------------------------------------
 
@@ -434,7 +436,19 @@ const InfiniteInkCanvas: React.FC = () => {
       {/* Text node editing overlay */}
       {editingNode && <TextNode node={editingNode} camera={camera} />}
 
-      {/* Blender N-panel style toolbar */}
+      {/* Dark overlay while dragging toolbar */}
+      {isDraggingToolbar && (
+        <div
+          style={{
+            position: 'absolute', inset: 0, zIndex: 99,
+            background: 'rgba(0,0,0,0.35)',
+            pointerEvents: 'none',
+            transition: 'background 0.15s',
+          }}
+        />
+      )}
+
+      {/* Toolbar */}
       <ToolbarShell>
         <Toolbar />
       </ToolbarShell>

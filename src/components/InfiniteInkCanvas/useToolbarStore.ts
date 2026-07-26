@@ -1,23 +1,24 @@
 /**
- * useToolbarStore — Independent Zustand store for the Blender N-panel style
- * collapsible, draggable, resizable toolbar.
- *
- * Managed: expand/collapse, width, drag position, dock side, localStorage.
- * Does NOT touch canvas or brush state.
+ * useToolbarStore — Zustand store for the collapsible, draggable, resizable
+ * toolbar.  Supports left / right edge docking with snap-on-release.
  */
 
 import { create } from 'zustand';
 import { DEFAULT_TOOLBAR_STATE, TOOLBAR_STORAGE_KEY } from './constants';
 
-// ---- Types --------------------------------------------------------------------
+// ---- Types ---------------------------------------------------------------
 
 export interface ToolbarStoreState {
   expanded: boolean;
   width: number;
   lastExpandedWidth: number;
   top: number;
-  rightOffset: number;
+  /** Distance from the docked edge (left or right) in px. */
+  offset: number;
+  /** Which edge the toolbar is docked to. */
   side: 'left' | 'right';
+  /** Whether the user is currently dragging the toolbar (for canvas overlay). */
+  isDragging: boolean;
 }
 
 export interface ToolbarStoreActions {
@@ -25,7 +26,9 @@ export interface ToolbarStoreActions {
   expand: () => void;
   collapse: () => void;
   setWidth: (w: number) => void;
-  setPosition: (top: number, rightOffset: number) => void;
+  setPosition: (top: number, offset: number) => void;
+  setSide: (side: 'left' | 'right') => void;
+  setIsDragging: (v: boolean) => void;
   clampPosition: (viewportW: number, viewportH: number) => void;
   saveState: () => void;
   loadState: () => void;
@@ -34,24 +37,20 @@ export interface ToolbarStoreActions {
 
 type ToolbarStore = ToolbarStoreState & ToolbarStoreActions;
 
-// ---- Helpers ------------------------------------------------------------------
+const COLLAPSE_THRESHOLD = 60;
 
-const MIN_WIDTH = 200;
-const COLLAPSE_THRESHOLD = 60; // width below which we auto-collapse
-
-// ---- Store --------------------------------------------------------------------
+// ---- Store ---------------------------------------------------------------
 
 export const useToolbarStore = create<ToolbarStore>((set, get) => ({
   expanded: DEFAULT_TOOLBAR_STATE.expanded,
   width: DEFAULT_TOOLBAR_STATE.width,
   lastExpandedWidth: DEFAULT_TOOLBAR_STATE.lastExpandedWidth,
   top: DEFAULT_TOOLBAR_STATE.top,
-  rightOffset: DEFAULT_TOOLBAR_STATE.rightOffset,
+  offset: DEFAULT_TOOLBAR_STATE.offset,
   side: DEFAULT_TOOLBAR_STATE.side,
+  isDragging: false,
 
-  // ------------------------------------------------------------------
-  // expand / collapse
-  // ------------------------------------------------------------------
+  // --- expand / collapse ---
 
   toggle: () => {
     const { expanded, width, lastExpandedWidth } = get();
@@ -63,9 +62,7 @@ export const useToolbarStore = create<ToolbarStore>((set, get) => ({
     }
   },
 
-  expand: () => {
-    set({ expanded: true, width: get().lastExpandedWidth });
-  },
+  expand: () => set({ expanded: true, width: get().lastExpandedWidth }),
 
   collapse: () => {
     const { width, lastExpandedWidth } = get();
@@ -73,38 +70,36 @@ export const useToolbarStore = create<ToolbarStore>((set, get) => ({
     set({ expanded: false, lastExpandedWidth: saved });
   },
 
-  // ------------------------------------------------------------------
-  // size & position
-  // ------------------------------------------------------------------
+  // --- size & position ---
 
   setWidth: (w) => set({ width: w }),
 
-  setPosition: (top, rightOffset) => set({ top, rightOffset }),
+  setPosition: (top, offset) => set({ top, offset }),
+
+  setSide: (side) => set({ side }),
+
+  setIsDragging: (v) => set({ isDragging: v }),
 
   clampPosition: (viewportW, viewportH) => {
-    const { top, rightOffset, expanded } = get();
-    const estH = 600; // rough toolbar panel height
+    const { top, offset, expanded } = get();
+    const estH = 600;
     const margin = 12;
     set({
       top: Math.max(margin, Math.min(top, Math.max(margin, viewportH - estH))),
-      rightOffset: Math.max(-12, Math.min(rightOffset, viewportW - 60)),
+      offset: Math.max(-12, Math.min(offset, viewportW - 60)),
     });
   },
 
-  // ------------------------------------------------------------------
-  // persistence
-  // ------------------------------------------------------------------
+  // --- persistence ---
 
   saveState: () => {
     try {
-      const { expanded, width, lastExpandedWidth, top, rightOffset, side } = get();
+      const { expanded, width, lastExpandedWidth, top, offset, side } = get();
       localStorage.setItem(
         TOOLBAR_STORAGE_KEY,
-        JSON.stringify({ expanded, width, lastExpandedWidth, top, rightOffset, side }),
+        JSON.stringify({ expanded, width, lastExpandedWidth, top, offset, side }),
       );
-    } catch {
-      /* localStorage may be unavailable */
-    }
+    } catch { /* noop */ }
   },
 
   loadState: () => {
@@ -117,19 +112,17 @@ export const useToolbarStore = create<ToolbarStore>((set, get) => ({
           width: data.width ?? DEFAULT_TOOLBAR_STATE.width,
           lastExpandedWidth: data.lastExpandedWidth ?? DEFAULT_TOOLBAR_STATE.lastExpandedWidth,
           top: data.top ?? DEFAULT_TOOLBAR_STATE.top,
-          rightOffset: data.rightOffset ?? DEFAULT_TOOLBAR_STATE.rightOffset,
+          offset: data.offset ?? data.rightOffset ?? DEFAULT_TOOLBAR_STATE.offset,
           side: data.side ?? DEFAULT_TOOLBAR_STATE.side,
         });
       }
-    } catch {
-      /* corrupt data — keep defaults */
-    }
+    } catch { /* corrupt */ }
   },
 
-  reset: () => set({ ...DEFAULT_TOOLBAR_STATE }),
+  reset: () => set({ ...DEFAULT_TOOLBAR_STATE, isDragging: false }),
 }));
 
-// ---- Auto-save ----------------------------------------------------------------
+// ---- Auto-save -----------------------------------------------------------
 
 let saveTimeout: ReturnType<typeof setTimeout>;
 useToolbarStore.subscribe(() => {

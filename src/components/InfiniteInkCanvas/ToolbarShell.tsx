@@ -1,11 +1,13 @@
 /**
- * ToolbarShell — Draggable, resizable, right-edge auto-collapsing toolbar frame.
+ * ToolbarShell — Draggable, resizable toolbar that snaps to left or right edge.
  *
- * - Docked to the right side of the canvas by default.
- * - Drag the header strip to reposition anywhere.
- * - Drag the left-edge resize handle to change width.
- * - Auto-collapses into a small 「<」button on the right edge when
- *   dragged to the viewport edge or narrowed below threshold.
+ * - Drag the header strip to reposition or change dock side.
+ * - While dragging, the canvas shows a dark overlay.
+ * - Release near the left viewport edge → snap to LEFT side.
+ * - Release near the right viewport edge → snap to RIGHT side.
+ * - Release in the middle → stay on the current side at released position.
+ * - Resize handle is always on the canvas-facing side.
+ * - When collapsed, a small chevron button is visible on the docked edge.
  * - N key toggles expand / collapse.
  */
 
@@ -15,7 +17,6 @@ import {
   MIN_TOOLBAR_WIDTH,
   MAX_TOOLBAR_WIDTH,
   TOOLBAR_COLLAPSE_WIDTH,
-  AUTO_COLLAPSE_EDGE_PX,
   RESIZE_HANDLE_WIDTH,
 } from './constants';
 
@@ -32,6 +33,17 @@ function shouldIgnoreShortcut(target: EventTarget | null): boolean {
   );
 }
 
+/** Which side should we snap to based on cursor X position? */
+function snapTarget(
+  cursorX: number,
+  vpW: number,
+): 'left' | 'right' {
+  const third = vpW / 3;
+  if (cursorX < third) return 'left';
+  if (cursorX > vpW - third) return 'right';
+  return 'right'; // default to right in the middle zone
+}
+
 // ---- Props -----------------------------------------------------------------
 
 interface Props {
@@ -41,18 +53,14 @@ interface Props {
 // ---- Component -------------------------------------------------------------
 
 const ToolbarShell: React.FC<Props> = ({ children }) => {
+  const store = useToolbarStore();
   const {
-    expanded,
-    width,
-    top,
-    rightOffset,
-    toggle,
-    collapse,
-    setWidth,
-    setPosition,
-    clampPosition,
-    loadState,
-  } = useToolbarStore();
+    expanded, width, top, offset, side,
+    toggle, collapse, expand,
+    setWidth, setPosition, setSide,
+    setIsDragging,
+    clampPosition, loadState,
+  } = store;
 
   const shellRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLElement | null>(null);
@@ -60,7 +68,7 @@ const ToolbarShell: React.FC<Props> = ({ children }) => {
   const dragRef = useRef<{
     startMouseX: number;
     startMouseY: number;
-    startRight: number;
+    startOffset: number;
     startTop: number;
     pointerId: number;
   } | null>(null);
@@ -75,6 +83,8 @@ const ToolbarShell: React.FC<Props> = ({ children }) => {
   expandedRef.current = expanded;
   const widthRef = useRef(width);
   widthRef.current = width;
+  const sideRef = useRef(side);
+  sideRef.current = side;
 
   // ---- Mount / resize ------------------------------------------------------
 
@@ -86,6 +96,10 @@ const ToolbarShell: React.FC<Props> = ({ children }) => {
     window.addEventListener('resize', onResize);
     return () => window.removeEventListener('resize', onResize);
   }, [clampPosition]);
+
+  useEffect(() => {
+    if (shellRef.current) containerRef.current = shellRef.current.parentElement;
+  }, []);
 
   // ---- N-key toggle --------------------------------------------------------
 
@@ -101,23 +115,22 @@ const ToolbarShell: React.FC<Props> = ({ children }) => {
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [toggle]);
 
-  useEffect(() => {
-    if (shellRef.current) containerRef.current = shellRef.current.parentElement;
-  }, []);
-
-  // ---- Header drag ---------------------------------------------------------
+  // ---- Header drag (reposition + snap-to-edge) -----------------------------
 
   const onHeaderPointerDown = useCallback(
     (e: React.PointerEvent) => {
       e.preventDefault(); e.stopPropagation();
       (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+
+      setIsDragging(true); // show canvas overlay
+
       dragRef.current = {
         startMouseX: e.clientX, startMouseY: e.clientY,
-        startRight: rightOffset, startTop: top,
+        startOffset: offset, startTop: top,
         pointerId: e.pointerId,
       };
     },
-    [rightOffset, top],
+    [offset, top, setIsDragging],
   );
 
   const onHeaderPointerMove = useCallback(
@@ -126,34 +139,51 @@ const ToolbarShell: React.FC<Props> = ({ children }) => {
       if (!d || d.pointerId !== e.pointerId) return;
       e.preventDefault(); e.stopPropagation();
 
-      const dx = d.startMouseX - e.clientX;
-      const dy = e.clientY - d.startMouseY;
       const vpW = containerRef.current?.clientWidth ?? window.innerWidth;
       const vpH = containerRef.current?.clientHeight ?? window.innerHeight;
 
-      let nextRight = d.startRight + dx;
-      const nextTop = Math.max(4, Math.min(d.startTop + dy, Math.max(4, vpH - 36)));
-      nextRight = Math.max(-20, Math.min(nextRight, vpW - 60));
-
-      // Auto-collapse when dragged to right edge
-      if (nextRight <= AUTO_COLLAPSE_EDGE_PX && expandedRef.current) {
-        collapse();
-        dragRef.current = null;
-        try { (e.currentTarget as HTMLElement).releasePointerCapture?.(e.pointerId); } catch {}
-        return;
+      // Horizontal delta — sign depends on which side we're on
+      let delta: number;
+      if (sideRef.current === 'right') {
+        // Mouse moving left = delta positive = offset increases
+        delta = d.startMouseX - e.clientX;
+      } else {
+        // Mouse moving right = delta positive = offset increases
+        delta = e.clientX - d.startMouseX;
       }
 
-      setPosition(nextTop, nextRight);
+      const nextOffset = Math.max(-20, Math.min(d.startOffset + delta, vpW - 60));
+      const nextTop = Math.max(4, Math.min(d.startTop + (e.clientY - d.startMouseY), Math.max(4, vpH - 36)));
+
+      setPosition(nextTop, nextOffset);
     },
-    [setPosition, collapse],
+    [setPosition],
   );
 
-  const onHeaderPointerUp = useCallback((e: React.PointerEvent) => {
-    if (!dragRef.current || dragRef.current.pointerId !== e.pointerId) return;
-    e.preventDefault(); e.stopPropagation();
-    try { (e.currentTarget as HTMLElement).releasePointerCapture?.(e.pointerId); } catch {}
-    dragRef.current = null;
-  }, []);
+  const onHeaderPointerUp = useCallback(
+    (e: React.PointerEvent) => {
+      const d = dragRef.current;
+      if (!d || d.pointerId !== e.pointerId) return;
+      e.preventDefault(); e.stopPropagation();
+      try { (e.currentTarget as HTMLElement).releasePointerCapture?.(e.pointerId); } catch {}
+
+      const vpW = containerRef.current?.clientWidth ?? window.innerWidth;
+
+      // Snap to nearest edge based on cursor position
+      const newSide = snapTarget(e.clientX, vpW);
+      setSide(newSide);
+
+      // Auto-collapse if snapped very close to the edge
+      const st = useToolbarStore.getState();
+      if (st.offset <= 2) {
+        collapse();
+      }
+
+      setIsDragging(false); // hide canvas overlay
+      dragRef.current = null;
+    },
+    [setSide, collapse, setIsDragging],
+  );
 
   // ---- Resize handle -------------------------------------------------------
 
@@ -175,7 +205,13 @@ const ToolbarShell: React.FC<Props> = ({ children }) => {
       if (!rs || rs.pointerId !== e.pointerId) return;
       e.preventDefault(); e.stopPropagation();
 
-      const delta = rs.startMouseX - e.clientX;
+      // Resize handle is always on the canvas-facing edge.
+      // side='right' → handle on left → drag left = wider
+      // side='left'  → handle on right → drag right = wider
+      const delta = sideRef.current === 'right'
+        ? rs.startMouseX - e.clientX   // right dock: handle on left
+        : e.clientX - rs.startMouseX;  // left dock: handle on right
+
       let nextWidth = rs.startWidth + delta;
 
       if (nextWidth < TOOLBAR_COLLAPSE_WIDTH) {
@@ -205,15 +241,24 @@ const ToolbarShell: React.FC<Props> = ({ children }) => {
     [],
   );
 
-  // ---- Render --------------------------------------------------------------
+  // ---- RENDER --------------------------------------------------------------
 
   const isDragging = dragRef.current !== null;
   const isResizing = resizeRef.current !== null;
+  const isLeft = side === 'left';
+
+  // Chevron direction: always points toward canvas (inward from edge)
+  const chevron = isLeft ? '◁' : '▷';
+
+  // CSS edge property
+  const edgeStyle = isLeft
+    ? { left: offset, right: undefined as number | undefined }
+    : { left: undefined as number | undefined, right: offset };
 
   return (
     <>
       {/* ================================================================== */}
-      {/* COLLAPSED 「<」 BUTTON  —  stuck to the right edge                 */}
+      {/* COLLAPSED CHEVRON BUTTON — stuck to the docked edge               */}
       {/* ================================================================== */}
       {!expanded && (
         <button
@@ -222,44 +267,40 @@ const ToolbarShell: React.FC<Props> = ({ children }) => {
           style={{
             position: 'absolute',
             top: '50%',
-            right: 0,
             transform: 'translateY(-50%)',
+            ...(isLeft
+              ? { left: 0, borderRadius: '0 6px 6px 0' }
+              : { right: 0, borderRadius: '6px 0 0 6px' }),
             zIndex: 101,
-            width: 16,
-            height: 56,
+            width: 16, height: 56,
             border: 0,
-            borderRadius: '6px 0 0 6px',
             background: 'rgba(30,30,48,0.94)',
             color: 'rgba(255,255,255,0.7)',
             cursor: 'pointer',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            fontSize: '11px',
-            fontWeight: 700,
-            padding: 0,
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            fontSize: '11px', fontWeight: 700, padding: 0,
             boxShadow: '0 2px 10px rgba(0,0,0,0.3)',
             borderTop: '1px solid rgba(255,255,255,0.08)',
             borderBottom: '1px solid rgba(255,255,255,0.08)',
-            borderLeft: '1px solid rgba(255,255,255,0.08)',
+            ...(isLeft
+              ? { borderRight: '1px solid rgba(255,255,255,0.08)' }
+              : { borderLeft: '1px solid rgba(255,255,255,0.08)' }),
             transition: 'color 0.15s, background 0.15s, width 0.12s',
           }}
-          onMouseEnter={(e) => {
-            const el = e.currentTarget;
-            el.style.width = '22px';
-            el.style.color = '#fff';
-            el.style.background = 'rgba(50,50,75,0.96)';
+          onMouseEnter={(el) => {
+            el.currentTarget.style.width = '22px';
+            el.currentTarget.style.color = '#fff';
+            el.currentTarget.style.background = 'rgba(50,50,75,0.96)';
           }}
-          onMouseLeave={(e) => {
-            const el = e.currentTarget;
-            el.style.width = '16px';
-            el.style.color = 'rgba(255,255,255,0.7)';
-            el.style.background = 'rgba(30,30,48,0.94)';
+          onMouseLeave={(el) => {
+            el.currentTarget.style.width = '16px';
+            el.currentTarget.style.color = 'rgba(255,255,255,0.7)';
+            el.currentTarget.style.background = 'rgba(30,30,48,0.94)';
           }}
-          title="展开工具栏 (N)"
+          title={`展开工具栏 (N) — 吸附在${isLeft ? '左' : '右'}侧`}
           aria-label="展开工具栏"
         >
-          ◁
+          {chevron}
         </button>
       )}
 
@@ -273,26 +314,28 @@ const ToolbarShell: React.FC<Props> = ({ children }) => {
           style={{
             position: 'absolute',
             top,
-            right: rightOffset,
+            ...edgeStyle,
             zIndex: 100,
             display: 'flex',
             flexDirection: 'column',
             pointerEvents: 'auto',
             width,
             minWidth: MIN_TOOLBAR_WIDTH,
-            transition: isDragging || isResizing ? 'none' : 'width 160ms ease, right 160ms ease',
+            transition: isDragging || isResizing ? 'none' : 'width 160ms ease',
           }}
           onPointerDown={stopEvent}
           onPointerMove={stopEvent}
           onPointerUp={stopEvent}
           onWheel={stopEvent}
         >
-          {/* Resize handle (left edge) */}
+          {/* Resize handle — always on the canvas-facing edge */}
           <div
             role="separator"
             className={`toolbar-resize-handle${isResizing ? ' is-resizing' : ''}`}
             style={{
-              position: 'absolute', left: 0, top: 0, bottom: 0,
+              position: 'absolute',
+              ...(isLeft ? { right: 0 } : { left: 0 }),
+              top: 0, bottom: 0,
               width: RESIZE_HANDLE_WIDTH, cursor: 'col-resize',
               touchAction: 'none', zIndex: 2,
               background: isResizing ? 'rgba(100,150,255,0.7)' : 'transparent',
@@ -306,11 +349,12 @@ const ToolbarShell: React.FC<Props> = ({ children }) => {
             onMouseLeave={(e) => { if (!isResizing) (e.currentTarget as HTMLElement).style.background = 'transparent'; }}
           />
 
-          {/* Header strip (drag handle, no decorative dots) */}
+          {/* Header strip (drag handle) */}
           <div
             style={{
-              cursor: 'grab', userSelect: 'none',
-              padding: '6px 10px 0 14px',
+              cursor: isDragging ? 'grabbing' : 'grab',
+              userSelect: 'none',
+              padding: '6px 14px 0 14px',
               display: 'flex', alignItems: 'center',
               position: 'sticky', top: 0, zIndex: 3,
               borderRadius: '10px 10px 0 0',
@@ -324,12 +368,17 @@ const ToolbarShell: React.FC<Props> = ({ children }) => {
             onMouseEnter={(e) => { if (!isDragging) (e.currentTarget as HTMLElement).style.background = 'rgba(255,255,255,0.04)'; }}
             onMouseLeave={(e) => { if (!isDragging) (e.currentTarget as HTMLElement).style.background = 'transparent'; }}
           >
-            <span style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text-secondary)', pointerEvents: 'none' }}>
+            <span style={{
+              fontSize: '12px', fontWeight: 600,
+              color: 'var(--text-secondary)',
+              pointerEvents: 'none',
+              userSelect: 'none',
+            }}>
               笔刷工具
             </span>
           </div>
 
-          {/* Panel content */}
+          {/* Panel body */}
           <div style={{
             width: '100%', minWidth: 0,
             overflowY: 'auto', overflowX: 'hidden',
