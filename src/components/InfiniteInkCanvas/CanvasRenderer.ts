@@ -147,79 +147,26 @@ function getOrCreateStamp(size: number, color: string, hardness: number): HTMLCa
   return off;
 }
 
-// Per-stroke bitmap cache — bakes stamp set to one offscreen canvas
-interface CachedStroke {
-  bitmap: HTMLCanvasElement;
-  ox: number; oy: number; // world-space top-left of the bitmap
-}
+function drawStroke(ctx: CanvasRenderingContext2D, stroke: Stroke): void {
+  const { points, brushSettings, compositeOperation } = stroke;
+  if (points.length === 0) return;
 
-const strokeBmp = new Map<string, CachedStroke>();
-
-function renderStrokeToBitmap(stroke: Stroke): CachedStroke {
-  const { points, brushSettings } = stroke;
-  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-  for (const p of points) {
-    const r = p.size / 2;
-    if (p.x - r < minX) minX = p.x - r;
-    if (p.y - r < minY) minY = p.y - r;
-    if (p.x + r > maxX) maxX = p.x + r;
-    if (p.y + r > maxY) maxY = p.y + r;
-  }
-  const M = 4;
-  const w = Math.min(8192, Math.max(1, Math.ceil(maxX - minX) + M * 2));
-  const h = Math.min(8192, Math.max(1, Math.ceil(maxY - minY) + M * 2));
-
-  const off = document.createElement('canvas');
-  off.width = w; off.height = h;
-  const octx = off.getContext('2d')!;
-  const ox = minX - M;
-  const oy = minY - M;
-  octx.translate(-ox, -oy);
+  ctx.save();
+  ctx.globalCompositeOperation = compositeOperation;
 
   const color = brushSettings.color;
   for (const p of points) {
     if (p.size <= 0.1) continue;
-    const s = getOrCreateStamp(p.size, color, brushSettings.hardness);
-    const hw = s.width / 4; const hh = s.height / 4;
-    octx.globalAlpha = p.opacity;
-    octx.drawImage(s, p.x - hw, p.y - hh, s.width / 2, s.height / 2);
+    const stamp = getOrCreateStamp(p.size, color, brushSettings.hardness);
+    const hw = stamp.width / 4; const hh = stamp.height / 4;
+    ctx.globalAlpha = p.opacity;
+    ctx.drawImage(stamp, p.x - hw, p.y - hh, stamp.width / 2, stamp.height / 2);
   }
 
-  const entry: CachedStroke = { bitmap: off, ox, oy };
-  strokeBmp.set(stroke.id, entry);
-  if (strokeBmp.size > 500) strokeBmp.delete(strokeBmp.keys().next().value!);
-  return entry;
-}
-
-function drawStroke(ctx: CanvasRenderingContext2D, stroke: Stroke): void {
-  if (stroke.points.length === 0) return;
-
-  // Eraser always per-stamp (destination-out modifies existing pixels)
-  if (stroke.compositeOperation === 'destination-out') {
-    ctx.save();
-    ctx.globalCompositeOperation = 'destination-out';
-    for (const p of stroke.points) {
-      if (p.size <= 0.1) continue;
-      const s = getOrCreateStamp(p.size, stroke.brushSettings.color, stroke.brushSettings.hardness);
-      const hw = s.width / 4; const hh = s.height / 4;
-      ctx.globalAlpha = p.opacity;
-      ctx.drawImage(s, p.x - hw, p.y - hh, s.width / 2, s.height / 2);
-    }
-    ctx.restore();
-    return;
-  }
-
-  let c = strokeBmp.get(stroke.id);
-  if (!c) c = renderStrokeToBitmap(stroke);
-
-  ctx.save();
-  ctx.globalAlpha = 1;
-  ctx.drawImage(c.bitmap, c.ox, c.oy);
   ctx.restore();
 }
 
 export { drawStroke, drawDotGrid };
-export function clearStrokeCache() { strokeBmp.clear(); }
 
 // ---- Text on Canvas ----------------------------------------------------------
 
