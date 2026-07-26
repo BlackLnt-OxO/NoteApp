@@ -1,4 +1,4 @@
-import React, { useRef, useEffect, useCallback } from 'react';
+import React, { useRef, useEffect, useCallback, useState } from 'react';
 import { useCanvasStore } from './useCanvasStore';
 import { renderAll } from './CanvasRenderer';
 import { processSample, getPressure } from './StrokeEngine';
@@ -18,7 +18,9 @@ const InfiniteInkCanvas: React.FC = () => {
   const strokeStartRef = useRef<{ world: { x: number; y: number }; pressure: number; tiltX: number; tiltY: number; isEraser: boolean } | null>(null);
   const isDrawingRef = useRef(false);
   const panAnchorRef = useRef<{ sx: number; sy: number; camX: number; camY: number } | null>(null);
+  const [cursorScreen, setCursorScreen] = useState<{ x: number; y: number } | null>(null);
   const mouseWorldPosRef = useRef<{ x: number; y: number } | null>(null);
+  const cursorSizeRef = useRef(10);
   const rafRef = useRef<number>(0);
   const dprRef = useRef(1);
   const spaceDownRef = useRef(false);
@@ -88,8 +90,6 @@ const InfiniteInkCanvas: React.FC = () => {
       camera: state.camera,
       objects: state.objects,
       currentStroke: currentStrokeRef.current,
-      activeTool: state.activeTool,
-      mouseWorldPos: mouseWorldPosRef.current,
       showDotGrid: state.showDotGrid,
       editingTextId: state.editingTextId,
       dpr: dprRef.current,
@@ -180,13 +180,14 @@ const InfiniteInkCanvas: React.FC = () => {
     (e: React.PointerEvent<HTMLCanvasElement>) => {
       const canvas = canvasRef.current;
       if (!canvas) return;
-      canvas.setPointerCapture(e.pointerId);
 
       const state = useCanvasStore.getState();
       const { sx, sy } = getCanvasPos(e);
+      setCursorScreen({ x: e.clientX, y: e.clientY });
 
-      // Middle mouse or pan tool → start panning
-      if (e.button === 1 || (e.button === 0 && (state.activeTool === 'pan' || spaceDownRef.current))) {
+      // Middle mouse or Space+drag → pan
+      if (e.button === 1 || (e.button === 0 && spaceDownRef.current)) {
+        canvas.setPointerCapture(e.pointerId);
         isDrawingRef.current = false;
         panAnchorRef.current = { sx: e.clientX, sy: e.clientY, camX: state.camera.x, camY: state.camera.y };
         return;
@@ -196,47 +197,43 @@ const InfiniteInkCanvas: React.FC = () => {
 
       const world = screenToWorld(sx, sy, state.camera);
 
-      if (state.activeTool === 'pen' || state.activeTool === 'eraser') {
-        isDrawingRef.current = true;
-
-        const isEraser = state.activeTool === 'eraser';
-
-        // Store start info — the first stamp will be emitted on pointermove
-        // so that pressure mapping and spacing are consistent with the rest
-        // of the stroke (no isolated dot on pointerdown).
-        strokeStartRef.current = {
-          world: { x: world.x, y: world.y },
-          pressure: getPressure(e),
-          tiltX: e.tiltX,
-          tiltY: e.tiltY,
-          isEraser,
-        };
-
-        currentStrokeRef.current = {
-          id: `stroke_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`,
-          type: 'stroke',
-          points: [], // empty — filled on first pointermove
-          brushSettings: isEraser
-            ? {
-                size: ERASER_RADIUS,
-                opacity: 1,
-                hardness: 0.9,
-                spacing: 0.15,
-                smoothing: 0.2,
-                color: '#000000',
-                pressureSize: false,
-                pressureOpacity: false,
-              }
-            : { ...state.brushSettings },
-          compositeOperation: isEraser ? 'destination-out' : 'source-over',
-          createdAt: Date.now(),
-        };
-      } else if (state.activeTool === 'text') {
-        // Create text node at click position
+      if (state.activeTool === 'text') {
+        // Don't capture pointer for text — let the textarea receive focus naturally
         state.addTextNode(world.x, world.y);
+        return;
       }
+
+      // Pen / eraser — capture pointer for drawing
+      canvas.setPointerCapture(e.pointerId);
+      isDrawingRef.current = true;
+
+      const isEraser = state.activeTool === 'eraser';
+      cursorSizeRef.current = isEraser ? ERASER_RADIUS : state.brushSettings.size;
+
+      strokeStartRef.current = {
+        world: { x: world.x, y: world.y },
+        pressure: getPressure(e),
+        tiltX: e.tiltX,
+        tiltY: e.tiltY,
+        isEraser,
+      };
+
+      currentStrokeRef.current = {
+        id: `stroke_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`,
+        type: 'stroke',
+        points: [],
+        brushSettings: isEraser
+          ? {
+              size: ERASER_RADIUS, opacity: 1, hardness: 0.9, spacing: 0.15,
+              smoothing: 0.2, color: '#000000',
+              pressureSize: false, pressureOpacity: false,
+            }
+          : { ...state.brushSettings },
+        compositeOperation: isEraser ? 'destination-out' : 'source-over',
+        createdAt: Date.now(),
+      };
     },
-    [getCanvasPos, scheduleRender],
+    [getCanvasPos],
   );
 
   // ---- Pointer Move -----------------------------------------------------------
@@ -249,7 +246,8 @@ const InfiniteInkCanvas: React.FC = () => {
       const { sx, sy } = getCanvasPos(e);
       const state = useCanvasStore.getState();
 
-      // Update mouse world pos for eraser cursor
+      // Track screen position for smooth CSS cursor overlay
+      setCursorScreen({ x: e.clientX, y: e.clientY });
       mouseWorldPosRef.current = screenToWorld(sx, sy, state.camera);
 
       // Panning
@@ -266,11 +264,6 @@ const InfiniteInkCanvas: React.FC = () => {
       }
 
       if (!isDrawingRef.current || !currentStrokeRef.current) {
-        // Even when not drawing, show eraser cursor
-        if (state.activeTool === 'eraser') {
-          dirtyRef.current = true;
-          scheduleRender();
-        }
         return;
       }
 
@@ -399,14 +392,31 @@ const InfiniteInkCanvas: React.FC = () => {
 
   // ---- Cursor style -----------------------------------------------------------
 
-  const cursorStyle =
-    activeTool === 'eraser' ? 'none' : activeTool === 'text' ? 'text' : 'crosshair';
+  const cursorStyle = (activeTool === 'pen' || activeTool === 'eraser') ? 'none' : activeTool === 'text' ? 'text' : 'default';
 
   // ---- Editing text node for overlay ------------------------------------------
 
   const editingNode = objects.find(
     (o): o is TextNodeData => o.type === 'text' && o.id === editingTextId,
   );
+
+  // ---- CSS cursor overlay (smooth, no canvas redraw needed) -------------------
+
+  const showCursorOverlay = (activeTool === 'pen' || activeTool === 'eraser') && cursorScreen && !isDraggingToolbar;
+  const cSize = activeTool === 'eraser' ? ERASER_RADIUS : brushSettings.size;
+  const cursorOverlayStyle: React.CSSProperties | undefined = showCursorOverlay && cursorScreen ? {
+    position: 'fixed',
+    left: cursorScreen.x,
+    top: cursorScreen.y,
+    width: cSize,
+    height: cSize,
+    borderRadius: '50%',
+    border: '1.5px solid rgba(255,255,255,0.7)',
+    background: activeTool === 'eraser' ? 'rgba(255,255,255,0.12)' : 'rgba(255,255,255,0.06)',
+    pointerEvents: 'none',
+    zIndex: 9999,
+    transform: 'translate(-50%, -50%)',
+  } : undefined;
 
   return (
     <div
@@ -435,6 +445,9 @@ const InfiniteInkCanvas: React.FC = () => {
         onLostPointerCapture={handlePointerUp}
         onWheel={handleWheel}
       />
+
+      {/* CSS cursor overlay (smooth, always 60fps) */}
+      {cursorOverlayStyle && <div style={cursorOverlayStyle} />}
 
       {/* Text node editing overlay */}
       {editingNode && <TextNode node={editingNode} camera={camera} />}

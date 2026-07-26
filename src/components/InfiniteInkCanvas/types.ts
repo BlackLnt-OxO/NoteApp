@@ -1,6 +1,6 @@
 // ---- Tool & Interaction Types ------------------------------------------------
 
-export type ToolType = 'pen' | 'eraser' | 'text' | 'pan';
+export type ToolType = 'pen' | 'eraser' | 'text';
 
 // ---- Coordinate System -------------------------------------------------------
 

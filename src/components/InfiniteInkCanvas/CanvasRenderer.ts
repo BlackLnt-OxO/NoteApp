@@ -17,8 +17,6 @@ export interface RenderParams {
   camera: Camera;
   objects: CanvasObject[];
   currentStroke: Stroke | null;
-  activeTool: string;
-  mouseWorldPos: { x: number; y: number } | null;
   showDotGrid: boolean;
   editingTextId: string | null;
   dpr: number;
@@ -27,7 +25,7 @@ export interface RenderParams {
 export function renderAll(params: RenderParams): void {
   const {
     ctx, canvasWidth, canvasHeight, camera,
-    objects, currentStroke, activeTool, mouseWorldPos,
+    objects, currentStroke,
     showDotGrid, editingTextId, dpr,
   } = params;
 
@@ -49,11 +47,6 @@ export function renderAll(params: RenderParams): void {
   // 4. Current in-progress stroke
   if (currentStroke && currentStroke.points.length > 0) {
     drawStroke(ctx, currentStroke);
-  }
-
-  // 5. Eraser cursor
-  if (activeTool === 'eraser' && mouseWorldPos) {
-    drawEraserCursor(ctx, mouseWorldPos);
   }
 
   ctx.restore(); // undo camera transform
@@ -90,8 +83,8 @@ function drawDotGrid(
   const endX = bottomRight.x + step;
   const endY = bottomRight.y + step;
 
-  const dotAlpha = Math.max(0.04, Math.min(0.18, camera.zoom * 0.10));
-  const dotRadius = Math.max(0.3, Math.min(1.6, camera.zoom * 0.6));
+  const dotAlpha = Math.max(0.08, Math.min(0.25, camera.zoom * 0.18));
+  const dotRadius = Math.max(0.5, Math.min(2.0, camera.zoom * 0.9));
 
   ctx.fillStyle = `rgba(255,255,255,${dotAlpha.toFixed(3)})`;
   ctx.beginPath();
@@ -253,23 +246,6 @@ function drawTextOnCanvas(
     ctx.fillText(line, node.x, y);
   }
 
-  ctx.restore();
-}
-
-// ---- Eraser Cursor -----------------------------------------------------------
-
-function drawEraserCursor(
-  ctx: CanvasRenderingContext2D,
-  mousePos: { x: number; y: number },
-): void {
-  const r = 10; // world units — visual only
-  ctx.save();
-  ctx.globalAlpha = 0.5;
-  ctx.strokeStyle = '#fff';
-  ctx.lineWidth = 1.5;
-  ctx.beginPath();
-  ctx.arc(mousePos.x, mousePos.y, r, 0, Math.PI * 2);
-  ctx.stroke();
   ctx.restore();
 }
 

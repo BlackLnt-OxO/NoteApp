@@ -32,15 +32,6 @@ const TextIcon: React.FC = () => (
   </svg>
 );
 
-const HandIcon: React.FC = () => (
-  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-    <path d="M18 11V6a2 2 0 0 0-4 0v0" />
-    <path d="M14 10V4a2 2 0 0 0-4 0v2" />
-    <path d="M10 10.5V6a2 2 0 0 0-4 0v8" />
-    <path d="M18 8a2 2 0 0 1 4 0v6a8 8 0 0 1-8 8h-2c-2.21 0-4.21-.9-5.66-2.34l-.09-.09A1.99 1.99 0 0 1 6 18h0a2 2 0 0 1 2-2h2a2 2 0 0 0 2-2V8Z" />
-  </svg>
-);
-
 const UndoIcon: React.FC = () => (
   <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
     <polyline points="1 4 1 10 7 10" />
@@ -71,7 +62,6 @@ const TOOLS: { id: ToolType; label: string; Icon: React.FC }[] = [
   { id: 'pen', label: '笔刷', Icon: PenIcon },
   { id: 'eraser', label: '橡皮', Icon: EraserIcon },
   { id: 'text', label: '文本', Icon: TextIcon },
-  { id: 'pan', label: '平移', Icon: HandIcon },
 ];
 
 const PRESET_COLORS = [
