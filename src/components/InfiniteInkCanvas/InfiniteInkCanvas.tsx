@@ -7,7 +7,7 @@ import TextNode from './TextNode';
 import Toolbar from './Toolbar';
 import ToolbarShell from './ToolbarShell';
 import { useToolbarStore } from './useToolbarStore';
-import type { Stroke, TextNodeData } from './types';
+import type { Stroke, StrokePoint, TextNodeData } from './types';
 
 const InfiniteInkCanvas: React.FC = () => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -17,6 +17,7 @@ const InfiniteInkCanvas: React.FC = () => {
   const panAnchorRef = useRef<{ sx: number; sy: number; camX: number; camY: number } | null>(null);
   const selectAnchorRef = useRef<{ x: number; y: number } | null>(null);
   const selectionRectRef = useRef<{ x1: number; y1: number; x2: number; y2: number } | null>(null);
+  const selectDragRef = useRef<{ start: { x: number; y: number }; snapshots: Map<string, StrokePoint[]> } | null>(null);
   const [cursorScreen, setCursorScreen] = useState<{ x: number; y: number } | null>(null);
   const rafRef = useRef<number>(0);
   const dprRef = useRef(1);
@@ -129,6 +130,20 @@ const InfiniteInkCanvas: React.FC = () => {
     return rect ? { sx: e.clientX - rect.left, sy: e.clientY - rect.top } : { sx: 0, sy: 0 };
   }, []);
 
+  // ---- Select-drag helper ------------------------------------------------------
+
+  const startSelectDrag = (ids: string[], world: { x: number; y: number }) => {
+    const state = useCanvasStore.getState();
+    const snapshots = new Map<string, StrokePoint[]>();
+    for (const o of state.objects) {
+      if (o.type === 'stroke' && ids.includes(o.id)) snapshots.set(o.id, o.points.map((p) => ({ ...p })));
+    }
+    state.pushHistory(); // record state before move (for undo)
+    selectDragRef.current = { start: world, snapshots };
+    dirtyRef.current = true;
+    scheduleRender();
+  };
+
   // ---- Pointer Down -----------------------------------------------------------
 
   const handlePointerDown = useCallback((e: React.PointerEvent<HTMLCanvasElement>) => {
@@ -156,11 +171,18 @@ const InfiniteInkCanvas: React.FC = () => {
     // Selection tool
     if (state.activeTool === 'select') {
       canvas.setPointerCapture(e.pointerId);
+
       if (state.selectionMode === 'click') {
-        // Click a stroke to toggle its selection
+        // Hit test topmost stroke
         const hit = [...state.objects].reverse().find((o) => o.type === 'stroke' && hitTestStroke(o, world.x, world.y));
-        if (hit) state.toggleSelected(hit.id);
-        else state.clearSelection();
+
+        if (hit) {
+          // Select it (or keep existing selection if already selected), then begin drag
+          if (!state.selectedIds.includes(hit.id)) state.setSelectedIds([hit.id]);
+          startSelectDrag(state.selectedIds.includes(hit.id) ? state.selectedIds : [hit.id], world);
+        } else {
+          state.clearSelection();
+        }
       } else {
         // Box select — start dragging a rectangle
         selectAnchorRef.current = { x: world.x, y: world.y };
@@ -226,6 +248,19 @@ const InfiniteInkCanvas: React.FC = () => {
       return;
     }
 
+    // Move selected strokes
+    if (selectDragRef.current) {
+      const d = selectDragRef.current;
+      const w = screenToWorld(sx, sy, state.camera);
+      const dx = w.x - d.start.x;
+      const dy = w.y - d.start.y;
+      for (const [id, snap] of d.snapshots) {
+        const moved = snap.map((p) => ({ ...p, x: p.x + dx, y: p.y + dy }));
+        useCanvasStore.getState().updateStrokePoints(id, moved);
+      }
+      return; // store update triggers re-render
+    }
+
     if (!isDrawingRef.current || !currentStrokeRef.current) return;
 
     const events: PointerEvent[] = (e.nativeEvent as any).getCoalescedEvents?.() || [e.nativeEvent];
@@ -268,6 +303,12 @@ const InfiniteInkCanvas: React.FC = () => {
       return;
     }
 
+    // End select-drag (movement already applied incrementally)
+    if (selectDragRef.current) {
+      selectDragRef.current = null;
+      return;
+    }
+
     if (isDrawingRef.current && currentStrokeRef.current) {
       const stroke = currentStrokeRef.current;
       if (stroke.points.length > 0) useCanvasStore.getState().addStroke(stroke);
@@ -296,15 +337,19 @@ const InfiniteInkCanvas: React.FC = () => {
 
   // ---- Cursor -----------------------------------------------------------------
 
-  const cursorStyle = (activeTool === 'pen' || activeTool === 'eraser') ? 'none'
+  const freeEraser = activeTool === 'eraser' && eraserMode === 'free';
+  const strokeEraser = activeTool === 'eraser' && eraserMode === 'stroke';
+  // None → CSS circle overlay (pen / free eraser); others use native cursor
+  const cursorStyle = (activeTool === 'pen' || freeEraser) ? 'none'
+    : strokeEraser ? 'crosshair'
     : activeTool === 'text' ? 'text'
     : activeTool === 'select' ? 'crosshair'
     : 'default';
   const editingNode = objects.find((o): o is TextNodeData => o.type === 'text' && o.id === editingTextId);
 
-  const freeEraser = activeTool === 'eraser' && eraserMode === 'free';
   const showCursor = (activeTool === 'pen' || freeEraser) && cursorScreen && !isDraggingToolbar;
-  const cs = activeTool === 'eraser' ? ERASER_RADIUS : brushSettings.size;
+  // Circle diameter in screen px = world width × zoom, so it matches the drawn line
+  const cs = (activeTool === 'eraser' ? ERASER_RADIUS : brushSettings.size) * camera.zoom;
 
   return (
     <div ref={containerRef} style={{ position: 'absolute', inset: 0, overflow: 'hidden', background: '#1a1a2e', borderRadius: '0 0 12px 0' }}>

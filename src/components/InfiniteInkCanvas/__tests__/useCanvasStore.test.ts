@@ -77,6 +77,29 @@ describe('useCanvasStore', () => {
     });
   });
 
+  describe('updateStrokePoints', () => {
+    it('replaces the points of a stroke by id', () => {
+      const stroke = makeStroke('move');
+      useCanvasStore.getState().addStroke(stroke);
+      useCanvasStore.getState().updateStrokePoints('move', [
+        { x: 100, y: 100, pressure: 0.5, t: 1 },
+        { x: 120, y: 140, pressure: 0.7, t: 17 },
+      ]);
+      const obj = useCanvasStore.getState().objects.find((o) => o.id === 'move');
+      expect(obj).toBeDefined();
+      if (obj?.type === 'stroke') {
+        expect(obj.points).toHaveLength(2);
+        expect(obj.points[0].x).toBe(100);
+        expect(obj.points[1].y).toBe(140);
+      }
+    });
+
+    it('ignores unknown ids', () => {
+      useCanvasStore.getState().updateStrokePoints('nope', []);
+      expect(useCanvasStore.getState().objects).toHaveLength(0);
+    });
+  });
+
   describe('addTextNode', () => {
     it('creates a text node at the given position', () => {
       const id = useCanvasStore.getState().addTextNode(100, 200);

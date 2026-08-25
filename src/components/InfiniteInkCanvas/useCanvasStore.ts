@@ -3,6 +3,7 @@ import type {
   Camera,
   BrushSettings,
   Stroke,
+  StrokePoint,
   TextNodeData,
   CanvasObject,
   ToolType,
@@ -35,6 +36,7 @@ export interface CanvasStore {
 
   // Actions
   addStroke: (stroke: Stroke) => void;
+  updateStrokePoints: (id: string, points: StrokePoint[]) => void;
   addTextNode: (x: number, y: number) => string;
   updateTextNode: (id: string, data: Partial<TextNodeData>) => void;
   deleteTextNode: (id: string) => void;
@@ -112,6 +114,14 @@ export const useCanvasStore = create<CanvasStore>((set, get) => ({
   addStroke: (stroke) => {
     get().pushHistory();
     set((s) => ({ objects: [...s.objects, stroke] }));
+  },
+
+  updateStrokePoints: (id, points) => {
+    set((s) => ({
+      objects: s.objects.map((o) =>
+        o.type === 'stroke' && o.id === id ? { ...o, points } : o,
+      ),
+    }));
   },
 
   addTextNode: (x, y) => {
