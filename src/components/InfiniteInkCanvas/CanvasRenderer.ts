@@ -4,7 +4,7 @@
 
 import type { Camera, CanvasObject, Stroke, TextNodeData } from './types';
 import { screenToWorld, worldToScreen } from './constants';
-import { drawSmoothStroke } from './StrokeEngine';
+import { drawSmoothStroke, getStrokeBounds } from './StrokeEngine';
 
 // ---- Public entry point ------------------------------------------------------
 
@@ -17,11 +17,13 @@ export interface RenderParams {
   currentStroke: Stroke | null;
   showDotGrid: boolean;
   editingTextId: string | null;
+  selectedIds: string[];
+  selectionRect: { x1: number; y1: number; x2: number; y2: number } | null;
   dpr: number;
 }
 
 export function renderAll(params: RenderParams): void {
-  const { ctx, canvasWidth, canvasHeight, camera, objects, currentStroke, showDotGrid, editingTextId, dpr } = params;
+  const { ctx, canvasWidth, canvasHeight, camera, objects, currentStroke, showDotGrid, editingTextId, selectedIds, selectionRect, dpr } = params;
 
   ctx.save();
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
@@ -39,11 +41,48 @@ export function renderAll(params: RenderParams): void {
     drawSmoothStroke(ctx, currentStroke, currentStroke.smoothing);
   }
 
+  // Selection highlights
+  if (selectedIds.length > 0) {
+    drawSelectionHighlight(ctx, objects, selectedIds);
+  }
+  if (selectionRect) {
+    drawSelectionRect(ctx, selectionRect);
+  }
+
   ctx.restore(); // camera
 
   if (showDotGrid) drawDotGrid(ctx, camera, canvasWidth, canvasHeight);
 
   ctx.restore(); // DPR
+}
+
+// ---- Selection rendering -----------------------------------------------------
+
+function drawSelectionHighlight(ctx: CanvasRenderingContext2D, objects: CanvasObject[], selectedIds: string[]): void {
+  ctx.save();
+  ctx.strokeStyle = '#6b5ce7';
+  ctx.lineWidth = 1.5 / (ctx.getTransform().a || 1);
+  ctx.setLineDash([5, 4]);
+  const set = new Set(selectedIds);
+  for (const obj of objects) {
+    if (obj.type !== 'stroke' || !set.has(obj.id)) continue;
+    const b = getStrokeBounds(obj);
+    ctx.strokeRect(b.minX, b.minY, b.maxX - b.minX, b.maxY - b.minY);
+  }
+  ctx.restore();
+}
+
+function drawSelectionRect(ctx: CanvasRenderingContext2D, r: { x1: number; y1: number; x2: number; y2: number }): void {
+  ctx.save();
+  ctx.strokeStyle = '#6b5ce7';
+  ctx.lineWidth = 1 / (ctx.getTransform().a || 1);
+  ctx.setLineDash([5, 4]);
+  ctx.fillStyle = 'rgba(107,92,231,0.08)';
+  const x = Math.min(r.x1, r.x2), y = Math.min(r.y1, r.y2);
+  const w = Math.abs(r.x2 - r.x1), h = Math.abs(r.y2 - r.y1);
+  ctx.fillRect(x, y, w, h);
+  ctx.strokeRect(x, y, w, h);
+  ctx.restore();
 }
 
 // ---- Dot Grid ----------------------------------------------------------------

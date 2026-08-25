@@ -1,6 +1,8 @@
 // ---- Tool & Interaction Types ------------------------------------------------
 
-export type ToolType = 'pen' | 'eraser' | 'text';
+export type ToolType = 'pen' | 'eraser' | 'text' | 'select';
+
+export type SelectionMode = 'box' | 'click';
 
 // ---- Coordinate System -------------------------------------------------------
 

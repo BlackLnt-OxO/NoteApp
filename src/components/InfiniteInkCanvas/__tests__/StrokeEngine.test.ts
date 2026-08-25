@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { getPressure, addRawPoint, smoothingToMinCutoff } from '../StrokeEngine';
+import { getPressure, addRawPoint, smoothingToMinCutoff, getStrokeBounds, hitTestStroke, boundsIntersectRect } from '../StrokeEngine';
 import type { Stroke } from '../types';
 
 function makeStroke(): Stroke {
@@ -39,5 +39,32 @@ describe('smoothingToMinCutoff', () => {
   it('maps 1 → 0.05 Hz', () => expect(smoothingToMinCutoff(1)).toBeCloseTo(0.05, 5));
   it('is monotonic decreasing', () => {
     expect(smoothingToMinCutoff(0.3)).toBeGreaterThan(smoothingToMinCutoff(0.7));
+  });
+});
+
+describe('selection hit-testing', () => {
+  it('getStrokeBounds computes padded bounds', () => {
+    const s = makeStroke();
+    addRawPoint(s, 10, 20, 0.5, 1000);
+    addRawPoint(s, 30, 40, 0.5, 1016);
+    const b = getStrokeBounds(s);
+    expect(b.minX).toBeLessThanOrEqual(10);
+    expect(b.maxX).toBeGreaterThanOrEqual(30);
+    expect(b.minY).toBeLessThanOrEqual(20);
+    expect(b.maxY).toBeGreaterThanOrEqual(40);
+  });
+
+  it('hitTestStroke hits near a point', () => {
+    const s = makeStroke();
+    addRawPoint(s, 10, 20, 0.5, 1000);
+    addRawPoint(s, 30, 40, 0.5, 1016);
+    expect(hitTestStroke(s, 10, 20)).toBe(true);
+    expect(hitTestStroke(s, 500, 500)).toBe(false);
+  });
+
+  it('boundsIntersectRect detects overlap', () => {
+    const b = { minX: 0, minY: 0, maxX: 10, maxY: 10 };
+    expect(boundsIntersectRect(b, 5, 5, 20, 20)).toBe(true);
+    expect(boundsIntersectRect(b, 50, 50, 60, 60)).toBe(false);
   });
 });

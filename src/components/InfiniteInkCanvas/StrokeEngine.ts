@@ -92,6 +92,51 @@ function width(pressure: number, baseSize: number, isEraser: boolean): number {
   return Math.max(0.5, baseSize * (0.2 + 0.8 * Math.max(0.05, Math.min(1, pressure))));
 }
 
+// ---- Hit testing (for selection) ---------------------------------------------
+
+export interface Bounds {
+  minX: number; minY: number; maxX: number; maxY: number;
+}
+
+export function getStrokeBounds(stroke: Stroke): Bounds {
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  const r = stroke.size / 2;
+  for (const p of stroke.points) {
+    if (p.x - r < minX) minX = p.x - r;
+    if (p.y - r < minY) minY = p.y - r;
+    if (p.x + r > maxX) maxX = p.x + r;
+    if (p.y + r > maxY) maxY = p.y + r;
+  }
+  return { minX, minY, maxX, maxY };
+}
+
+/** Point-to-segment distance. */
+function distToSegment(px: number, py: number, x1: number, y1: number, x2: number, y2: number): number {
+  const dx = x2 - x1, dy = y2 - y1;
+  const len2 = dx * dx + dy * dy;
+  if (len2 === 0) return Math.hypot(px - x1, py - y1);
+  let t = ((px - x1) * dx + (py - y1) * dy) / len2;
+  t = Math.max(0, Math.min(1, t));
+  return Math.hypot(px - (x1 + t * dx), py - (y1 + t * dy));
+}
+
+export function hitTestStroke(stroke: Stroke, x: number, y: number): boolean {
+  const threshold = stroke.size / 2 + 6;
+  const pts = stroke.points;
+  if (pts.length === 0) return false;
+  if (pts.length === 1) return Math.hypot(pts[0].x - x, pts[0].y - y) <= threshold;
+  for (let i = 1; i < pts.length; i++) {
+    if (distToSegment(x, y, pts[i - 1].x, pts[i - 1].y, pts[i].x, pts[i].y) <= threshold) return true;
+  }
+  return false;
+}
+
+export function boundsIntersectRect(b: Bounds, x1: number, y1: number, x2: number, y2: number): boolean {
+  const rx1 = Math.min(x1, x2), rx2 = Math.max(x1, x2);
+  const ry1 = Math.min(y1, y2), ry2 = Math.max(y1, y2);
+  return !(b.maxX < rx1 || b.minX > rx2 || b.maxY < ry1 || b.minY > ry2);
+}
+
 export function drawSmoothStroke(
   ctx: CanvasRenderingContext2D,
   stroke: Stroke,

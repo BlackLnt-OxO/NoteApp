@@ -1,7 +1,7 @@
 import React, { useRef, useEffect, useCallback, useState } from 'react';
 import { useCanvasStore } from './useCanvasStore';
 import { renderAll } from './CanvasRenderer';
-import { addRawPoint, getPressure } from './StrokeEngine';
+import { addRawPoint, getPressure, hitTestStroke, getStrokeBounds, boundsIntersectRect } from './StrokeEngine';
 import { screenToWorld, clampZoom, zoomAt, ERASER_RADIUS } from './constants';
 import TextNode from './TextNode';
 import Toolbar from './Toolbar';
@@ -15,6 +15,8 @@ const InfiniteInkCanvas: React.FC = () => {
   const currentStrokeRef = useRef<Stroke | null>(null);
   const isDrawingRef = useRef(false);
   const panAnchorRef = useRef<{ sx: number; sy: number; camX: number; camY: number } | null>(null);
+  const selectAnchorRef = useRef<{ x: number; y: number } | null>(null);
+  const selectionRectRef = useRef<{ x1: number; y1: number; x2: number; y2: number } | null>(null);
   const [cursorScreen, setCursorScreen] = useState<{ x: number; y: number } | null>(null);
   const rafRef = useRef<number>(0);
   const dprRef = useRef(1);
@@ -27,6 +29,9 @@ const InfiniteInkCanvas: React.FC = () => {
   const brushSettings = useCanvasStore((s) => s.brushSettings);
   const showDotGrid = useCanvasStore((s) => s.showDotGrid);
   const editingTextId = useCanvasStore((s) => s.editingTextId);
+  const selectedIds = useCanvasStore((s) => s.selectedIds);
+  const selectionMode = useCanvasStore((s) => s.selectionMode);
+  const eraserMode = useCanvasStore((s) => s.eraserMode);
   const isDraggingToolbar = useToolbarStore((s) => s.isDragging);
   const tOffset = useToolbarStore((s) => s.offset);
   const tWidth = useToolbarStore((s) => s.width);
@@ -75,6 +80,8 @@ const InfiniteInkCanvas: React.FC = () => {
       currentStroke: currentStrokeRef.current,
       showDotGrid: state.showDotGrid,
       editingTextId: state.editingTextId,
+      selectedIds: state.selectedIds,
+      selectionRect: selectionRectRef.current,
       dpr: dprRef.current,
     });
     dirtyRef.current = false;
@@ -91,7 +98,7 @@ const InfiniteInkCanvas: React.FC = () => {
   useEffect(() => {
     dirtyRef.current = true;
     scheduleRender();
-  }, [objects, camera, activeTool, brushSettings, showDotGrid, editingTextId, scheduleRender]);
+  }, [objects, camera, activeTool, brushSettings, showDotGrid, editingTextId, selectedIds, selectionMode, scheduleRender]);
 
   // ---- Keyboard ---------------------------------------------------------------
 
@@ -146,6 +153,29 @@ const InfiniteInkCanvas: React.FC = () => {
       return;
     }
 
+    // Selection tool
+    if (state.activeTool === 'select') {
+      canvas.setPointerCapture(e.pointerId);
+      if (state.selectionMode === 'click') {
+        // Click a stroke to toggle its selection
+        const hit = [...state.objects].reverse().find((o) => o.type === 'stroke' && hitTestStroke(o, world.x, world.y));
+        if (hit) state.toggleSelected(hit.id);
+        else state.clearSelection();
+      } else {
+        // Box select — start dragging a rectangle
+        selectAnchorRef.current = { x: world.x, y: world.y };
+        selectionRectRef.current = { x1: world.x, y1: world.y, x2: world.x, y2: world.y };
+      }
+      return;
+    }
+
+    // Stroke eraser (click to delete an entire stroke)
+    if (state.activeTool === 'eraser' && state.eraserMode === 'stroke') {
+      const hit = [...state.objects].reverse().find((o) => o.type === 'stroke' && hitTestStroke(o, world.x, world.y));
+      if (hit) state.deleteObject(hit.id);
+      return;
+    }
+
     canvas.setPointerCapture(e.pointerId);
     isDrawingRef.current = true;
 
@@ -187,6 +217,15 @@ const InfiniteInkCanvas: React.FC = () => {
       return;
     }
 
+    // Box selection dragging
+    if (selectAnchorRef.current) {
+      const w = screenToWorld(sx, sy, state.camera);
+      selectionRectRef.current = { x1: selectAnchorRef.current.x, y1: selectAnchorRef.current.y, x2: w.x, y2: w.y };
+      dirtyRef.current = true;
+      scheduleRender();
+      return;
+    }
+
     if (!isDrawingRef.current || !currentStrokeRef.current) return;
 
     const events: PointerEvent[] = (e.nativeEvent as any).getCoalescedEvents?.() || [e.nativeEvent];
@@ -213,6 +252,21 @@ const InfiniteInkCanvas: React.FC = () => {
     canvas.releasePointerCapture(e.pointerId);
 
     if (panAnchorRef.current) { panAnchorRef.current = null; return; }
+
+    // Finalize box selection
+    if (selectAnchorRef.current && selectionRectRef.current) {
+      const r = selectionRectRef.current;
+      const state = useCanvasStore.getState();
+      const ids = state.objects
+        .filter((o) => o.type === 'stroke' && boundsIntersectRect(getStrokeBounds(o), r.x1, r.y1, r.x2, r.y2))
+        .map((o) => o.id);
+      state.setSelectedIds(ids);
+      selectAnchorRef.current = null;
+      selectionRectRef.current = null;
+      dirtyRef.current = true;
+      scheduleRender();
+      return;
+    }
 
     if (isDrawingRef.current && currentStrokeRef.current) {
       const stroke = currentStrokeRef.current;
@@ -242,10 +296,14 @@ const InfiniteInkCanvas: React.FC = () => {
 
   // ---- Cursor -----------------------------------------------------------------
 
-  const cursorStyle = (activeTool === 'pen' || activeTool === 'eraser') ? 'none' : activeTool === 'text' ? 'text' : 'default';
+  const cursorStyle = (activeTool === 'pen' || activeTool === 'eraser') ? 'none'
+    : activeTool === 'text' ? 'text'
+    : activeTool === 'select' ? 'crosshair'
+    : 'default';
   const editingNode = objects.find((o): o is TextNodeData => o.type === 'text' && o.id === editingTextId);
 
-  const showCursor = (activeTool === 'pen' || activeTool === 'eraser') && cursorScreen && !isDraggingToolbar;
+  const freeEraser = activeTool === 'eraser' && eraserMode === 'free';
+  const showCursor = (activeTool === 'pen' || freeEraser) && cursorScreen && !isDraggingToolbar;
   const cs = activeTool === 'eraser' ? ERASER_RADIUS : brushSettings.size;
 
   return (

@@ -6,6 +6,7 @@ import type {
   TextNodeData,
   CanvasObject,
   ToolType,
+  SelectionMode,
 } from './types';
 import {
   DEFAULT_CAMERA,
@@ -25,6 +26,9 @@ export interface CanvasStore {
   brushSettings: BrushSettings;
   showDotGrid: boolean;
   editingTextId: string | null;
+  selectedIds: string[];
+  selectionMode: SelectionMode;
+  eraserMode: 'free' | 'stroke';
   history: CanvasObject[][];
   redoStack: CanvasObject[][];
   loaded: boolean;
@@ -40,6 +44,11 @@ export interface CanvasStore {
   setBrushSettings: (partial: Partial<BrushSettings>) => void;
   setShowDotGrid: (show: boolean) => void;
   setEditingTextId: (id: string | null) => void;
+  setSelectedIds: (ids: string[]) => void;
+  toggleSelected: (id: string) => void;
+  setSelectionMode: (mode: SelectionMode) => void;
+  clearSelection: () => void;
+  setEraserMode: (mode: 'free' | 'stroke') => void;
   pushHistory: () => void;
   undo: () => void;
   redo: () => void;
@@ -65,6 +74,9 @@ export const useCanvasStore = create<CanvasStore>((set, get) => ({
   brushSettings: { ...DEFAULT_BRUSH },
   showDotGrid: true,
   editingTextId: null,
+  selectedIds: [],
+  selectionMode: 'box',
+  eraserMode: 'free',
   history: [],
   redoStack: [],
   loaded: false,
@@ -177,6 +189,21 @@ export const useCanvasStore = create<CanvasStore>((set, get) => ({
   setShowDotGrid: (show) => set({ showDotGrid: show }),
 
   setEditingTextId: (id) => set({ editingTextId: id }),
+
+  setSelectedIds: (ids) => set({ selectedIds: ids }),
+
+  toggleSelected: (id) =>
+    set((s) => ({
+      selectedIds: s.selectedIds.includes(id)
+        ? s.selectedIds.filter((x) => x !== id)
+        : [...s.selectedIds, id],
+    })),
+
+  setSelectionMode: (mode) => set({ selectionMode: mode }),
+
+  clearSelection: () => set({ selectedIds: [] }),
+
+  setEraserMode: (mode) => set({ eraserMode: mode }),
 
   // --- Persistence ---
 
