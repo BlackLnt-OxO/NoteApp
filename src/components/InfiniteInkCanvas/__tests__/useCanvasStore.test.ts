@@ -8,7 +8,7 @@ beforeEach(() => {
     objects: [],
     camera: { x: 0, y: 0, zoom: 1 },
     activeTool: 'pen',
-    brushSettings: { size: 8, opacity: 1, color: 'rgba(255,255,255,0.95)' },
+    brushSettings: { size: 8, opacity: 1, color: 'rgba(255,255,255,0.95)', smoothing: 0.35 },
     showDotGrid: true,
     editingTextId: null,
     history: [],
@@ -21,8 +21,8 @@ beforeEach(() => {
 function makeStroke(id = 's1'): Stroke {
   return {
     id, type: 'stroke',
-    points: [{ x: 10, y: 20, pressure: 0.8 }, { x: 30, y: 40, pressure: 0.8 }],
-    color: '#ffffff', size: 8, opacity: 1,
+    points: [{ x: 10, y: 20, pressure: 0.8, t: 1 }, { x: 30, y: 40, pressure: 0.8, t: 17 }],
+    color: '#ffffff', size: 8, opacity: 1, smoothing: 0.35,
     compositeOperation: 'source-over', createdAt: Date.now(),
   };
 }

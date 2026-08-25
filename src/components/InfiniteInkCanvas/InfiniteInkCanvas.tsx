@@ -157,10 +157,11 @@ const InfiniteInkCanvas: React.FC = () => {
       color: isEraser ? '#000000' : state.brushSettings.color,
       size: isEraser ? ERASER_RADIUS : state.brushSettings.size,
       opacity: isEraser ? 1 : state.brushSettings.opacity,
+      smoothing: isEraser ? 0 : state.brushSettings.smoothing,
       compositeOperation: isEraser ? 'destination-out' : 'source-over',
       createdAt: Date.now(),
     };
-    addRawPoint(stroke, world.x, world.y, getPressure(e));
+    addRawPoint(stroke, world.x, world.y, getPressure(e), e.timeStamp);
     currentStrokeRef.current = stroke;
 
     dirtyRef.current = true;
@@ -197,7 +198,7 @@ const InfiniteInkCanvas: React.FC = () => {
       const wx = ce.clientX - rect.left;
       const wy = ce.clientY - rect.top;
       const w = screenToWorld(wx, wy, state.camera);
-      addRawPoint(stroke, w.x, w.y, getPressure(ce));
+      addRawPoint(stroke, w.x, w.y, getPressure(ce), ce.timeStamp);
     }
 
     dirtyRef.current = true;

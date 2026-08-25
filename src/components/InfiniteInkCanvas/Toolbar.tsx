@@ -208,6 +208,13 @@ const Toolbar: React.FC = () => {
           onChange={(e) => update({ opacity: Number(e.target.value) / 100 })} style={trackStyle} />
       </div>
 
+      {/* ---- Smoothing (PS-style 1€ filter) ---- */}
+      <div style={sectionStyle}>
+        <div style={labelStyle}><span>平滑</span><span>{Math.round(brushSettings.smoothing * 100)}%</span></div>
+        <input type="range" min={0} max={100} value={Math.round(brushSettings.smoothing * 100)}
+          onChange={(e) => update({ smoothing: Number(e.target.value) / 100 })} style={trackStyle} />
+      </div>
+
       {/* ---- Dot grid show/hide ---- */}
       <div style={sectionStyle}>
         <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '11px', color: 'var(--text-secondary)', cursor: 'pointer' }}>

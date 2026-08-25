@@ -8,6 +8,7 @@ export const DEFAULT_BRUSH: BrushSettings = {
   size: 8,
   opacity: 1,
   color: 'rgba(255,255,255,0.95)',
+  smoothing: 0.35,
 };
 
 export const MIN_ZOOM = 0.1;

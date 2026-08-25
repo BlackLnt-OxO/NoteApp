@@ -16,6 +16,7 @@ export interface BrushSettings {
   size: number;
   opacity: number;
   color: string;
+  smoothing: number; // 0-1, maps to 1€ filter minCutoff (PS-style)
 }
 
 // ---- Stroke ------------------------------------------------------------------
@@ -24,6 +25,7 @@ export interface StrokePoint {
   x: number;
   y: number;
   pressure: number;
+  t: number; // timestamp ms (for 1€ filter)
 }
 
 export interface Stroke {
@@ -33,6 +35,7 @@ export interface Stroke {
   color: string;
   size: number;
   opacity: number;
+  smoothing: number;
   compositeOperation: GlobalCompositeOperation;
   createdAt: number;
 }

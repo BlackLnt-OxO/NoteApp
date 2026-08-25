@@ -36,10 +36,7 @@ export function renderAll(params: RenderParams): void {
   drawObjects(ctx, objects, editingTextId);
 
   if (currentStroke && currentStroke.points.length > 0) {
-    ctx.save();
-    ctx.globalCompositeOperation = currentStroke.compositeOperation;
-    drawSmoothStroke(ctx, currentStroke);
-    ctx.restore();
+    drawSmoothStroke(ctx, currentStroke, currentStroke.smoothing);
   }
 
   ctx.restore(); // camera
@@ -82,7 +79,7 @@ function drawDotGrid(ctx: CanvasRenderingContext2D, camera: Camera, canvasW: num
 function drawObjects(ctx: CanvasRenderingContext2D, objects: CanvasObject[], editingTextId: string | null): void {
   for (const obj of objects) {
     if (obj.type === 'stroke') {
-      drawSmoothStroke(ctx, obj);
+      drawSmoothStroke(ctx, obj, obj.smoothing);
     } else if (obj.type === 'text' && obj.id !== editingTextId) {
       drawTextOnCanvas(ctx, obj);
     }
