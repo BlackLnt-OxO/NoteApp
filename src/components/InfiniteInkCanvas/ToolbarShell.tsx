@@ -11,12 +11,11 @@
  * - N key toggles expand / collapse.
  */
 
-import React, { useRef, useEffect, useCallback } from 'react';
+import React, { useRef, useEffect, useLayoutEffect, useCallback, useState } from 'react';
 import { useToolbarStore } from './useToolbarStore';
 import {
   MIN_TOOLBAR_WIDTH,
   MAX_TOOLBAR_WIDTH,
-  TOOLBAR_COLLAPSE_WIDTH,
   RESIZE_HANDLE_WIDTH,
 } from './constants';
 
@@ -53,6 +52,12 @@ const ToolbarShell: React.FC<Props> = ({ children }) => {
 
   const shellRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLElement | null>(null);
+  const bodyRef = useRef<HTMLDivElement>(null);
+
+  // Minimum width that fits all the toolbar content (so buttons never overlap).
+  // Measured from the panel body at its `min-content` size; also used as the
+  // resize floor and the collapse trigger threshold.
+  const [fitMinWidth, setFitMinWidth] = useState(MIN_TOOLBAR_WIDTH);
 
   const dragRef = useRef<{
     startMouseX: number;
@@ -89,6 +94,26 @@ const ToolbarShell: React.FC<Props> = ({ children }) => {
   useEffect(() => {
     if (shellRef.current) containerRef.current = shellRef.current.parentElement;
   }, []);
+
+  // Measure the panel content's natural minimum width so tool buttons never
+  // overlap. Re-measures whenever the panel becomes visible.
+  const measureContentMin = useCallback((): number => {
+    const body = bodyRef.current;
+    if (!body) return MIN_TOOLBAR_WIDTH;
+    const prevW = body.style.width;
+    const prevMinW = body.style.minWidth;
+    body.style.width = 'min-content';
+    body.style.minWidth = 'min-content';
+    const w = body.getBoundingClientRect().width;
+    body.style.width = prevW;
+    body.style.minWidth = prevMinW;
+    return Math.max(MIN_TOOLBAR_WIDTH, Math.ceil(w) + 4);
+  }, []);
+
+  useLayoutEffect(() => {
+    if (!expanded) return;
+    setFitMinWidth(measureContentMin());
+  }, [expanded, measureContentMin]);
 
   // ---- N-key toggle --------------------------------------------------------
 
@@ -160,8 +185,13 @@ const ToolbarShell: React.FC<Props> = ({ children }) => {
 
       const vpW = containerRef.current?.clientWidth ?? window.innerWidth;
 
-      // Always snap to nearest edge — never stay floating mid-canvas
-      const newSide = e.clientX < vpW / 2 ? 'left' : 'right';
+      // Snap to whichever half the toolbar CENTER is over — must match the
+      // canvas overlay highlight (center < vpW/2 → left). Read the live
+      // offset/width from the store (latest pointer-move position).
+      const st = useToolbarStore.getState();
+      const tl = st.side === 'left' ? st.offset : vpW - st.offset - st.width;
+      const tr = st.side === 'left' ? st.offset + st.width : vpW - st.offset;
+      const newSide = (tl + tr) / 2 < vpW / 2 ? 'left' : 'right';
       setSide(newSide);
       // Snap flush: offset = 0 (right against the edge)
       setPosition(d.startTop + (e.clientY - d.startMouseY), 0);
@@ -180,11 +210,14 @@ const ToolbarShell: React.FC<Props> = ({ children }) => {
       e.preventDefault(); e.stopPropagation();
       (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
       resizeRef.current = {
-        startMouseX: e.clientX, startWidth: widthRef.current,
+        startMouseX: e.clientX,
+        // Use the rendered width (min-width forces it to ≥ fitMinWidth even if
+        // the stored width was persisted smaller).
+        startWidth: Math.max(fitMinWidth, widthRef.current),
         pointerId: e.pointerId,
       };
     },
-    [],
+    [fitMinWidth],
   );
 
   const onResizePointerMove = useCallback(
@@ -202,17 +235,18 @@ const ToolbarShell: React.FC<Props> = ({ children }) => {
 
       let nextWidth = rs.startWidth + delta;
 
-      if (nextWidth < TOOLBAR_COLLAPSE_WIDTH) {
+      // Below the content-fit minimum → collapse the toolbar.
+      if (nextWidth < fitMinWidth) {
         collapse();
         resizeRef.current = null;
         try { (e.currentTarget as HTMLElement).releasePointerCapture?.(e.pointerId); } catch {}
         return;
       }
 
-      nextWidth = Math.max(MIN_TOOLBAR_WIDTH, Math.min(MAX_TOOLBAR_WIDTH, nextWidth));
+      nextWidth = Math.max(fitMinWidth, Math.min(MAX_TOOLBAR_WIDTH, nextWidth));
       setWidth(nextWidth);
     },
-    [collapse, setWidth],
+    [collapse, setWidth, fitMinWidth],
   );
 
   const onResizePointerUp = useCallback((e: React.PointerEvent) => {
@@ -307,7 +341,7 @@ const ToolbarShell: React.FC<Props> = ({ children }) => {
             flexDirection: 'column',
             pointerEvents: 'auto',
             width,
-            minWidth: MIN_TOOLBAR_WIDTH,
+            minWidth: fitMinWidth,
             transition: isDragging || isResizing ? 'none' : 'width 160ms ease',
           }}
           onPointerDown={stopEvent}
@@ -363,7 +397,7 @@ const ToolbarShell: React.FC<Props> = ({ children }) => {
           </div>
 
           {/* Panel body */}
-          <div style={{
+          <div ref={bodyRef} style={{
             width: '100%', minWidth: 0,
             overflowY: 'auto', overflowX: 'hidden',
             border: '1px solid rgba(255,255,255,0.12)',

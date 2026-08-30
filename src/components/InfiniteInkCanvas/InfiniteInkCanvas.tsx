@@ -172,17 +172,21 @@ const InfiniteInkCanvas: React.FC = () => {
     if (state.activeTool === 'select') {
       canvas.setPointerCapture(e.pointerId);
 
-      if (state.selectionMode === 'click') {
-        // Hit test topmost stroke
-        const hit = [...state.objects].reverse().find((o) => o.type === 'stroke' && hitTestStroke(o, world.x, world.y));
+      // Pressing on a stroke → select it (or keep the existing selection group)
+      // and begin a drag-move. Works in BOTH click and box modes.
+      const hit = [...state.objects].reverse().find((o) => o.type === 'stroke' && hitTestStroke(o, world.x, world.y));
 
-        if (hit) {
-          // Select it (or keep existing selection if already selected), then begin drag
-          if (!state.selectedIds.includes(hit.id)) state.setSelectedIds([hit.id]);
-          startSelectDrag(state.selectedIds.includes(hit.id) ? state.selectedIds : [hit.id], world);
-        } else {
-          state.clearSelection();
-        }
+      if (hit) {
+        const alreadySelected = state.selectedIds.includes(hit.id);
+        const ids = alreadySelected ? state.selectedIds : [hit.id];
+        if (!alreadySelected) state.setSelectedIds(ids);
+        startSelectDrag(ids, world);
+        return;
+      }
+
+      // Pressing on empty canvas
+      if (state.selectionMode === 'click') {
+        state.clearSelection();
       } else {
         // Box select — start dragging a rectangle
         selectAnchorRef.current = { x: world.x, y: world.y };
@@ -371,12 +375,15 @@ const InfiniteInkCanvas: React.FC = () => {
         const mid = cw * 0.5;
         const tl = tSide === 'left' ? tOffset : cw - tOffset - tWidth;
         const tr = tSide === 'left' ? tOffset + tWidth : cw - tOffset;
+        // Highlight the half the toolbar CENTER is over — must match the
+        // snap-on-release logic in ToolbarShell (center < vpW/2 → left).
+        const snapLeft = (tl + tr) / 2 < mid;
         return (
           <div style={{ position: 'absolute', inset: 0, zIndex: 99, pointerEvents: 'none' }}>
             <div style={{ position: 'absolute', top: 0, bottom: 0, left: 0, width: '50%',
-              background: tl < mid ? 'rgba(0,0,0,0.35)' : 'rgba(0,0,0,0.15)', transition: 'background 0.10s' }} />
+              background: snapLeft ? 'rgba(0,0,0,0.35)' : 'rgba(0,0,0,0.15)', transition: 'background 0.10s' }} />
             <div style={{ position: 'absolute', top: 0, bottom: 0, left: '50%', width: '50%',
-              background: tr > mid ? 'rgba(0,0,0,0.35)' : 'rgba(0,0,0,0.15)', transition: 'background 0.10s' }} />
+              background: !snapLeft ? 'rgba(0,0,0,0.35)' : 'rgba(0,0,0,0.15)', transition: 'background 0.10s' }} />
             <div style={{ position: 'absolute', top: 0, bottom: 0, left: '50%', width: 1,
               background: 'rgba(255,255,255,0.12)' }} />
           </div>
