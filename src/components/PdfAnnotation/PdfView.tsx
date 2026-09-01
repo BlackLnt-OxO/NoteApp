@@ -155,20 +155,12 @@ const NavBar: React.FC<{
         下一页 ›
       </button>
 
-      <button
-        onClick={() => setAnchorPage(currentPage)}
-        title="把当前页添加为标记（回跳目标，保留该页渲染缓存）"
-        style={{
-          width: 28, padding: 0, lineHeight: '24px', textAlign: 'center',
-          borderRadius: '6px', cursor: 'pointer', fontFamily: 'inherit',
-          fontSize: '16px', fontWeight: 600,
-          border: '1px solid var(--glass-border)',
-          background: 'var(--glass-bg-light)', color: 'var(--text-secondary)',
-          transition: 'all var(--transition)',
-        }}
-      >
-        +
-      </button>
+      <span style={{
+        marginLeft: 'auto', fontSize: '12px', color: 'var(--text-muted)',
+        overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '280px',
+      }}>
+        {fileName}
+      </span>
 
       {anchorPage != null && (
         <div
@@ -187,7 +179,10 @@ const NavBar: React.FC<{
             userSelect: 'none', transition: 'background 0.12s',
           }}
         >
-          <span>📌 第 {anchorPage} 页</span>
+          <svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor" style={{ flexShrink: 0 }} aria-hidden="true">
+            <path d="M12 17v5M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6h1a2 2 0 0 0 0-4H8a2 2 0 0 0 0 4h1z" />
+          </svg>
+          <span>第 {anchorPage} 页</span>
           <span
             onClick={(e) => { e.stopPropagation(); setAnchorPage(null); }}
             title="删除标记"
@@ -207,12 +202,20 @@ const NavBar: React.FC<{
         </div>
       )}
 
-      <span style={{
-        marginLeft: 'auto', fontSize: '12px', color: 'var(--text-muted)',
-        overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '280px',
-      }}>
-        {fileName}
-      </span>
+      <button
+        onClick={() => setAnchorPage(currentPage)}
+        title="把当前页添加为标记（回跳目标，保留该页渲染缓存）"
+        style={{
+          width: 28, padding: 0, lineHeight: '24px', textAlign: 'center',
+          borderRadius: '6px', cursor: 'pointer', fontFamily: 'inherit',
+          fontSize: '16px', fontWeight: 600,
+          border: '1px solid var(--glass-border)',
+          background: 'var(--glass-bg-light)', color: 'var(--text-secondary)',
+          transition: 'all var(--transition)',
+        }}
+      >
+        +
+      </button>
 
       <button onClick={() => importPdf(null)} style={btnStyle} title="导入其它 PDF">
         导入
