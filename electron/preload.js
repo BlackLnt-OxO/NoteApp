@@ -73,6 +73,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
   pickBackground: () => ipcRenderer.invoke('file:pickBackground'),
   saveImage: (dataUrl, fileName) => ipcRenderer.invoke('file:saveImage', { dataUrl, fileName }),
 
+  // PDF file access (annotation library)
+  pickPdfFile: () => ipcRenderer.invoke('pdf:pickFile'),
+  readPdfFile: (filePath) => ipcRenderer.invoke('pdf:readFile', filePath),
+  pdfFileExists: (filePath) => ipcRenderer.invoke('pdf:fileExists', filePath),
+
   // App
   getPath: (name) => ipcRenderer.invoke('app:getPath', name),
   getDefaultBackground: () => ipcRenderer.invoke('app:getDefaultBackground'),

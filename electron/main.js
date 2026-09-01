@@ -532,6 +532,39 @@ document.addEventListener('keydown',function(e){if(e.key==='Escape')ipcRenderer.
     return { dataUrl, filePath };
   });
 
+  // ---- PDF file access (library) -----------------------------------------
+
+  ipcMain.handle('pdf:pickFile', async () => {
+    const { dialog } = require('electron');
+    const result = await dialog.showOpenDialog(mainWindow, {
+      properties: ['openFile'],
+      filters: [{ name: 'PDF', extensions: ['pdf'] }],
+    });
+    if (result.canceled || !result.filePaths[0]) return null;
+    const filePath = result.filePaths[0];
+    try {
+      const data = fs.readFileSync(filePath);
+      const buffer = data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength);
+      return { filePath, sizeBytes: data.length, data: buffer };
+    } catch (e) {
+      return { filePath, error: String(e) };
+    }
+  });
+
+  ipcMain.handle('pdf:readFile', (event, filePath) => {
+    try {
+      const data = fs.readFileSync(filePath);
+      const buffer = data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength);
+      return { ok: true, sizeBytes: data.length, data: buffer };
+    } catch (e) {
+      return { ok: false, error: String(e) };
+    }
+  });
+
+  ipcMain.handle('pdf:fileExists', (event, filePath) => {
+    try { return fs.existsSync(filePath); } catch { return false; }
+  });
+
   ipcMain.handle('app:getPath', (event, name) => {
     return app.getPath(name);
   });

@@ -66,7 +66,8 @@ export interface PdfStore {
   camera: PdfCamera;
 
   // Actions
-  loadPdf: (file: File) => Promise<void>;
+  /** Load a PDF from raw bytes (from the library / file picker). */
+  loadPdfFromBuffer: (buffer: ArrayBuffer, name: string) => Promise<void>;
   closePdf: () => void;
   setPageSize: (page: number, size: PdfPageSize) => void;
   setCurrentPage: (page: number) => void;
@@ -143,13 +144,12 @@ export const usePdfStore = create<PdfStore>((set, get) => ({
 
   // --- document ------------------------------------------------------------
 
-  loadPdf: async (file: File) => {
+  loadPdfFromBuffer: async (buffer: ArrayBuffer, name: string) => {
     try {
       set({ loading: true, error: null });
-      const buffer = await file.arrayBuffer();
       const { doc, numPages, firstPage } = await loadPdfDocument(buffer);
       set({
-        fileName: file.name,
+        fileName: name,
         pdfDoc: doc,
         numPages,
         currentPage: 1,

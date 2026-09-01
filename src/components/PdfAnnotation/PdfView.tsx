@@ -1,22 +1,41 @@
 /**
  * PdfView — PDF annotation view (single-page book mode).
  *
- * - Import screen when no PDF is open.
- * - Top navigation bar: previous / page input / next / filename / import other.
- * - Canvas fills the rest, with the shared dockable ToolbarShell + PdfToolbar.
+ * Home routing:
+ *   - no PDF open + empty library  → ImportScreen (first-time)
+ *   - no PDF open + library items  → LibraryHome (recent PDFs, categories)
+ *   - PDF open                     → NavBar + canvas + dockable toolbar
  */
 
-import React, { useRef, useState, useEffect, useCallback } from 'react';
+import React, { useRef, useState, useEffect } from 'react';
 import { usePdfStore } from './PdfStore';
+import { usePdfLibrary } from './PdfLibrary';
 import { useToolbarStore } from '../InfiniteInkCanvas/useToolbarStore';
 import PdfCanvas from './PdfCanvas';
 import PdfToolbar from './PdfToolbar';
 import ToolbarShell from '../InfiniteInkCanvas/ToolbarShell';
+import LibraryHome from './LibraryHome';
+import { pickPdfFile } from './PdfPicker';
 
-// ---- Import screen ------------------------------------------------------------
+// ---- Shared import (native dialog → load → record in library) ----------------
 
-const ImportScreen: React.FC<{ onPick: (file: File) => void }> = ({ onPick }) => {
-  const inputRef = useRef<HTMLInputElement>(null);
+async function importPdf(categoryId: string | null): Promise<void> {
+  const picked = await pickPdfFile();
+  if (!picked) return;
+  await usePdfStore.getState().loadPdfFromBuffer(picked.buffer, picked.name);
+  const numPages = usePdfStore.getState().numPages;
+  usePdfLibrary.getState().addItem({
+    name: picked.name,
+    path: picked.path,
+    categoryId,
+    pageCount: numPages,
+    sizeBytes: picked.buffer.byteLength,
+  });
+}
+
+// ---- Import screen (first-time) -----------------------------------------------
+
+const ImportScreen: React.FC = () => {
   const loading = usePdfStore((s) => s.loading);
   const error = usePdfStore((s) => s.error);
   return (
@@ -34,7 +53,7 @@ const ImportScreen: React.FC<{ onPick: (file: File) => void }> = ({ onPick }) =>
         导入 PDF 进行批注
       </div>
       <div style={{ fontSize: '11px', color: 'var(--text-muted)', textAlign: 'center', lineHeight: '1.7' }}>
-        单页书本式浏览 · 每页独立笔迹<br />支持大型文档（按页惰性加载，不预渲染）
+        单页书本式浏览 · 每页独立笔迹 · 支持大型文档<br />导入后出现在左侧 PDF 库中
       </div>
       {loading ? (
         <div style={{ marginTop: 8, padding: '10px 22px', fontSize: '13px', color: 'var(--text-secondary)' }}>
@@ -42,7 +61,7 @@ const ImportScreen: React.FC<{ onPick: (file: File) => void }> = ({ onPick }) =>
         </div>
       ) : (
         <button
-          onClick={() => inputRef.current?.click()}
+          onClick={() => importPdf(null)}
           style={{
             marginTop: 8, padding: '10px 22px',
             background: 'var(--accent)', border: 'none', borderRadius: '8px',
@@ -66,17 +85,6 @@ const ImportScreen: React.FC<{ onPick: (file: File) => void }> = ({ onPick }) =>
           PDF 加载失败：{error}
         </div>
       )}
-      <input
-        ref={inputRef}
-        type="file"
-        accept="application/pdf"
-        style={{ display: 'none' }}
-        onChange={(e) => {
-          const f = e.target.files?.[0];
-          if (f) onPick(f);
-          e.target.value = '';
-        }}
-      />
     </div>
   );
 };
@@ -90,9 +98,7 @@ const NavBar: React.FC = () => {
   const nextPage = usePdfStore((s) => s.nextPage);
   const prevPage = usePdfStore((s) => s.prevPage);
   const setCurrentPage = usePdfStore((s) => s.setCurrentPage);
-  const loadPdf = usePdfStore((s) => s.loadPdf);
   const closePdf = usePdfStore((s) => s.closePdf);
-  const fileInputRef = useRef<HTMLInputElement>(null);
   const [pageInput, setPageInput] = useState(String(currentPage));
 
   useEffect(() => { setPageInput(String(currentPage)); }, [currentPage]);
@@ -145,16 +151,12 @@ const NavBar: React.FC = () => {
         {fileName}
       </span>
 
-      <button onClick={() => fileInputRef.current?.click()} style={btnStyle} title="导入其它 PDF">
+      <button onClick={() => importPdf(null)} style={btnStyle} title="导入其它 PDF">
         导入
       </button>
-      <button onClick={() => { if (confirm('关闭当前 PDF？本页批注尚未持久化，关闭后丢失。')) closePdf(); }} style={{ ...btnStyle, color: 'var(--danger, #e74c3c)' }} title="关闭当前 PDF">
+      <button onClick={() => { if (confirm('关闭当前 PDF？本页批注尚未持久化，关闭后丢失。')) closePdf(); }} style={{ ...btnStyle, color: 'var(--danger, #e74c3c)' }} title="返回 PDF 库">
         关闭
       </button>
-      <input
-        ref={fileInputRef} type="file" accept="application/pdf" style={{ display: 'none' }}
-        onChange={(e) => { const f = e.target.files?.[0]; if (f) loadPdf(f); e.target.value = ''; }}
-      />
     </div>
   );
 };
@@ -163,7 +165,7 @@ const NavBar: React.FC = () => {
 
 const PdfView: React.FC = () => {
   const fileName = usePdfStore((s) => s.fileName);
-  const loadPdf = usePdfStore((s) => s.loadPdf);
+  const libraryItems = usePdfLibrary((s) => s.items);
 
   // Toolbar drag overlay (same behavior as the infinite canvas)
   const isDraggingToolbar = useToolbarStore((s) => s.isDragging);
@@ -192,7 +194,7 @@ const PdfView: React.FC = () => {
   return (
     <div style={{ position: 'absolute', inset: 0, overflow: 'hidden', background: '#1a1a2e' }}>
       {!fileName ? (
-        <ImportScreen onPick={loadPdf} />
+        libraryItems.length === 0 ? <ImportScreen /> : <LibraryHome />
       ) : (
         <>
           <NavBar />
