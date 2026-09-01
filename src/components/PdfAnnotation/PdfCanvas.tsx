@@ -19,6 +19,8 @@
 import React, { useRef, useEffect, useCallback, useState } from 'react';
 import { usePdfStore } from './PdfStore';
 import { useToolbarStore } from '../InfiniteInkCanvas/useToolbarStore';
+import { useNoteStore } from '../../store';
+import { themeCanvasColors } from '../../themeColors';
 import {
   PDF_BAKE_SCALE,
   PDF_ERASER_RADIUS,
@@ -208,6 +210,7 @@ const PdfCanvas: React.FC = () => {
   const showDotGrid = usePdfStore((s) => s.showDotGrid);
   const camera = usePdfStore((s) => s.camera);
   const isDraggingToolbar = useToolbarStore((s) => s.isDragging);
+  const theme = useNoteStore((s) => s.settings.theme);
   const [cursorScreen, setCursorScreen] = useState<{ x: number; y: number } | null>(null);
   const ringRef = useRef<HTMLDivElement>(null);
 
@@ -253,11 +256,12 @@ const PdfCanvas: React.FC = () => {
 
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, vw, vh);
-    ctx.fillStyle = '#1a1a2e';
+    const colors = themeCanvasColors(useNoteStore.getState().settings.theme);
+    ctx.fillStyle = colors.background;
     ctx.fillRect(0, 0, vw, vh);
 
     // Dot grid (behind everything, screen-space, zoom-consistent)
-    if (st.showDotGrid) drawDotGrid(ctx, cam, vw, vh);
+    if (st.showDotGrid) drawDotGrid(ctx, cam, vw, vh, colors.dotColor);
 
     if (size) {
       ctx.save();
@@ -334,6 +338,12 @@ const PdfCanvas: React.FC = () => {
     dirtyRef.current = true;
     scheduleRender();
   }, [showDotGrid, scheduleRender]);
+
+  // Theme flip → repaint the workbench bg / dot grid
+  useEffect(() => {
+    dirtyRef.current = true;
+    scheduleRender();
+  }, [theme, scheduleRender]);
 
   // ---- Page load (render background + fit camera + rebuild ink) ---------------
 
@@ -457,9 +467,15 @@ const PdfCanvas: React.FC = () => {
       el.style.borderColor = 'rgba(30,30,40,0.85)';
       el.style.background = isEraser ? 'rgba(30,30,40,0.14)' : 'rgba(30,30,40,0.07)';
     } else {
-      // Outside the page (dark UI) → light ring
-      el.style.borderColor = 'rgba(255,255,255,0.75)';
-      el.style.background = isEraser ? 'rgba(255,255,255,0.12)' : 'rgba(255,255,255,0.06)';
+      // Outside the page — contrast against the themed workbench
+      const isLight = useNoteStore.getState().settings.theme === 'light';
+      if (isLight) {
+        el.style.borderColor = 'rgba(30,30,40,0.85)';
+        el.style.background = isEraser ? 'rgba(30,30,40,0.14)' : 'rgba(30,30,40,0.07)';
+      } else {
+        el.style.borderColor = 'rgba(255,255,255,0.75)';
+        el.style.background = isEraser ? 'rgba(255,255,255,0.12)' : 'rgba(255,255,255,0.06)';
+      }
     }
   }, []);
 
@@ -730,7 +746,7 @@ const PdfCanvas: React.FC = () => {
   const cs = (activeTool === 'eraser' ? PDF_ERASER_RADIUS : brush.size) * camera.zoom;
 
   return (
-    <div ref={containerRef} style={{ position: 'absolute', inset: 0, overflow: 'hidden', background: '#1a1a2e' }}>
+    <div ref={containerRef} style={{ position: 'absolute', inset: 0, overflow: 'hidden', background: 'var(--page-bg)' }}>
       <canvas
         ref={canvasRef}
         style={{ position: 'absolute', inset: 0, touchAction: 'none', userSelect: 'none', cursor: cursorStyle }}

@@ -7,7 +7,10 @@ import SettingsDialog from './components/SettingsDialog';
 import ScreenshotTool from './components/ScreenshotTool';
 import DiagnosticPanel from './components/DiagnosticPanel';
 import InfiniteInkCanvas from './components/InfiniteInkCanvas/InfiniteInkCanvas';
+import { useCanvasStore } from './components/InfiniteInkCanvas/useCanvasStore';
 import PdfView from './components/PdfAnnotation/PdfView';
+import { usePdfStore } from './components/PdfAnnotation/PdfStore';
+import { themeCanvasColors, isDefaultBrushColor } from './themeColors';
 import { fs, fsn } from './utils';
 
 const App: React.FC = () => {
@@ -36,6 +39,17 @@ const App: React.FC = () => {
         settingsBgOpacity: settings.backgroundOpacity,
       });
     });
+    // Keep default-brush ink contrast-correct when the theme flips (user-picked
+    // colors are left alone).
+    const colors = themeCanvasColors(settings.theme);
+    const cs = useCanvasStore.getState();
+    if (isDefaultBrushColor(cs.brushSettings.color)) {
+      cs.setBrushSettings({ color: colors.defaultBrush });
+    }
+    const ps = usePdfStore.getState();
+    if (isDefaultBrushColor(ps.brush.color)) {
+      ps.setBrush({ color: colors.defaultBrush });
+    }
   }, [settings.theme, settings.fontFamily, settings.fontSize, settings.backgroundOpacity]);
 
   // Ctrl+Scroll font zoom (throttled)

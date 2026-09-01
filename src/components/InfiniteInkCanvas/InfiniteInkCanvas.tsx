@@ -7,6 +7,8 @@ import TextNode from './TextNode';
 import Toolbar from './Toolbar';
 import ToolbarShell from './ToolbarShell';
 import { useToolbarStore } from './useToolbarStore';
+import { useNoteStore } from '../../store';
+import { themeCanvasColors } from '../../themeColors';
 import type { Stroke, StrokePoint, TextNodeData } from './types';
 
 const InfiniteInkCanvas: React.FC = () => {
@@ -37,6 +39,7 @@ const InfiniteInkCanvas: React.FC = () => {
   const tOffset = useToolbarStore((s) => s.offset);
   const tWidth = useToolbarStore((s) => s.width);
   const tSide = useToolbarStore((s) => s.side);
+  const theme = useNoteStore((s) => s.settings.theme);
 
   // ---- Canvas sizing ----------------------------------------------------------
 
@@ -75,11 +78,14 @@ const InfiniteInkCanvas: React.FC = () => {
     const container = containerRef.current;
     if (!container) return;
     const rect = container.getBoundingClientRect();
+    const colors = themeCanvasColors(useNoteStore.getState().settings.theme);
     renderAll({
       ctx, canvasWidth: rect.width, canvasHeight: rect.height,
       camera: state.camera, objects: state.objects,
       currentStroke: currentStrokeRef.current,
       showDotGrid: state.showDotGrid,
+      background: colors.background,
+      dotColor: colors.dotColor,
       editingTextId: state.editingTextId,
       selectedIds: state.selectedIds,
       selectionRect: selectionRectRef.current,
@@ -100,6 +106,12 @@ const InfiniteInkCanvas: React.FC = () => {
     dirtyRef.current = true;
     scheduleRender();
   }, [objects, camera, activeTool, brushSettings, showDotGrid, editingTextId, selectedIds, selectionMode, scheduleRender]);
+
+  // Repaint when the theme flips (workbench bg / dot grid / cursor ring).
+  useEffect(() => {
+    dirtyRef.current = true;
+    scheduleRender();
+  }, [theme, scheduleRender]);
 
   // ---- Keyboard ---------------------------------------------------------------
 
@@ -354,17 +366,22 @@ const InfiniteInkCanvas: React.FC = () => {
   const showCursor = (activeTool === 'pen' || freeEraser) && cursorScreen && !isDraggingToolbar;
   // Circle diameter in screen px = world width × zoom, so it matches the drawn line
   const cs = (activeTool === 'eraser' ? ERASER_RADIUS : brushSettings.size) * camera.zoom;
+  const isLight = theme === 'light';
+  const ringBorder = isLight ? 'rgba(30,30,40,0.85)' : 'rgba(255,255,255,0.7)';
+  const ringBg = isLight
+    ? (activeTool === 'eraser' ? 'rgba(30,30,40,0.14)' : 'rgba(30,30,40,0.07)')
+    : (activeTool === 'eraser' ? 'rgba(255,255,255,0.12)' : 'rgba(255,255,255,0.06)');
 
   return (
-    <div ref={containerRef} style={{ position: 'absolute', inset: 0, overflow: 'hidden', background: '#1a1a2e', borderRadius: '0 0 12px 0' }}>
+    <div ref={containerRef} style={{ position: 'absolute', inset: 0, overflow: 'hidden', background: 'var(--page-bg)', borderRadius: '0 0 12px 0' }}>
       <canvas ref={canvasRef} style={{ position: 'absolute', inset: 0, touchAction: 'none', userSelect: 'none', cursor: cursorStyle }}
         onPointerDown={handlePointerDown} onPointerMove={handlePointerMove} onPointerUp={handlePointerUp}
         onPointerCancel={handlePointerUp} onLostPointerCapture={handlePointerUp} onWheel={handleWheel} />
 
       {showCursor && cursorScreen && (
         <div style={{ position: 'fixed', left: cursorScreen.x, top: cursorScreen.y, width: cs, height: cs,
-          borderRadius: '50%', border: '1.5px solid rgba(255,255,255,0.7)',
-          background: activeTool === 'eraser' ? 'rgba(255,255,255,0.12)' : 'rgba(255,255,255,0.06)',
+          borderRadius: '50%', border: `1.5px solid ${ringBorder}`,
+          background: ringBg,
           pointerEvents: 'none', zIndex: 9999, transform: 'translate(-50%, -50%)' }} />
       )}
 

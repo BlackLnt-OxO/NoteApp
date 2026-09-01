@@ -16,6 +16,10 @@ export interface RenderParams {
   objects: CanvasObject[];
   currentStroke: Stroke | null;
   showDotGrid: boolean;
+  /** Workbench background color (theme-aware). */
+  background: string;
+  /** Dot-grid ink color (theme-aware). */
+  dotColor: string;
   editingTextId: string | null;
   selectedIds: string[];
   selectionRect: { x1: number; y1: number; x2: number; y2: number } | null;
@@ -23,12 +27,12 @@ export interface RenderParams {
 }
 
 export function renderAll(params: RenderParams): void {
-  const { ctx, canvasWidth, canvasHeight, camera, objects, currentStroke, showDotGrid, editingTextId, selectedIds, selectionRect, dpr } = params;
+  const { ctx, canvasWidth, canvasHeight, camera, objects, currentStroke, showDotGrid, background, dotColor, editingTextId, selectedIds, selectionRect, dpr } = params;
 
   ctx.save();
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.clearRect(0, 0, canvasWidth, canvasHeight);
-  ctx.fillStyle = '#1a1a2e';
+  ctx.fillStyle = background;
   ctx.fillRect(0, 0, canvasWidth, canvasHeight);
 
   ctx.save();
@@ -51,7 +55,7 @@ export function renderAll(params: RenderParams): void {
 
   ctx.restore(); // camera
 
-  if (showDotGrid) drawDotGrid(ctx, camera, canvasWidth, canvasHeight);
+  if (showDotGrid) drawDotGrid(ctx, camera, canvasWidth, canvasHeight, dotColor);
 
   ctx.restore(); // DPR
 }
@@ -88,10 +92,9 @@ function drawSelectionRect(ctx: CanvasRenderingContext2D, r: { x1: number; y1: n
 // ---- Dot Grid ----------------------------------------------------------------
 
 const DOT_SCREEN_STEP = 24;
-const DOT_ALPHA = 0.18;
 const DOT_RADIUS = 0.7;
 
-function drawDotGrid(ctx: CanvasRenderingContext2D, camera: Camera, canvasW: number, canvasH: number): void {
+function drawDotGrid(ctx: CanvasRenderingContext2D, camera: Camera, canvasW: number, canvasH: number, dotColor: string): void {
   const worldStep = DOT_SCREEN_STEP / camera.zoom;
   const tl = screenToWorld(0, 0, camera);
   const br = screenToWorld(canvasW, canvasH, camera);
@@ -101,7 +104,7 @@ function drawDotGrid(ctx: CanvasRenderingContext2D, camera: Camera, canvasW: num
   const ey = br.y + worldStep;
   if (((ex - sx) / worldStep) * ((ey - sy) / worldStep) > 40000) return;
 
-  ctx.fillStyle = `rgba(255,255,255,${DOT_ALPHA.toFixed(3)})`;
+  ctx.fillStyle = dotColor;
   ctx.beginPath();
   for (let wx = sx; wx <= ex; wx += worldStep) {
     for (let wy = sy; wy <= ey; wy += worldStep) {

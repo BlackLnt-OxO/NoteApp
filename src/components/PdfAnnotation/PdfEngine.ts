@@ -264,7 +264,6 @@ export function fitCamera(pageW: number, pageH: number, vw: number, vh: number, 
 // ---- Dot grid -----------------------------------------------------------------
 
 const DOT_SCREEN_STEP = 24;
-const DOT_ALPHA = 0.18;
 const DOT_RADIUS = 0.7;
 
 /** Dot-grid overlay, drawn in screen space but anchored to the world (zoom-consistent). */
@@ -273,6 +272,7 @@ export function drawDotGrid(
   cam: PdfCamera,
   canvasW: number,
   canvasH: number,
+  dotColor: string,
 ): void {
   const worldStep = DOT_SCREEN_STEP / cam.zoom;
   const tl = screenToWorld(0, 0, cam);
@@ -283,7 +283,7 @@ export function drawDotGrid(
   const ey = br.y + worldStep;
   if (((ex - sx) / worldStep) * ((ey - sy) / worldStep) > 40000) return;
 
-  ctx.fillStyle = `rgba(255,255,255,${DOT_ALPHA.toFixed(3)})`;
+  ctx.fillStyle = dotColor;
   ctx.beginPath();
   for (let wx = sx; wx <= ex; wx += worldStep) {
     for (let wy = sy; wy <= ey; wy += worldStep) {
