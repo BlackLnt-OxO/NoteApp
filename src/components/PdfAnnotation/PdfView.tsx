@@ -11,6 +11,7 @@ import React, { useRef, useState, useEffect, useCallback } from 'react';
 import { usePdfStore, MAX_ANCHOR_PAGES } from './PdfStore';
 import { usePdfLibrary } from './PdfLibrary';
 import { usePdfToolbarStore } from '../InfiniteInkCanvas/useToolbarStore';
+import { askConfirm } from '../ConfirmDialog';
 import PdfCanvas from './PdfCanvas';
 import PdfToolbar from './PdfToolbar';
 import PdfSidebar from './PdfSidebar';
@@ -293,7 +294,16 @@ const PdfView: React.FC = () => {
         sidebarOpen: st.sidebarOpen,
       });
     }
-    if (st.dirty && !confirm('有未保存的批注，确定关闭？')) return;
+    if (st.dirty) {
+      askConfirm({
+        title: '关闭 PDF',
+        message: '有未保存的批注，确定关闭？',
+        confirmLabel: '关闭',
+        danger: false,
+        onConfirm: () => usePdfStore.getState().closePdf(),
+      });
+      return;
+    }
     st.closePdf();
   }, []);
 

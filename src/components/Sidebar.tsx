@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { useNoteStore } from '../store';
 import { DEFAULT_COLORS } from '../types';
+import { askConfirm } from './ConfirmDialog';
 
 interface SidebarProps {
   onCreateNote: () => void;
@@ -148,9 +149,11 @@ const Sidebar: React.FC<SidebarProps> = ({ onCreateNote }) => {
             onContextMenu={(e) => {
               e.preventDefault();
               if (tag.id !== 'all') {
-                if (confirm(`删除标签「${tag.name}」？便笺不会被删除。`)) {
-                  deleteTag(tag.id);
-                }
+                askConfirm({
+                  title: '删除标签',
+                  message: `删除标签「${tag.name}」？便笺不会被删除。`,
+                  onConfirm: () => deleteTag(tag.id),
+                });
               }
             }}
             style={{

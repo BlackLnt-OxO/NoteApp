@@ -7,9 +7,10 @@
  * New canvases are auto-named "未命名1/2/3…".
  */
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useCanvasLibrary } from './useCanvasLibrary';
 import FlowGrid from '../FlowGrid';
+import { askConfirm } from '../ConfirmDialog';
 
 const CARD_W = 220;
 const CARD_H = 110;
@@ -26,6 +27,14 @@ const fmtTime = (t: number): string => {
   const pad = (n: number) => String(n).padStart(2, '0');
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
 };
+
+const MenuItem: React.FC<{ onClick: () => void; danger?: boolean; children: React.ReactNode }> = ({ onClick, danger, children }) => (
+  <button onClick={onClick} style={{
+    display: 'block', width: '100%', textAlign: 'left', padding: '8px 12px', borderRadius: '6px',
+    cursor: 'pointer', color: danger ? 'var(--danger)' : 'var(--text-primary)',
+    fontSize: '12px', fontFamily: 'inherit', border: 'none', background: 'transparent',
+  }}>{children}</button>
+);
 
 const CanvasHome: React.FC<{ onOpen: (id: string) => void; onNew: () => void }> = ({ onOpen, onNew }) => {
   const canvases = useCanvasLibrary((s) => s.canvases);
@@ -44,6 +53,14 @@ const CanvasHome: React.FC<{ onOpen: (id: string) => void; onNew: () => void }> 
   const [creatingCat, setCreatingCat] = useState(false);
   const [newCatName, setNewCatName] = useState('');
   const [catMenu, setCatMenu] = useState<{ x: number; y: number; id: string; name: string } | null>(null);
+  const [cardMenu, setCardMenu] = useState<{ x: number; y: number; id: string; name: string; categoryId: string | null } | null>(null);
+  const [addToCatOpen, setAddToCatOpen] = useState(false);
+
+  useEffect(() => {
+    const close = () => { setCardMenu(null); setCatMenu(null); setAddToCatOpen(false); };
+    window.addEventListener('click', close);
+    return () => window.removeEventListener('click', close);
+  }, []);
 
   const filtered = selectedCategory
     ? canvases.filter((c) => c.categoryId === selectedCategory)
@@ -140,15 +157,21 @@ const CanvasHome: React.FC<{ onOpen: (id: string) => void; onNew: () => void }> 
           onReorder={reorderCanvases}
           onCardClick={(c) => onOpen(c.id)}
           renderCard={(c, _idx, hovered) => (
-            <div style={{
-              width: '100%', height: '100%', boxSizing: 'border-box',
-              padding: '16px', borderRadius: '12px', cursor: 'pointer',
-              background: hovered ? 'var(--glass-bg-hover)' : 'var(--glass-bg-light)',
-              border: hovered ? '1px solid var(--glass-border-active)' : '1px solid var(--glass-border)',
-              transition: 'all var(--transition)',
-              display: 'flex', flexDirection: 'column', gap: 10,
-              position: 'relative', userSelect: 'none',
-            }}>
+            <div
+              onContextMenu={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                setCardMenu({ x: e.clientX, y: e.clientY, id: c.id, name: c.name, categoryId: c.categoryId });
+              }}
+              style={{
+                width: '100%', height: '100%', boxSizing: 'border-box',
+                padding: '16px', borderRadius: '12px', cursor: 'pointer',
+                background: hovered ? 'var(--glass-bg-hover)' : 'var(--glass-bg-light)',
+                border: hovered ? '1px solid var(--glass-border-active)' : '1px solid var(--glass-border)',
+                transition: 'all var(--transition)',
+                display: 'flex', flexDirection: 'column', gap: 10,
+                position: 'relative', userSelect: 'none',
+              }}>
               {hovered && renamingId !== c.id && (
                 <div style={{ position: 'absolute', top: 8, right: 8, display: 'flex', gap: 6 }}>
                   <button
@@ -168,7 +191,11 @@ const CanvasHome: React.FC<{ onOpen: (id: string) => void; onNew: () => void }> 
                     title="删除"
                     onClick={(e) => {
                       e.stopPropagation();
-                      if (confirm(`删除画布「${c.name}」？此操作不可撤销。`)) deleteCanvas(c.id);
+                      askConfirm({
+                        title: '删除画布',
+                        message: `删除画布「${c.name}」？此操作不可撤销。`,
+                        onConfirm: () => deleteCanvas(c.id),
+                      });
                     }}
                     style={{
                       width: 22, height: 22, borderRadius: '50%', border: 'none', cursor: 'pointer',
@@ -217,31 +244,70 @@ const CanvasHome: React.FC<{ onOpen: (id: string) => void; onNew: () => void }> 
         />
       )}
 
+      {/* Card context menu */}
+      {cardMenu && (
+        <div style={{
+          position: 'fixed', left: cardMenu.x, top: cardMenu.y, zIndex: 2000, minWidth: 170,
+          background: 'var(--dropdown-bg)', border: '1px solid var(--glass-border)',
+          borderRadius: '8px', padding: 4, boxShadow: 'var(--glass-shadow)', fontSize: '12px',
+        }} onClick={(e) => e.stopPropagation()}>
+          <MenuItem onClick={() => { onOpen(cardMenu.id); setCardMenu(null); }}>打开</MenuItem>
+          <MenuItem onClick={() => setAddToCatOpen((v) => !v)}>添加到分类 ▸</MenuItem>
+          {addToCatOpen && (
+            <div style={{ padding: '2px 0 4px', margin: '0 4px', borderTop: '1px solid var(--glass-border)' }}>
+              {categories.map((cat) => (
+                <MenuItem key={cat.id} onClick={() => { setCanvasCategory(cardMenu.id, cat.id); setCardMenu(null); }}>{cat.name}</MenuItem>
+              ))}
+              <MenuItem
+                onClick={() => {
+                  const name = prompt('新分类名称');
+                  if (name && name.trim()) {
+                    const id = addCategory(name.trim());
+                    setCanvasCategory(cardMenu.id, id);
+                  }
+                  setCardMenu(null);
+                }}
+              >+ 新建分类…</MenuItem>
+            </div>
+          )}
+          {cardMenu.categoryId && (
+            <MenuItem onClick={() => { setCanvasCategory(cardMenu.id, null); setCardMenu(null); }}>移除分类</MenuItem>
+          )}
+          <MenuItem onClick={() => { setDraft(cardMenu.name); setRenamingId(cardMenu.id); setCardMenu(null); }}>重命名</MenuItem>
+          <MenuItem
+            danger
+            onClick={() => {
+              setCardMenu(null);
+              askConfirm({
+                title: '删除画布',
+                message: `删除画布「${cardMenu.name}」？此操作不可撤销。`,
+                onConfirm: () => deleteCanvas(cardMenu.id),
+              });
+            }}
+          >删除</MenuItem>
+        </div>
+      )}
+
       {/* Category context menu */}
       {catMenu && (
-        <div
-          style={{
-            position: 'fixed', left: catMenu.x, top: catMenu.y, zIndex: 2000, minWidth: 150,
-            background: 'var(--dropdown-bg)', border: '1px solid var(--glass-border)',
-            borderRadius: '8px', padding: 4, boxShadow: 'var(--glass-shadow)', fontSize: '12px',
-          }}
-          onClick={(e) => e.stopPropagation()}
-        >
-          <button
-            style={{ display: 'block', width: '100%', textAlign: 'left', padding: '8px 12px', borderRadius: '6px', cursor: 'pointer', color: 'var(--text-primary)', fontSize: '12px', fontFamily: 'inherit', border: 'none', background: 'transparent' }}
-            onClick={() => {
-              const name = prompt('重命名分类', catMenu.name);
-              if (name && name.trim()) renameCategory(catMenu.id, name.trim());
-              setCatMenu(null);
-            }}
-          >重命名</button>
-          <button
-            style={{ display: 'block', width: '100%', textAlign: 'left', padding: '8px 12px', borderRadius: '6px', cursor: 'pointer', color: 'var(--danger)', fontSize: '12px', fontFamily: 'inherit', border: 'none', background: 'transparent' }}
-            onClick={() => {
-              if (confirm(`删除分类「${catMenu.name}」？画布不会删除，会变为未分类。`)) deleteCategory(catMenu.id);
-              setCatMenu(null);
-            }}
-          >删除</button>
+        <div style={{
+          position: 'fixed', left: catMenu.x, top: catMenu.y, zIndex: 2000, minWidth: 150,
+          background: 'var(--dropdown-bg)', border: '1px solid var(--glass-border)',
+          borderRadius: '8px', padding: 4, boxShadow: 'var(--glass-shadow)', fontSize: '12px',
+        }} onClick={(e) => e.stopPropagation()}>
+          <MenuItem onClick={() => {
+            const name = prompt('重命名分类', catMenu.name);
+            if (name && name.trim()) renameCategory(catMenu.id, name.trim());
+            setCatMenu(null);
+          }}>重命名</MenuItem>
+          <MenuItem danger onClick={() => {
+            setCatMenu(null);
+            askConfirm({
+              title: '删除分类',
+              message: `删除分类「${catMenu.name}」？画布不会删除，会变为未分类。`,
+              onConfirm: () => deleteCategory(catMenu.id),
+            });
+          }}>删除</MenuItem>
         </div>
       )}
     </div>

@@ -14,6 +14,7 @@ import { usePdfStore } from './PdfStore';
 import { usePdfLibrary, type PdfCategory, type PdfLibraryItem } from './PdfLibrary';
 import { pickPdfFile } from './PdfPicker';
 import FlowGrid from '../FlowGrid';
+import { askConfirm } from '../ConfirmDialog';
 
 // ---- helpers ------------------------------------------------------------------
 
@@ -263,10 +264,14 @@ const LibraryHome: React.FC = () => {
                   title="删除"
                   onClick={(e) => {
                     e.stopPropagation();
-                    if (confirm(`从库中删除「${item.name}」？批注和磁盘上的 PDF 文件不会被删除。`)) {
-                      usePdfLibrary.getState().removeItem(item.id);
-                      window.electronAPI?.deletePdfAnnotation(item.id);
-                    }
+                    askConfirm({
+                      title: '删除 PDF',
+                      message: `从库中删除「${item.name}」？批注和磁盘上的 PDF 文件不会被删除。`,
+                      onConfirm: () => {
+                        usePdfLibrary.getState().removeItem(item.id);
+                        window.electronAPI?.deletePdfAnnotation(item.id);
+                      },
+                    });
                   }}
                   style={{
                     position: 'absolute', top: 8, right: 8,
@@ -346,11 +351,15 @@ const LibraryHome: React.FC = () => {
           <MenuItem
             danger
             onClick={() => {
-              if (confirm(`从库中删除「${cardMenu.item.name}」？批注和磁盘上的 PDF 文件不会被删除。`)) {
-                usePdfLibrary.getState().removeItem(cardMenu.item.id);
-                window.electronAPI?.deletePdfAnnotation(cardMenu.item.id);
-              }
               setCardMenu(null);
+              askConfirm({
+                title: '删除 PDF',
+                message: `从库中删除「${cardMenu.item.name}」？批注和磁盘上的 PDF 文件不会被删除。`,
+                onConfirm: () => {
+                  usePdfLibrary.getState().removeItem(cardMenu.item.id);
+                  window.electronAPI?.deletePdfAnnotation(cardMenu.item.id);
+                },
+              });
             }}
           >
             删除
@@ -380,11 +389,15 @@ const LibraryHome: React.FC = () => {
           <MenuItem
             danger
             onClick={() => {
-              if (confirm(`删除分类「${categoryMenu.category.name}」？其下的 PDF 不会被删除。`)) {
-                usePdfLibrary.getState().deleteCategory(categoryMenu.category.id);
-                if (selectedCategory === categoryMenu.category.id) setSelectedCategory(null);
-              }
               setCategoryMenu(null);
+              askConfirm({
+                title: '删除分类',
+                message: `删除分类「${categoryMenu.category.name}」？其下的 PDF 不会被删除。`,
+                onConfirm: () => {
+                  usePdfLibrary.getState().deleteCategory(categoryMenu.category.id);
+                  if (selectedCategory === categoryMenu.category.id) setSelectedCategory(null);
+                },
+              });
             }}
           >
             删除分类

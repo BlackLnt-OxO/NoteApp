@@ -4,6 +4,7 @@ import Sidebar from './components/Sidebar';
 import NoteGrid from './components/NoteGrid';
 import CreateNoteDialog from './components/CreateNoteDialog';
 import SettingsDialog from './components/SettingsDialog';
+import ConfirmHost from './components/ConfirmDialog';
 import ScreenshotTool from './components/ScreenshotTool';
 import DiagnosticPanel from './components/DiagnosticPanel';
 import CanvasView from './components/InfiniteInkCanvas/CanvasView';
@@ -222,6 +223,7 @@ const App: React.FC = () => {
       {showCreateDialog && <CreateNoteDialog onClose={() => setShowCreateDialog(false)} />}
       {showSettings && <SettingsDialog onClose={() => setShowSettings(false)} />}
       <DiagnosticPanel visible={showDiagnostic} onClose={() => setShowDiagnostic(false)} />
+      <ConfirmHost />
     </div>
   );
 };

@@ -8,6 +8,7 @@
 
 import React, { useState } from 'react';
 import { usePdfStore } from './PdfStore';
+import { askConfirm } from '../ConfirmDialog';
 import type { PdfTool } from './PdfTypes';
 
 // ---- SVG Icons ---------------------------------------------------------------
@@ -239,7 +240,13 @@ const PdfToolbar: React.FC = () => {
 
       {/* ---- Clear page ---- */}
       <button
-        onClick={() => { if (confirm('确定要清除本页的所有批注吗？可以撤销。')) clearPage(); }}
+        onClick={() => askConfirm({
+          title: '清空本页',
+          message: '确定要清除本页的所有批注吗？可以撤销。',
+          confirmLabel: '清空',
+          danger: false,
+          onConfirm: () => clearPage(),
+        })}
         style={{
           width: '100%', padding: '5px 8px', background: 'var(--glass-bg-light)',
           border: '1px solid rgba(231,76,60,0.3)', borderRadius: '6px',

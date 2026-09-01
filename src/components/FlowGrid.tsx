@@ -65,12 +65,15 @@ export function FlowGrid<T>({
 
   const onCardPointerDown = useCallback((e: React.PointerEvent, index: number) => {
     if (e.button !== 0) return;
-    e.preventDefault(); e.stopPropagation();
+    // Do NOT preventDefault or capture here — that would swallow the click on
+    // the card and its inner buttons. Capture happens only once a real drag
+    // begins (in onPointerMove), so plain clicks still fire onCardClick and
+    // the card's hover action buttons still work.
+    didDragRef.current = false;
     const card = (e.currentTarget as HTMLElement).closest('.flow-card') as HTMLElement;
     const rect = card?.getBoundingClientRect();
     const offsetX = rect ? e.clientX - rect.left : itemWidth / 2;
     const offsetY = rect ? e.clientY - rect.top : 20;
-    if (containerRef.current) containerRef.current.setPointerCapture(e.pointerId);
     setPending({ index, startX: e.clientX, startY: e.clientY, offsetX, offsetY, pointerId: e.pointerId });
   }, [itemWidth]);
 
@@ -80,6 +83,9 @@ export function FlowGrid<T>({
       const dy = e.clientY - pending.startY;
       if (Math.abs(dx) > DRAG_THRESHOLD || Math.abs(dy) > DRAG_THRESHOLD) {
         didDragRef.current = true;
+        if (containerRef.current && !containerRef.current.hasPointerCapture(e.pointerId)) {
+          containerRef.current.setPointerCapture(e.pointerId);
+        }
         setDragging({
           index: pending.index,
           ghostX: e.clientX - pending.offsetX, ghostY: e.clientY - pending.offsetY,
@@ -120,8 +126,8 @@ export function FlowGrid<T>({
 
     setDragging(null);
     setPending(null);
-    // Let the click event (fired after pointerup) see the drag flag, then clear it.
-    setTimeout(() => { didDragRef.current = false; }, 0);
+    // didDragRef stays true until the next pointerdown resets it, so the click
+    // fired right after this drag is ignored.
   }, [pending, dragging, items, positions, itemWidth, itemHeight, onReorder]);
 
   const handleClick = useCallback((item: T) => {

@@ -5,6 +5,7 @@
 
 import React, { useState } from 'react';
 import { useCanvasStore } from './useCanvasStore';
+import { askConfirm } from '../ConfirmDialog';
 import type { ToolType } from './types';
 
 // ---- SVG Icons ---------------------------------------------------------------
@@ -243,7 +244,13 @@ const Toolbar: React.FC = () => {
       </div>
 
       {/* ---- Delete selected / clear ---- */}
-      <button onClick={() => { if (confirm('确定要清除画布吗？此操作可以撤销。')) { useCanvasStore.getState().clearCanvas(); } }}
+      <button onClick={() => askConfirm({
+        title: '清空画布',
+        message: '确定要清除画布上的所有内容吗？此操作可以撤销。',
+        confirmLabel: '清空',
+        danger: false,
+        onConfirm: () => useCanvasStore.getState().clearCanvas(),
+      })}
         style={{ width: '100%', padding: '5px 8px', background: 'var(--glass-bg-light)', border: '1px solid rgba(231,76,60,0.3)', borderRadius: '6px', color: 'var(--danger, #e74c3c)', cursor: 'pointer', fontSize: '11px', fontFamily: 'inherit', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '4px' }}>
         <TrashIcon />清空画布
       </button>
