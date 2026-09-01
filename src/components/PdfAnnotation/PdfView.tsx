@@ -17,6 +17,8 @@ import ToolbarShell from '../InfiniteInkCanvas/ToolbarShell';
 
 const ImportScreen: React.FC<{ onPick: (file: File) => void }> = ({ onPick }) => {
   const inputRef = useRef<HTMLInputElement>(null);
+  const loading = usePdfStore((s) => s.loading);
+  const error = usePdfStore((s) => s.error);
   return (
     <div style={{
       position: 'absolute', inset: 0,
@@ -34,19 +36,36 @@ const ImportScreen: React.FC<{ onPick: (file: File) => void }> = ({ onPick }) =>
       <div style={{ fontSize: '11px', color: 'var(--text-muted)', textAlign: 'center', lineHeight: '1.7' }}>
         单页书本式浏览 · 每页独立笔迹<br />支持大型文档（按页惰性加载，不预渲染）
       </div>
-      <button
-        onClick={() => inputRef.current?.click()}
-        style={{
-          marginTop: 8, padding: '10px 22px',
-          background: 'var(--accent)', border: 'none', borderRadius: '8px',
-          color: '#fff', fontSize: '13px', fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit',
-          transition: 'all var(--transition)',
-        }}
-        onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--accent-hover)'; }}
-        onMouseLeave={(e) => { e.currentTarget.style.background = 'var(--accent)'; }}
-      >
-        选择 PDF 文件
-      </button>
+      {loading ? (
+        <div style={{ marginTop: 8, padding: '10px 22px', fontSize: '13px', color: 'var(--text-secondary)' }}>
+          正在加载 PDF…
+        </div>
+      ) : (
+        <button
+          onClick={() => inputRef.current?.click()}
+          style={{
+            marginTop: 8, padding: '10px 22px',
+            background: 'var(--accent)', border: 'none', borderRadius: '8px',
+            color: '#fff', fontSize: '13px', fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit',
+            transition: 'all var(--transition)',
+          }}
+          onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--accent-hover)'; }}
+          onMouseLeave={(e) => { e.currentTarget.style.background = 'var(--accent)'; }}
+        >
+          选择 PDF 文件
+        </button>
+      )}
+      {error && (
+        <div style={{
+          marginTop: 12, maxWidth: 480, padding: '10px 14px',
+          fontSize: '11px', lineHeight: '1.6',
+          color: '#ff8a8a', background: 'rgba(231,76,60,0.12)',
+          border: '1px solid rgba(231,76,60,0.3)', borderRadius: '8px',
+          fontFamily: 'monospace', whiteSpace: 'pre-wrap', wordBreak: 'break-all',
+        }}>
+          PDF 加载失败：{error}
+        </div>
+      )}
       <input
         ref={inputRef}
         type="file"

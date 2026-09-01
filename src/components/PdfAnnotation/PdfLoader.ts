@@ -4,9 +4,10 @@
  */
 import type { PdfPageSize } from './PdfTypes';
 
-// Vite turns this into the emitted worker asset URL.
+// Vite bundles the pdf.js worker as a real Worker. This works in dev AND in
+// production file:// builds (unlike workerSrc pointing at an emitted asset).
 // eslint-disable-next-line import/no-unresolved
-import pdfWorkerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
+import PdfWorker from 'pdfjs-dist/build/pdf.worker.min.mjs?worker';
 
 type PdfJsModule = typeof import('pdfjs-dist');
 type PdfDocument = Awaited<ReturnType<PdfJsModule['getDocument']>>['promise'] extends Promise<infer T> ? T : never;
@@ -20,7 +21,11 @@ async function getLib(): Promise<PdfJsModule> {
     pdfjs = await import('pdfjs-dist');
   }
   if (!workerConfigured && pdfjs.GlobalWorkerOptions) {
-    pdfjs.GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
+    try {
+      pdfjs.GlobalWorkerOptions.workerPort = new PdfWorker();
+    } catch {
+      /* fall back to pdf.js's own worker handling (fake worker) */
+    }
     workerConfigured = true;
   }
   return pdfjs;
@@ -31,7 +36,8 @@ export async function loadPdfDocument(
   buffer: ArrayBuffer,
 ): Promise<{ doc: PdfJsDocument; numPages: number; firstPage: PdfPageSize }> {
   const lib = await getLib();
-  const loadingTask = lib.getDocument({ data: buffer });
+  // pdf.js v6+ requires a TypedArray, not a bare ArrayBuffer.
+  const loadingTask = lib.getDocument({ data: new Uint8Array(buffer) });
   const doc = await loadingTask.promise;
   const page = await doc.getPage(1);
   const vp = page.getViewport({ scale: 1 });

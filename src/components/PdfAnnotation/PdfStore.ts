@@ -40,6 +40,10 @@ export interface PdfStore {
   numPages: number;
   currentPage: number;
   pageSizes: Record<number, PdfPageSize>;
+  /** Set while a PDF is being parsed / rendered. */
+  loading: boolean;
+  /** Human-readable import error, shown on the import screen. */
+  error: string | null;
 
   // Vector source of truth, per page
   strokes: Record<number, PdfStroke[]>;
@@ -120,6 +124,8 @@ export const usePdfStore = create<PdfStore>((set, get) => ({
   numPages: 0,
   currentPage: 1,
   pageSizes: {},
+  loading: false,
+  error: null,
 
   strokes: {},
   history: {},
@@ -138,21 +144,28 @@ export const usePdfStore = create<PdfStore>((set, get) => ({
   // --- document ------------------------------------------------------------
 
   loadPdf: async (file: File) => {
-    const buffer = await file.arrayBuffer();
-    const { doc, numPages, firstPage } = await loadPdfDocument(buffer);
-    set({
-      fileName: file.name,
-      pdfDoc: doc,
-      numPages,
-      currentPage: 1,
-      pageSizes: { 1: firstPage },
-      strokes: {},
-      history: emptyHistoryRecord(),
-      redoStack: emptyHistoryRecord(),
-      renderEpoch: 0,
-      selectedIds: [],
-      camera: { x: 0, y: 0, zoom: 1 },
-    });
+    try {
+      set({ loading: true, error: null });
+      const buffer = await file.arrayBuffer();
+      const { doc, numPages, firstPage } = await loadPdfDocument(buffer);
+      set({
+        fileName: file.name,
+        pdfDoc: doc,
+        numPages,
+        currentPage: 1,
+        pageSizes: { 1: firstPage },
+        strokes: {},
+        history: emptyHistoryRecord(),
+        redoStack: emptyHistoryRecord(),
+        renderEpoch: 0,
+        selectedIds: [],
+        camera: { x: 0, y: 0, zoom: 1 },
+        loading: false,
+      });
+    } catch (e) {
+      console.error('PDF import failed:', e);
+      set({ loading: false, error: e instanceof Error ? e.message : String(e) });
+    }
   },
 
   closePdf: () => {
@@ -168,6 +181,8 @@ export const usePdfStore = create<PdfStore>((set, get) => ({
       renderEpoch: 0,
       selectedIds: [],
       camera: { x: 0, y: 0, zoom: 1 },
+      loading: false,
+      error: null,
     });
   },
 
@@ -354,5 +369,7 @@ export const usePdfStore = create<PdfStore>((set, get) => ({
       selectionMode: 'box',
       selectedIds: [],
       camera: { x: 0, y: 0, zoom: 1 },
+      loading: false,
+      error: null,
     }),
 }));
