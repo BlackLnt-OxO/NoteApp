@@ -205,6 +205,7 @@ const PdfCanvas: React.FC = () => {
   const camera = usePdfStore((s) => s.camera);
   const isDraggingToolbar = useToolbarStore((s) => s.isDragging);
   const [cursorScreen, setCursorScreen] = useState<{ x: number; y: number } | null>(null);
+  const ringRef = useRef<HTMLDivElement>(null);
 
   // ---- Canvas sizing ----------------------------------------------------------
 
@@ -396,6 +397,38 @@ const PdfCanvas: React.FC = () => {
     return rect ? { sx: e.clientX - rect.left, sy: e.clientY - rect.top } : { sx: 0, sy: 0 };
   }, []);
 
+  // Sample the composited pixel under the cursor and flip the brush ring's
+  // contrast so it's always visible (light ring on dark bg, dark ring on light).
+  const updateRingColor = useCallback((clientX: number, clientY: number) => {
+    const el = ringRef.current;
+    const canvas = canvasRef.current;
+    if (!el || !canvas) return;
+    const rect = canvas.getBoundingClientRect();
+    const dpr = dprRef.current;
+    const px = Math.round((clientX - rect.left) * dpr);
+    const py = Math.round((clientY - rect.top) * dpr);
+    if (px < 0 || py < 0 || px >= canvas.width || py >= canvas.height) return;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    let data: Uint8ClampedArray;
+    try {
+      data = ctx.getImageData(px, py, 1, 1).data;
+    } catch {
+      return;
+    }
+    const lum = (0.2126 * data[0] + 0.7152 * data[1] + 0.0722 * data[2]) / 255;
+    const isEraser = usePdfStore.getState().activeTool === 'eraser';
+    if (lum < 0.5) {
+      // dark background → light ring (existing style)
+      el.style.borderColor = 'rgba(255,255,255,0.75)';
+      el.style.background = isEraser ? 'rgba(255,255,255,0.12)' : 'rgba(255,255,255,0.06)';
+    } else {
+      // light background → dark gray ring
+      el.style.borderColor = 'rgba(30,30,40,0.85)';
+      el.style.background = isEraser ? 'rgba(30,30,40,0.14)' : 'rgba(30,30,40,0.07)';
+    }
+  }, []);
+
   // ---- Pointer Down -----------------------------------------------------------
 
   const handlePointerDown = useCallback((e: React.PointerEvent<HTMLCanvasElement>) => {
@@ -404,6 +437,7 @@ const PdfCanvas: React.FC = () => {
     const st = usePdfStore.getState();
     const { sx, sy } = getCanvasPos(e);
     setCursorScreen({ x: e.clientX, y: e.clientY });
+    updateRingColor(e.clientX, e.clientY);
 
     if (e.button === 1 || (e.button === 0 && spaceDownRef.current)) {
       canvas.setPointerCapture(e.pointerId);
@@ -482,7 +516,7 @@ const PdfCanvas: React.FC = () => {
     }
     dirtyRef.current = true;
     scheduleRender();
-  }, [getCanvasPos, scheduleRender, rebuildInk]);
+  }, [getCanvasPos, scheduleRender, rebuildInk, updateRingColor]);
 
   // ---- Pointer Move -----------------------------------------------------------
 
@@ -492,6 +526,7 @@ const PdfCanvas: React.FC = () => {
     const { sx, sy } = getCanvasPos(e);
     const st = usePdfStore.getState();
     setCursorScreen({ x: e.clientX, y: e.clientY });
+    updateRingColor(e.clientX, e.clientY);
 
     if (panAnchorRef.current) {
       st.setCamera({
@@ -556,7 +591,7 @@ const PdfCanvas: React.FC = () => {
       dirtyRef.current = true;
       scheduleRender();
     }
-  }, [getCanvasPos, scheduleRender]);
+  }, [getCanvasPos, scheduleRender, updateRingColor]);
 
   // ---- Pointer Up -------------------------------------------------------------
 
@@ -674,12 +709,15 @@ const PdfCanvas: React.FC = () => {
       />
 
       {showCursor && cursorScreen && (
-        <div style={{
-          position: 'fixed', left: cursorScreen.x, top: cursorScreen.y, width: cs, height: cs,
-          borderRadius: '50%', border: '1.5px solid rgba(255,255,255,0.7)',
-          background: activeTool === 'eraser' ? 'rgba(255,255,255,0.12)' : 'rgba(255,255,255,0.06)',
-          pointerEvents: 'none', zIndex: 9999, transform: 'translate(-50%, -50%)',
-        }} />
+        <div
+          ref={ringRef}
+          style={{
+            position: 'fixed', left: cursorScreen.x, top: cursorScreen.y, width: cs, height: cs,
+            borderRadius: '50%', border: '1.5px solid rgba(255,255,255,0.7)',
+            background: activeTool === 'eraser' ? 'rgba(255,255,255,0.12)' : 'rgba(255,255,255,0.06)',
+            pointerEvents: 'none', zIndex: 9999, transform: 'translate(-50%, -50%)',
+          }}
+        />
       )}
     </div>
   );
