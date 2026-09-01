@@ -298,25 +298,30 @@ function closeFloatingNote(noteId) {
 }
 
 function updateFloatingNote(noteId, noteData) {
-  // Update saved state with new content/color/font from main note
+  // Update saved state with new content/color/font/images from main note
   const userDataPath = app.getPath('userData');
   const floatDir = path.join(userDataPath, 'floating-notes');
   const floatStateFile = path.join(floatDir, `${noteId}.json`);
   try {
     if (fs.existsSync(floatStateFile)) {
       const saved = JSON.parse(fs.readFileSync(floatStateFile, 'utf-8'));
-      saved.content = noteData.content;
-      saved.color = noteData.color;
-      saved.fontSize = noteData.fontSize;
+      if (noteData.content !== undefined) saved.content = noteData.content;
+      if (noteData.color !== undefined) saved.color = noteData.color;
+      if (noteData.fontSize !== undefined) saved.fontSize = noteData.fontSize;
+      if (noteData.images !== undefined) saved.images = noteData.images;
       if (noteData.settingsBgOpacity !== undefined) saved.settingsBgOpacity = noteData.settingsBgOpacity;
       fs.writeFileSync(floatStateFile, JSON.stringify(saved), 'utf-8');
+      // Regenerate + reload the float window so content/images stay in sync
+      // with the main note (previously only the color/font synced).
+      const html = generateFloatHTML(noteId, saved, noteData);
+      const tempFile = path.join(floatDir, `${noteId}.html`);
+      fs.writeFileSync(tempFile, html, 'utf-8');
+      const floatWin = floatingWindows.get(noteId);
+      if (floatWin && !floatWin.isDestroyed()) {
+        floatWin.loadFile(tempFile);
+      }
     }
   } catch(e) {}
-  // Notify floating window to reload
-  const floatWin = floatingWindows.get(noteId);
-  if (floatWin && !floatWin.isDestroyed()) {
-    floatWin.webContents.send('float:settingsUpdated', noteData);
-  }
   return true;
 }
 

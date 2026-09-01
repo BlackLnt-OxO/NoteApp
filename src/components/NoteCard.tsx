@@ -46,6 +46,20 @@ const NoteCard: React.FC<NoteCardProps> = ({ note, isDragGhost, isExpanded, onDr
   const gfs = useNoteStore((s) => s.settings.fontSize);
   const settings = useNoteStore((s) => s.settings);
 
+  // Keep a floating window in sync when the note's images/color change
+  // (debounced — drag/resize update images frequently). Content edits are
+  // already pushed from the float window via updateFloatContent, so we don't
+  // echo content back here to avoid a reload loop while typing.
+  useEffect(() => {
+    const api = window.electronAPI;
+    if (!note.isFloating || !api) return;
+    const t = setTimeout(() => {
+      api.updateFloatingNote(note.id, { ...note, settingsBgOpacity: settings.backgroundOpacity });
+    }, 400);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [note.images, note.color]);
+
   useEffect(() => { setContent(note.content); }, [note.content]);
   useEffect(() => { setCardW(note.width || 260); setCardH(note.height || 200); }, [note.width, note.height]);
   useEffect(() => {
