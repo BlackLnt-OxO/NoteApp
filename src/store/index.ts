@@ -222,12 +222,12 @@ export const useNoteStore = create<NoteStore>((set, get) => ({
           },
         });
       } else {
-        // First run - add welcome notes
+        // First run - add welcome notes introducing the three sections.
         const welcomeNotes = [
           {
             id: 'welcome_1',
-            content: '欢迎使用便笺笔记！\n\n✨ 双击编辑内容\n🎨 右键更换颜色\n📌 固定便笺到屏幕\n🖼️ 拖拽或点击插入图片',
-            color: '#6b5ce7',
+            content: '便笺 — 日常记录\n\n双击编辑内容，右键更换颜色，\n可插入图片，拖拽排序。',
+            color: DEFAULT_SETTINGS.defaultNoteColor,
             tag: 'general',
             images: [],
             createdAt: Date.now(),
@@ -237,13 +237,13 @@ export const useNoteStore = create<NoteStore>((set, get) => ({
             mapX: -100,
             mapY: -80,
             width: 260,
-            height: 220,
+            height: 200,
             isFloating: false,
           },
           {
             id: 'welcome_2',
-            content: '📷 截图功能\n\n点击左侧截图按钮或按 Ctrl+Shift+X 启动截图工具。\n\n支持长截图：框选区域后点击"长截图"，然后滚动页面自动拼接。',
-            color: '#3498db',
+            content: '无限画布 — 自由书写\n\n左侧切到「画布」可新建多个画布，\n支持钢笔、橡皮、文本工具，滚轮缩放平移。',
+            color: DEFAULT_SETTINGS.defaultNoteColor,
             tag: 'general',
             images: [],
             createdAt: Date.now() + 1,
@@ -253,13 +253,13 @@ export const useNoteStore = create<NoteStore>((set, get) => ({
             mapX: 200,
             mapY: -80,
             width: 260,
-            height: 220,
+            height: 200,
             isFloating: false,
           },
           {
             id: 'welcome_3',
-            content: '🧠 思维导图模式\n\n点击顶部「思维导图」切换到无限画布模式。\n右键拖动背景，左键拖动便笺，滚轮缩放。\n右下角可更换背景图片。',
-            color: '#2ecc71',
+            content: 'PDF 批注 — 文档上书写\n\n左侧切到「PDF」导入文档，\n逐页批注与擦除，Ctrl+S 保存批注。',
+            color: DEFAULT_SETTINGS.defaultNoteColor,
             tag: 'general',
             images: [],
             createdAt: Date.now() + 2,
@@ -269,7 +269,7 @@ export const useNoteStore = create<NoteStore>((set, get) => ({
             mapX: 500,
             mapY: -80,
             width: 260,
-            height: 220,
+            height: 200,
             isFloating: false,
           },
         ];
