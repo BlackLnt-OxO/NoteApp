@@ -80,6 +80,31 @@ const NoteCard: React.FC<NoteCardProps> = ({ note, isDragGhost, isExpanded, onDr
     deleteNote(id);
   }, [deleteNote]);
 
+  // Auto-grow the card in edit mode so every image fits with breathing room —
+  // otherwise dragging an image past the right/bottom edge clips it and the
+  // user has to resize the card by hand.
+  useEffect(() => {
+    if (!isExpanded) return;
+    let maxR = 0, maxB = 0;
+    for (const im of note.images) {
+      const ih = im._previewH || 100;
+      const ratio = (im.width && im.height) ? im.width / im.height : 1.5;
+      const iw = ih * ratio;
+      const ix = im._imgX !== undefined ? im._imgX : fsn(10, gfs);
+      const iy = im._imgY !== undefined ? im._imgY : fsn(10, gfs);
+      maxR = Math.max(maxR, ix + iw);
+      maxB = Math.max(maxB, iy + ih);
+    }
+    const pad = fsn(24, gfs);
+    const needW = maxR + pad;
+    const needH = maxB + pad + fsn(36, gfs);
+    const curW = note.width || 260;
+    const curH = note.height || 200;
+    if (needW > curW || needH > curH) {
+      update(note.id, { width: Math.max(curW, needW), height: Math.max(curH, needH), customSize: true });
+    }
+  }, [note.images, isExpanded]);
+
   // Ctrl+Z undo
   // Save undo snapshot
   const saveUndo = useCallback((text: string) => {
