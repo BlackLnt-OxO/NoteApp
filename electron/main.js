@@ -161,6 +161,17 @@ function createMainWindow() {
     mainWindow.loadFile(path.join(__dirname, '..', 'dist', 'index.html'));
   }
 
+  // Portable first-run / transient load races can fail the main frame once;
+  // retry it so the window doesn't sit on a blank or raw-source page.
+  mainWindow.webContents.on('did-fail-load', (event, errorCode, errorDesc, validatedURL, isMainFrame) => {
+    if (!isMainFrame || errorCode === -3) return; // -3 = aborted
+    setTimeout(() => {
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.reload();
+      }
+    }, 600);
+  });
+
   mainWindow.on('ready-to-show', () => {
     mainWindow.setBackgroundColor('#00000000');
   });
