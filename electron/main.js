@@ -14,6 +14,73 @@ try {
   isDev = false;
 }
 
+// ---- User-configurable data directory --------------------------------------
+// A pointer file (next to the default userData, never inside it) records the
+// current data directory and any replaced one awaiting deletion at quit.
+const DATA_DIR_CONFIG_FILE = () => path.join(app.getPath('appData'), 'sticky-notes-config.json');
+const DEFAULT_USER_DATA = path.join(app.getPath('appData'), 'sticky-notes');
+
+function getDataDirConfig() {
+  try {
+    const cfg = JSON.parse(fs.readFileSync(DATA_DIR_CONFIG_FILE(), 'utf-8'));
+    return { dir: cfg.dir ?? null, prevDir: cfg.prevDir ?? null };
+  } catch {
+    return { dir: null, prevDir: null };
+  }
+}
+
+function saveDataDirConfig(cfg) {
+  try {
+    fs.writeFileSync(DATA_DIR_CONFIG_FILE(), JSON.stringify({ dir: cfg.dir ?? null, prevDir: cfg.prevDir ?? null }, null, 2), 'utf-8');
+  } catch (e) {
+    console.error('Failed to save data dir config:', e);
+  }
+}
+
+let relaunching = false;
+function relaunch() {
+  relaunching = true;
+  app.relaunch();
+  app.quit();
+}
+
+// Apply a configured data directory before ready — every getPath('userData')
+// below is lazy (handler / whenReady), so this takes effect for the session.
+(function initDataDir() {
+  const cfg = getDataDirConfig();
+  if (cfg.dir && fs.existsSync(cfg.dir)) {
+    app.setPath('userData', cfg.dir);
+  }
+})();
+
+async function migrateDataDir(oldDir, newDir) {
+  // Flush Chromium storage (localStorage/IndexedDB) before copying.
+  try {
+    const { session } = require('electron');
+    await session.defaultSession.flushStorageData();
+  } catch { /* ignore */ }
+  if (newDir.startsWith(oldDir + path.sep)) {
+    throw new Error('新目录不能位于旧数据目录内部');
+  }
+  if (!fs.existsSync(newDir)) fs.mkdirSync(newDir, { recursive: true });
+  fs.cpSync(oldDir, newDir, { recursive: true });
+}
+
+// Only a real quit (not a relaunch) deletes the replaced data directory, so the
+// user keeps a fallback window (可回退) until they actually close the app.
+app.on('quit', () => {
+  if (relaunching) { relaunching = false; return; }
+  const cfg = getDataDirConfig();
+  if (cfg.prevDir && fs.existsSync(cfg.prevDir)) {
+    try {
+      fs.rmSync(cfg.prevDir, { recursive: true, force: true });
+    } catch (e) {
+      console.error('Failed to remove old data dir:', e);
+    }
+    saveDataDirConfig({ ...cfg, prevDir: null });
+  }
+});
+
 function loadWindowBounds(key) {
   const userDataPath = app.getPath('userData');
   const filePath = path.join(userDataPath, 'window-bounds.json');
@@ -286,6 +353,50 @@ function setupIPC() {
   });
   ipcMain.handle('window:isFullScreen', (event) => {
     return BrowserWindow.fromWebContents(event.sender)?.isFullScreen() || false;
+  });
+
+  // ---- Data directory ------------------------------------------------------
+
+  ipcMain.handle('app:getDataDirectory', () => ({
+    path: app.getPath('userData'),
+    isConfigured: fs.existsSync(DATA_DIR_CONFIG_FILE()),
+    prevDir: getDataDirConfig().prevDir,
+  }));
+
+  ipcMain.handle('app:pickDataDirectory', async () => {
+    const { dialog } = require('electron');
+    const result = await dialog.showOpenDialog(mainWindow, {
+      properties: ['openDirectory', 'createDirectory'],
+      title: '选择数据存储位置',
+    });
+    if (result.canceled || result.filePaths.length === 0) return null;
+    return result.filePaths[0];
+  });
+
+  ipcMain.handle('app:setDataDirectory', async (event, dir) => {
+    const oldDir = app.getPath('userData');
+    const newDir = dir ? path.resolve(String(dir)) : DEFAULT_USER_DATA;
+    const cfg = getDataDirConfig();
+
+    if (newDir === oldDir) {
+      // Same location (incl. "use default" when already default) — just mark
+      // configured so the first-run prompt doesn't reappear.
+      saveDataDirConfig({ dir: cfg.dir ?? null, prevDir: cfg.prevDir });
+      return { changed: false };
+    }
+
+    if (fs.existsSync(oldDir)) {
+      try {
+        await migrateDataDir(oldDir, newDir);
+      } catch (e) {
+        console.error('Data dir migration failed:', e);
+        return { changed: false, error: e instanceof Error ? e.message : String(e) };
+      }
+    }
+
+    saveDataDirConfig({ dir: newDir, prevDir: oldDir });
+    relaunch();
+    return { changed: true };
   });
 
   // Floating note state (separate from main note)

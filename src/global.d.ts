@@ -49,6 +49,9 @@ declare global {
       deletePdfAnnotation: (itemId: string) => Promise<{ ok: boolean }>;
       getPath: (name: string) => Promise<string>;
       getDefaultBackground: () => Promise<string | null>;
+      getDataDirectory: () => Promise<{ path: string; isConfigured: boolean; prevDir: string | null }>;
+      pickDataDirectory: () => Promise<string | null>;
+      setDataDirectory: (dir: string | null) => Promise<{ changed: boolean; error?: string }>;
       saveStore: (data: any) => Promise<boolean>;
       loadStore: () => Promise<any>;
       loadStoreSync: () => any;

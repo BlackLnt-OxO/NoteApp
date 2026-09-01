@@ -91,6 +91,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // App
   getPath: (name) => ipcRenderer.invoke('app:getPath', name),
   getDefaultBackground: () => ipcRenderer.invoke('app:getDefaultBackground'),
+  getDataDirectory: () => ipcRenderer.invoke('app:getDataDirectory'),
+  pickDataDirectory: () => ipcRenderer.invoke('app:pickDataDirectory'),
+  setDataDirectory: (dir) => ipcRenderer.invoke('app:setDataDirectory', dir),
 
   // Store
   saveStore: (data) => ipcRenderer.invoke('store:save', data),

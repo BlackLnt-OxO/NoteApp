@@ -5,6 +5,7 @@ import NoteGrid from './components/NoteGrid';
 import CreateNoteDialog from './components/CreateNoteDialog';
 import SettingsDialog from './components/SettingsDialog';
 import ConfirmHost from './components/ConfirmDialog';
+import DataDirectoryPrompt from './components/DataDirectoryPrompt';
 import ScreenshotTool from './components/ScreenshotTool';
 import DiagnosticPanel from './components/DiagnosticPanel';
 import CanvasView from './components/InfiniteInkCanvas/CanvasView';
@@ -21,10 +22,22 @@ const App: React.FC = () => {
   const [showCreateDialog, setShowCreateDialog] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [showDiagnostic, setShowDiagnostic] = useState(false);
+  const [dataDirState, setDataDirState] = useState<'checking' | 'ready' | 'prompt'>('checking');
   const [isMaximized, setIsMaximized] = useState(false);
   const [fontToast, setFontToast] = useState({ show: false, size: 14, fading: false });
 
   useEffect(() => { loadData(); }, []);
+
+  // First-run check: until a data directory is configured, show the setup prompt.
+  useEffect(() => {
+    if (window.electronAPI) {
+      window.electronAPI.getDataDirectory().then((info) => {
+        setDataDirState(info.isConfigured ? 'ready' : 'prompt');
+      });
+    } else {
+      setDataDirState('ready'); // browser dev — no data-dir flow
+    }
+  }, []);
 
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', settings.theme);
@@ -128,6 +141,14 @@ const App: React.FC = () => {
     }
   }, []);
   const handleClose = useCallback(() => window.electronAPI?.close(), []);
+
+  // Before the data directory is chosen, show the first-run prompt instead of
+  // the main UI (all hooks above already ran, so this early return is safe).
+  if (dataDirState !== 'ready') {
+    return dataDirState === 'prompt'
+      ? <DataDirectoryPrompt onDone={() => setDataDirState('ready')} />
+      : null;
+  }
 
   return (
     <div style={{

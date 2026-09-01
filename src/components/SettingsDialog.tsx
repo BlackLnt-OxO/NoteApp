@@ -3,6 +3,7 @@ import { useNoteStore } from '../store';
 import { fs, fsn } from '../utils';
 import { DEFAULT_COLORS } from '../types';
 import ColorPicker from './ColorPicker';
+import { askConfirm } from './ConfirmDialog';
 
 interface SettingsDialogProps { onClose: () => void; }
 
@@ -59,6 +60,17 @@ const SettingsDialog: React.FC<SettingsDialogProps> = ({ onClose }) => {
   const [hoverEdit, setHoverEdit] = useState<string | null>(null);
   const [editingColor, setEditingColor] = useState<string | null>(null);
   const fontDropdownRef = useRef<HTMLDivElement>(null);
+  const [dataDirPath, setDataDirPath] = useState('');
+  const [prevDir, setPrevDir] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (window.electronAPI) {
+      window.electronAPI.getDataDirectory().then((info) => {
+        setDataDirPath(info.path);
+        setPrevDir(info.prevDir);
+      });
+    }
+  }, []);
 
   useEffect(() => {
     const handler = (e: MouseEvent) => {
@@ -82,6 +94,30 @@ const SettingsDialog: React.FC<SettingsDialogProps> = ({ onClose }) => {
 
   const handlePickBackground = async () => {
     if (window.electronAPI) { const r = await window.electronAPI.pickBackground(); if (r?.dataUrl) handleChange('backgroundImage', r.dataUrl); }
+  };
+
+  const changeDataDir = async () => {
+    if (!window.electronAPI) return;
+    const dir = await window.electronAPI.pickDataDirectory();
+    if (!dir) return;
+    askConfirm({
+      title: '更改数据目录',
+      message: '数据将迁移到新目录。旧数据会暂时保留，直到您退出软件；退出前可在设置中回退到旧目录。应用即将重启。',
+      confirmLabel: '继续',
+      danger: false,
+      onConfirm: () => { window.electronAPI?.setDataDirectory(dir); },
+    });
+  };
+
+  const revertDataDir = () => {
+    if (!window.electronAPI || !prevDir) return;
+    askConfirm({
+      title: '回退数据目录',
+      message: `将回退到旧目录：\n${prevDir}\n\n当前数据会迁移过去，应用即将重启。`,
+      confirmLabel: '回退',
+      danger: false,
+      onConfirm: () => { window.electronAPI?.setDataDirectory(prevDir); },
+    });
   };
 
   const currentFontName = FONT_LIST.find(f => f.family === localSettings.fontFamily)?.name || '系统默认';
@@ -116,6 +152,20 @@ const SettingsDialog: React.FC<SettingsDialogProps> = ({ onClose }) => {
                 borderColor: localSettings.theme === t ? 'var(--accent)' : 'var(--glass-border)',
               }}>{t === 'dark' ? '深色' : '浅色'}</button>
             ))}
+          </div>
+        </div>
+
+        <div style={sectionStyle}>
+          <label style={labelStyle(gfs)}>数据目录</label>
+          <div style={{ fontSize: fs(11, gfs), color: 'var(--text-muted)', marginBottom: fs(8, gfs), wordBreak: 'break-all' }}>{dataDirPath || '…'}</div>
+          <div style={{ display: 'flex', gap: fs(6, gfs), alignItems: 'center' }}>
+            <button className="glass-btn" onClick={changeDataDir} style={{ fontSize: fs(12, gfs), padding: `${fs(6, gfs)} ${fs(12, gfs)}` }}>更改目录</button>
+            {prevDir && (
+              <button className="glass-btn" onClick={revertDataDir} style={{ fontSize: fs(12, gfs), padding: `${fs(6, gfs)} ${fs(12, gfs)}` }}>回退到旧目录</button>
+            )}
+          </div>
+          <div style={{ fontSize: fs(10, gfs), color: 'var(--text-muted)', marginTop: fs(6, gfs), lineHeight: 1.6 }}>
+            更改后自动重启；旧数据保留到退出，退出前可回退。
           </div>
         </div>
 
