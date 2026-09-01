@@ -55,7 +55,6 @@
     ],
     "win": {
       "target": "portable",
-      "icon": "assets/icon.ico",
       "signAndEditExecutable": false
     },
     "nsis": {
