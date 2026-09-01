@@ -41,10 +41,14 @@ function saveDataDirConfig(cfg) {
 let relaunching = false;
 function relaunch() {
   relaunching = true;
-  // app.relaunch() is unreliable under portable builds (the app exits without
-  // relaunching), so spawn a fresh instance explicitly, then quit this one.
+  // Under a portable build, process.execPath can point at the unpacked temp
+  // copy; relaunching it loads the app from the wrong location (raw HTML/CSS
+  // shown instead of the UI). electron-builder sets PORTABLE_EXECUTABLE_FILE to
+  // the original exe — launch that with a clean argv + cwd, matching a manual
+  // double-click.
+  const exe = process.env.PORTABLE_EXECUTABLE_FILE || process.execPath;
   try {
-    spawn(process.execPath, process.argv.slice(1), { detached: true, stdio: 'ignore' }).unref();
+    spawn(exe, [], { cwd: path.dirname(exe), detached: true, stdio: 'ignore' }).unref();
   } catch (e) {
     console.error('Failed to relaunch app:', e);
   }
