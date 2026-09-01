@@ -191,7 +191,7 @@ const PdfToolbar: React.FC = () => {
           {PRESET_COLORS.map((c) => (
             <button key={c} onClick={() => update({ color: c })} title={c}
               style={{ width: '18px', height: '18px', borderRadius: '50%', background: c,
-                border: brush.color === c ? '2px solid #fff' : '1px solid var(--glass-border)',
+                border: brush.color === c ? '2px solid var(--text-primary)' : '1px solid var(--glass-border)',
                 cursor: 'pointer', padding: 0, outline: 'none', flexShrink: 0,
                 boxShadow: brush.color === c ? '0 0 0 2px var(--accent)' : 'none' }} />
           ))}

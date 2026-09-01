@@ -10,7 +10,7 @@
 import React, { useRef, useState, useEffect, useCallback } from 'react';
 import { usePdfStore, MAX_ANCHOR_PAGES } from './PdfStore';
 import { usePdfLibrary } from './PdfLibrary';
-import { useToolbarStore } from '../InfiniteInkCanvas/useToolbarStore';
+import { usePdfToolbarStore } from '../InfiniteInkCanvas/useToolbarStore';
 import PdfCanvas from './PdfCanvas';
 import PdfToolbar from './PdfToolbar';
 import PdfSidebar from './PdfSidebar';
@@ -318,10 +318,10 @@ const PdfView: React.FC = () => {
   }, [currentItemId, fileName, currentPage, camera, showDotGrid, sidebarOpen]);
 
   // Toolbar drag overlay (same behavior as the infinite canvas)
-  const isDraggingToolbar = useToolbarStore((s) => s.isDragging);
-  const tOffset = useToolbarStore((s) => s.offset);
-  const tWidth = useToolbarStore((s) => s.width);
-  const tSide = useToolbarStore((s) => s.side);
+  const isDraggingToolbar = usePdfToolbarStore((s) => s.isDragging);
+  const tOffset = usePdfToolbarStore((s) => s.offset);
+  const tWidth = usePdfToolbarStore((s) => s.width);
+  const tSide = usePdfToolbarStore((s) => s.side);
   const areaRef = useRef<HTMLDivElement>(null);
 
   // Keyboard: undo/redo/delete/page-flip
@@ -371,7 +371,7 @@ const PdfView: React.FC = () => {
               );
             })()}
 
-            <ToolbarShell><PdfToolbar /></ToolbarShell>
+            <ToolbarShell useStore={usePdfToolbarStore}><PdfToolbar /></ToolbarShell>
           </div>
         </>
       )}

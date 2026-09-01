@@ -12,7 +12,7 @@ import {
 import TextNode from './TextNode';
 import Toolbar from './Toolbar';
 import ToolbarShell from './ToolbarShell';
-import { useToolbarStore } from './useToolbarStore';
+import { useCanvasToolbarStore } from './useToolbarStore';
 import { useNoteStore } from '../../store';
 import { themeCanvasColors } from '../../themeColors';
 import type { Stroke, StrokePoint, TextNodeData } from './types';
@@ -42,10 +42,10 @@ const InfiniteInkCanvas: React.FC = () => {
   const selectedIds = useCanvasStore((s) => s.selectedIds);
   const selectionMode = useCanvasStore((s) => s.selectionMode);
   const eraserMode = useCanvasStore((s) => s.eraserMode);
-  const isDraggingToolbar = useToolbarStore((s) => s.isDragging);
-  const tOffset = useToolbarStore((s) => s.offset);
-  const tWidth = useToolbarStore((s) => s.width);
-  const tSide = useToolbarStore((s) => s.side);
+  const isDraggingToolbar = useCanvasToolbarStore((s) => s.isDragging);
+  const tOffset = useCanvasToolbarStore((s) => s.offset);
+  const tWidth = useCanvasToolbarStore((s) => s.width);
+  const tSide = useCanvasToolbarStore((s) => s.side);
   const theme = useNoteStore((s) => s.settings.theme);
   const renderEpoch = useCanvasStore((s) => s.renderEpoch);
 
@@ -488,7 +488,7 @@ const InfiniteInkCanvas: React.FC = () => {
         );
       })()}
 
-      <ToolbarShell><Toolbar /></ToolbarShell>
+      <ToolbarShell useStore={useCanvasToolbarStore}><Toolbar /></ToolbarShell>
     </div>
   );
 };

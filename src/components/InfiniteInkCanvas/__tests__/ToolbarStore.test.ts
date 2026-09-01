@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { useToolbarStore } from '../useToolbarStore';
+import { useCanvasToolbarStore as useToolbarStore, usePdfToolbarStore } from '../useToolbarStore';
 import { DEFAULT_TOOLBAR_STATE, TOOLBAR_STORAGE_KEY } from '../constants';
 
 beforeEach(() => {
@@ -126,6 +126,20 @@ describe('useToolbarStore', () => {
       useToolbarStore.getState().toggle();
       vi.advanceTimersByTime(600);
       expect(localStorage.getItem(TOOLBAR_STORAGE_KEY)).toBeTruthy();
+    });
+  });
+
+  describe('per-interface stores', () => {
+    it('canvas and PDF toolbars keep independent memory', () => {
+      useToolbarStore.getState().setSide('left');
+      useToolbarStore.getState().setWidth(300);
+      usePdfToolbarStore.getState().setSide('right');
+      usePdfToolbarStore.getState().setWidth(200);
+
+      expect(useToolbarStore.getState().side).toBe('left');
+      expect(usePdfToolbarStore.getState().side).toBe('right');
+      expect(useToolbarStore.getState().width).toBe(300);
+      expect(usePdfToolbarStore.getState().width).toBe(200);
     });
   });
 });

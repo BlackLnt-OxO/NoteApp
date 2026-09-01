@@ -1,6 +1,7 @@
 /**
- * useToolbarStore — Zustand store for the collapsible, draggable, resizable
- * toolbar.  Supports left / right edge docking with snap-on-release.
+ * useToolbarStore — factory for collapsible, draggable, resizable toolbar
+ * stores. The PDF and infinite-canvas toolbars each get their OWN instance so
+ * position/expansion memory is per-interface (never per document / file).
  */
 
 import { create } from 'zustand';
@@ -38,101 +39,107 @@ export interface ToolbarStoreActions {
   reset: () => void;
 }
 
-type ToolbarStore = ToolbarStoreState & ToolbarStoreActions;
+export type ToolbarStore = ToolbarStoreState & ToolbarStoreActions;
 
 const COLLAPSE_THRESHOLD = 60;
 
-// ---- Store ---------------------------------------------------------------
+export function createToolbarStore(storageKey: string) {
+  const useStore = create<ToolbarStore>((set, get) => ({
+    expanded: DEFAULT_TOOLBAR_STATE.expanded,
+    width: DEFAULT_TOOLBAR_STATE.width,
+    lastExpandedWidth: DEFAULT_TOOLBAR_STATE.lastExpandedWidth,
+    top: DEFAULT_TOOLBAR_STATE.top,
+    offset: DEFAULT_TOOLBAR_STATE.offset,
+    side: DEFAULT_TOOLBAR_STATE.side,
+    isDragging: false,
+    dragCursorX: 0,
 
-export const useToolbarStore = create<ToolbarStore>((set, get) => ({
-  expanded: DEFAULT_TOOLBAR_STATE.expanded,
-  width: DEFAULT_TOOLBAR_STATE.width,
-  lastExpandedWidth: DEFAULT_TOOLBAR_STATE.lastExpandedWidth,
-  top: DEFAULT_TOOLBAR_STATE.top,
-  offset: DEFAULT_TOOLBAR_STATE.offset,
-  side: DEFAULT_TOOLBAR_STATE.side,
-  isDragging: false,
-  dragCursorX: 0,
+    // --- expand / collapse ---
 
-  // --- expand / collapse ---
+    toggle: () => {
+      const { expanded, width, lastExpandedWidth } = get();
+      if (expanded) {
+        const saved = width > COLLAPSE_THRESHOLD ? width : lastExpandedWidth;
+        set({ expanded: false, lastExpandedWidth: saved });
+      } else {
+        set({ expanded: true, width: lastExpandedWidth });
+      }
+    },
 
-  toggle: () => {
-    const { expanded, width, lastExpandedWidth } = get();
-    if (expanded) {
+    expand: () => set({ expanded: true, width: get().lastExpandedWidth }),
+
+    collapse: () => {
+      const { width, lastExpandedWidth } = get();
       const saved = width > COLLAPSE_THRESHOLD ? width : lastExpandedWidth;
       set({ expanded: false, lastExpandedWidth: saved });
-    } else {
-      set({ expanded: true, width: lastExpandedWidth });
-    }
-  },
+    },
 
-  expand: () => set({ expanded: true, width: get().lastExpandedWidth }),
+    // --- size & position ---
 
-  collapse: () => {
-    const { width, lastExpandedWidth } = get();
-    const saved = width > COLLAPSE_THRESHOLD ? width : lastExpandedWidth;
-    set({ expanded: false, lastExpandedWidth: saved });
-  },
+    setWidth: (w) => set({ width: w }),
 
-  // --- size & position ---
+    setPosition: (top, offset) => set({ top, offset }),
 
-  setWidth: (w) => set({ width: w }),
+    setSide: (side) => set({ side }),
 
-  setPosition: (top, offset) => set({ top, offset }),
+    setIsDragging: (v) => set({ isDragging: v }),
+    setDragCursorX: (x) => set({ dragCursorX: x }),
 
-  setSide: (side) => set({ side }),
+    clampPosition: (viewportW, viewportH) => {
+      const { top, offset } = get();
+      const estH = 600;
+      const margin = 12;
+      set({
+        top: Math.max(margin, Math.min(top, Math.max(margin, viewportH - estH))),
+        offset: Math.max(-12, Math.min(offset, viewportW - 60)),
+      });
+    },
 
-  setIsDragging: (v) => set({ isDragging: v }),
-  setDragCursorX: (x) => set({ dragCursorX: x }),
+    // --- persistence ---
 
-  clampPosition: (viewportW, viewportH) => {
-    const { top, offset, expanded } = get();
-    const estH = 600;
-    const margin = 12;
-    set({
-      top: Math.max(margin, Math.min(top, Math.max(margin, viewportH - estH))),
-      offset: Math.max(-12, Math.min(offset, viewportW - 60)),
-    });
-  },
+    saveState: () => {
+      try {
+        const { expanded, width, lastExpandedWidth, top, offset, side } = get();
+        localStorage.setItem(
+          storageKey,
+          JSON.stringify({ expanded, width, lastExpandedWidth, top, offset, side }),
+        );
+      } catch { /* noop */ }
+    },
 
-  // --- persistence ---
+    loadState: () => {
+      try {
+        const raw = localStorage.getItem(storageKey);
+        if (raw) {
+          const data = JSON.parse(raw);
+          set({
+            expanded: data.expanded ?? DEFAULT_TOOLBAR_STATE.expanded,
+            width: data.width ?? DEFAULT_TOOLBAR_STATE.width,
+            lastExpandedWidth: data.lastExpandedWidth ?? DEFAULT_TOOLBAR_STATE.lastExpandedWidth,
+            top: data.top ?? DEFAULT_TOOLBAR_STATE.top,
+            offset: data.offset ?? data.rightOffset ?? DEFAULT_TOOLBAR_STATE.offset,
+            side: data.side ?? DEFAULT_TOOLBAR_STATE.side,
+          });
+        }
+      } catch { /* corrupt */ }
+    },
 
-  saveState: () => {
-    try {
-      const { expanded, width, lastExpandedWidth, top, offset, side } = get();
-      localStorage.setItem(
-        TOOLBAR_STORAGE_KEY,
-        JSON.stringify({ expanded, width, lastExpandedWidth, top, offset, side }),
-      );
-    } catch { /* noop */ }
-  },
+    reset: () => set({ ...DEFAULT_TOOLBAR_STATE, isDragging: false, dragCursorX: 0 }),
+  }));
 
-  loadState: () => {
-    try {
-      const raw = localStorage.getItem(TOOLBAR_STORAGE_KEY);
-      if (raw) {
-        const data = JSON.parse(raw);
-        set({
-          expanded: data.expanded ?? DEFAULT_TOOLBAR_STATE.expanded,
-          width: data.width ?? DEFAULT_TOOLBAR_STATE.width,
-          lastExpandedWidth: data.lastExpandedWidth ?? DEFAULT_TOOLBAR_STATE.lastExpandedWidth,
-          top: data.top ?? DEFAULT_TOOLBAR_STATE.top,
-          offset: data.offset ?? data.rightOffset ?? DEFAULT_TOOLBAR_STATE.offset,
-          side: data.side ?? DEFAULT_TOOLBAR_STATE.side,
-        });
-      }
-    } catch { /* corrupt */ }
-  },
+  // Auto-save (debounced), scoped to this instance's key.
+  let saveTimeout: ReturnType<typeof setTimeout>;
+  useStore.subscribe(() => {
+    clearTimeout(saveTimeout);
+    saveTimeout = setTimeout(() => {
+      useStore.getState().saveState();
+    }, 500);
+  });
 
-  reset: () => set({ ...DEFAULT_TOOLBAR_STATE, isDragging: false, dragCursorX: 0 }),
-}));
+  return useStore;
+}
 
-// ---- Auto-save -----------------------------------------------------------
-
-let saveTimeout: ReturnType<typeof setTimeout>;
-useToolbarStore.subscribe(() => {
-  clearTimeout(saveTimeout);
-  saveTimeout = setTimeout(() => {
-    useToolbarStore.getState().saveState();
-  }, 500);
-});
+/** Infinite-canvas toolbar memory (kept at its legacy key). */
+export const useCanvasToolbarStore = createToolbarStore(TOOLBAR_STORAGE_KEY);
+/** PDF toolbar memory (separate key — independent position/expansion). */
+export const usePdfToolbarStore = createToolbarStore('stickynotes-pdf-toolbar');

@@ -12,7 +12,7 @@
  */
 
 import React, { useRef, useEffect, useLayoutEffect, useCallback, useState } from 'react';
-import { useToolbarStore } from './useToolbarStore';
+import { useCanvasToolbarStore } from './useToolbarStore';
 import {
   MIN_TOOLBAR_WIDTH,
   MAX_TOOLBAR_WIDTH,
@@ -36,12 +36,14 @@ function shouldIgnoreShortcut(target: EventTarget | null): boolean {
 
 interface Props {
   children: React.ReactNode;
+  /** Which toolbar memory store to bind (PDF vs infinite-canvas). */
+  useStore: typeof useCanvasToolbarStore;
 }
 
 // ---- Component -------------------------------------------------------------
 
-const ToolbarShell: React.FC<Props> = ({ children }) => {
-  const store = useToolbarStore();
+const ToolbarShell: React.FC<Props> = ({ children, useStore }) => {
+  const store = useStore();
   const {
     expanded, width, top, offset, side,
     toggle, collapse, expand,
@@ -188,7 +190,7 @@ const ToolbarShell: React.FC<Props> = ({ children }) => {
       // Snap to whichever half the toolbar CENTER is over — must match the
       // canvas overlay highlight (center < vpW/2 → left). Read the live
       // offset/width from the store (latest pointer-move position).
-      const st = useToolbarStore.getState();
+      const st = useStore.getState();
       const tl = st.side === 'left' ? st.offset : vpW - st.offset - st.width;
       const tr = st.side === 'left' ? st.offset + st.width : vpW - st.offset;
       const newSide = (tl + tr) / 2 < vpW / 2 ? 'left' : 'right';
@@ -295,28 +297,28 @@ const ToolbarShell: React.FC<Props> = ({ children }) => {
             zIndex: 101,
             width: 16, height: 48,
             border: 0,
-            background: 'rgba(30,30,48,0.94)',
-            color: 'rgba(255,255,255,0.7)',
+            background: 'var(--chrome-bg)',
+            color: 'var(--text-secondary)',
             cursor: 'pointer',
             display: 'flex', alignItems: 'center', justifyContent: 'center',
             fontSize: '11px', fontWeight: 700, padding: 0,
-            boxShadow: '0 2px 10px rgba(0,0,0,0.3)',
-            borderTop: '1px solid rgba(255,255,255,0.08)',
-            borderBottom: '1px solid rgba(255,255,255,0.08)',
+            boxShadow: 'var(--glass-shadow)',
+            borderTop: '1px solid var(--glass-border)',
+            borderBottom: '1px solid var(--glass-border)',
             ...(isLeft
-              ? { borderRight: '1px solid rgba(255,255,255,0.08)' }
-              : { borderLeft: '1px solid rgba(255,255,255,0.08)' }),
+              ? { borderRight: '1px solid var(--glass-border)' }
+              : { borderLeft: '1px solid var(--glass-border)' }),
             transition: 'color 0.15s, background 0.15s, width 0.12s',
           }}
           onMouseEnter={(el) => {
             el.currentTarget.style.width = '22px';
-            el.currentTarget.style.color = '#fff';
-            el.currentTarget.style.background = 'rgba(50,50,75,0.96)';
+            el.currentTarget.style.color = 'var(--text-primary)';
+            el.currentTarget.style.background = 'var(--glass-bg-hover)';
           }}
           onMouseLeave={(el) => {
             el.currentTarget.style.width = '16px';
-            el.currentTarget.style.color = 'rgba(255,255,255,0.7)';
-            el.currentTarget.style.background = 'rgba(30,30,48,0.94)';
+            el.currentTarget.style.color = 'var(--text-secondary)';
+            el.currentTarget.style.background = 'var(--chrome-bg)';
           }}
           title={`展开工具栏 (N) — 吸附在${isLeft ? '左' : '右'}侧`}
           aria-label="展开工具栏"
@@ -383,7 +385,7 @@ const ToolbarShell: React.FC<Props> = ({ children }) => {
             onPointerMove={onHeaderPointerMove}
             onPointerUp={onHeaderPointerUp}
             onPointerCancel={onHeaderPointerUp}
-            onMouseEnter={(e) => { if (!isDragging) (e.currentTarget as HTMLElement).style.background = 'rgba(255,255,255,0.04)'; }}
+            onMouseEnter={(e) => { if (!isDragging) (e.currentTarget as HTMLElement).style.background = 'var(--glass-bg-hover)'; }}
             onMouseLeave={(e) => { if (!isDragging) (e.currentTarget as HTMLElement).style.background = 'transparent'; }}
           >
             <span style={{
@@ -400,11 +402,11 @@ const ToolbarShell: React.FC<Props> = ({ children }) => {
           <div ref={bodyRef} style={{
             width: '100%', minWidth: 0,
             overflowY: 'auto', overflowX: 'hidden',
-            border: '1px solid rgba(255,255,255,0.12)',
+            border: '1px solid var(--glass-border)',
             borderRadius: '10px',
-            background: 'rgba(30,30,48,0.96)',
+            background: 'var(--chrome-bg)',
             backdropFilter: 'blur(14px)', WebkitBackdropFilter: 'blur(14px)',
-            boxShadow: '0 8px 30px rgba(0,0,0,0.28)',
+            boxShadow: 'var(--glass-shadow)',
             maxHeight: 'calc(100vh - 36px)',
           }}>
             {children}

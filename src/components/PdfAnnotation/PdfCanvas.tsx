@@ -18,7 +18,7 @@
 
 import React, { useRef, useEffect, useCallback, useState } from 'react';
 import { usePdfStore } from './PdfStore';
-import { useToolbarStore } from '../InfiniteInkCanvas/useToolbarStore';
+import { usePdfToolbarStore } from '../InfiniteInkCanvas/useToolbarStore';
 import { useNoteStore } from '../../store';
 import { themeCanvasColors } from '../../themeColors';
 import {
@@ -209,7 +209,7 @@ const PdfCanvas: React.FC = () => {
   const eraserMode = usePdfStore((s) => s.eraserMode);
   const showDotGrid = usePdfStore((s) => s.showDotGrid);
   const camera = usePdfStore((s) => s.camera);
-  const isDraggingToolbar = useToolbarStore((s) => s.isDragging);
+  const isDraggingToolbar = usePdfToolbarStore((s) => s.isDragging);
   const theme = useNoteStore((s) => s.settings.theme);
   const [cursorScreen, setCursorScreen] = useState<{ x: number; y: number } | null>(null);
   const ringRef = useRef<HTMLDivElement>(null);

@@ -196,7 +196,7 @@ const Toolbar: React.FC = () => {
           {PRESET_COLORS.map((c) => (
             <button key={c} onClick={() => update({ color: c })} title={c}
               style={{ width: '18px', height: '18px', borderRadius: '50%', background: c,
-                border: brushSettings.color === c ? '2px solid #fff' : '1px solid var(--glass-border)',
+                border: brushSettings.color === c ? '2px solid var(--text-primary)' : '1px solid var(--glass-border)',
                 cursor: 'pointer', padding: 0, outline: 'none', flexShrink: 0,
                 boxShadow: brushSettings.color === c ? '0 0 0 2px var(--accent)' : 'none' }} />
           ))}
