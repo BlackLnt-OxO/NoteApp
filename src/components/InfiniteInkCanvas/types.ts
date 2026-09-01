@@ -73,9 +73,16 @@ export interface PersistedCanvasData {
 
 // ---- Multi-canvas library ----------------------------------------------------
 
+export interface CanvasCategory {
+  id: string;
+  name: string;
+  createdAt: number;
+}
+
 export interface CanvasMeta {
   id: string;
   name: string;
+  categoryId: string | null;
   createdAt: number;
   updatedAt: number;
 }

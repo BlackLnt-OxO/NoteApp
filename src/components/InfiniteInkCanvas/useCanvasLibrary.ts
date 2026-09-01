@@ -11,11 +11,12 @@
  */
 
 import { create } from 'zustand';
-import type { CanvasMeta } from './types';
+import type { CanvasCategory, CanvasMeta } from './types';
 import { CANVAS_LIST_KEY, canvasDataKey, STORAGE_KEY } from './constants';
 
 export interface CanvasLibraryStore {
   canvases: CanvasMeta[];
+  categories: CanvasCategory[];
   /** Canvas currently open in the view (null → show the home screen). */
   currentCanvasId: string | null;
   loaded: boolean;
@@ -26,6 +27,12 @@ export interface CanvasLibraryStore {
   addCanvas: () => string;
   renameCanvas: (id: string, name: string) => void;
   deleteCanvas: (id: string) => void;
+  setCanvasCategory: (id: string, categoryId: string | null) => void;
+  addCategory: (name: string) => string;
+  renameCategory: (id: string, name: string) => void;
+  deleteCategory: (id: string) => void;
+  /** Drag-to-reorder: swap two canvases in the list. */
+  reorderCanvases: (fromIndex: number, toIndex: number) => void;
   setCurrentCanvasId: (id: string | null) => void;
 }
 
@@ -45,6 +52,7 @@ function nextUntitledName(canvases: CanvasMeta[]): string {
 
 export const useCanvasLibrary = create<CanvasLibraryStore>((set, get) => ({
   canvases: [],
+  categories: [],
   currentCanvasId: null,
   loaded: false,
 
@@ -53,18 +61,24 @@ export const useCanvasLibrary = create<CanvasLibraryStore>((set, get) => ({
       const legacy = localStorage.getItem(STORAGE_KEY);
       const raw = localStorage.getItem(CANVAS_LIST_KEY);
       let list: CanvasMeta[] = [];
+      let categories: CanvasCategory[] = [];
       if (raw) {
         const parsed = JSON.parse(raw);
-        if (Array.isArray(parsed)) list = parsed;
+        if (Array.isArray(parsed.canvases)) {
+          list = parsed.canvases;
+          categories = Array.isArray(parsed.categories) ? parsed.categories : [];
+        } else if (Array.isArray(parsed)) {
+          list = parsed; // legacy list-only shape
+        }
       }
       if (legacy && list.length === 0) {
         const id = makeId();
         localStorage.setItem(canvasDataKey(id), legacy);
         localStorage.removeItem(STORAGE_KEY);
-        list = [{ id, name: '未命名1', createdAt: Date.now(), updatedAt: Date.now() }];
-        localStorage.setItem(CANVAS_LIST_KEY, JSON.stringify(list));
+        list = [{ id, name: '未命名1', categoryId: null, createdAt: Date.now(), updatedAt: Date.now() }];
+        localStorage.setItem(CANVAS_LIST_KEY, JSON.stringify({ canvases: list, categories }));
       }
-      set({ canvases: list, loaded: true });
+      set({ canvases: list, categories, loaded: true });
     } catch {
       set({ loaded: true });
     }
@@ -72,13 +86,13 @@ export const useCanvasLibrary = create<CanvasLibraryStore>((set, get) => ({
 
   saveState: () => {
     try {
-      localStorage.setItem(CANVAS_LIST_KEY, JSON.stringify(get().canvases));
+      localStorage.setItem(CANVAS_LIST_KEY, JSON.stringify({ canvases: get().canvases, categories: get().categories }));
     } catch { /* quota / private mode */ }
   },
 
   addCanvas: () => {
     const id = makeId();
-    const meta: CanvasMeta = { id, name: nextUntitledName(get().canvases), createdAt: Date.now(), updatedAt: Date.now() };
+    const meta: CanvasMeta = { id, name: nextUntitledName(get().canvases), categoryId: null, createdAt: Date.now(), updatedAt: Date.now() };
     try {
       localStorage.setItem(
         canvasDataKey(id),
@@ -102,6 +116,33 @@ export const useCanvasLibrary = create<CanvasLibraryStore>((set, get) => ({
       currentCanvasId: s.currentCanvasId === id ? null : s.currentCanvasId,
     }));
   },
+
+  setCanvasCategory: (id, categoryId) =>
+    set((s) => ({
+      canvases: s.canvases.map((c) => (c.id === id ? { ...c, categoryId, updatedAt: Date.now() } : c)),
+    })),
+
+  addCategory: (name) => {
+    const id = makeId();
+    set((s) => ({ categories: [...s.categories, { id, name, createdAt: Date.now() }] }));
+    return id;
+  },
+
+  renameCategory: (id, name) =>
+    set((s) => ({ categories: s.categories.map((c) => (c.id === id ? { ...c, name } : c)) })),
+
+  deleteCategory: (id) =>
+    set((s) => ({
+      categories: s.categories.filter((c) => c.id !== id),
+      canvases: s.canvases.map((c) => (c.categoryId === id ? { ...c, categoryId: null } : c)),
+    })),
+
+  reorderCanvases: (fromIndex, toIndex) =>
+    set((s) => {
+      const canvases = [...s.canvases];
+      [canvases[fromIndex], canvases[toIndex]] = [canvases[toIndex], canvases[fromIndex]];
+      return { canvases };
+    }),
 
   setCurrentCanvasId: (id) => set({ currentCanvasId: id }),
 }));

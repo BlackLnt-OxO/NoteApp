@@ -38,14 +38,16 @@ describe('items', () => {
     expect(usePdfLibrary.getState().items).toHaveLength(0);
   });
 
-  it('touchLastOpened moves the item to the front', () => {
+  it('touchLastOpened updates the timestamp without reordering', () => {
     usePdfLibrary.getState().addItem({ name: 'a', path: '/a', categoryId: null, pageCount: 1, sizeBytes: 1 });
     const idB = usePdfLibrary.getState().addItem({ name: 'b', path: '/b', categoryId: null, pageCount: 1, sizeBytes: 1 });
     // b was added later → index 0
     expect(usePdfLibrary.getState().items[0].id).toBe(idB);
     const idA = usePdfLibrary.getState().items[1].id;
     usePdfLibrary.getState().touchLastOpened(idA);
-    expect(usePdfLibrary.getState().items[0].id).toBe(idA);
+    // Order preserved — the home screen keeps the user's drag-to-reorder sequence.
+    expect(usePdfLibrary.getState().items[0].id).toBe(idB);
+    expect(usePdfLibrary.getState().items[1].id).toBe(idA);
   });
 
   it('setItemCategory / updateItemPath mutate the item', () => {

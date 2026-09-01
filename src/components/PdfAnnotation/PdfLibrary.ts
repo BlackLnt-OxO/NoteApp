@@ -45,6 +45,8 @@ export interface PdfLibraryStore {
   setItemCategory: (id: string, categoryId: string | null) => void;
   updateItemPath: (id: string, path: string) => void;
   touchLastOpened: (id: string) => void;
+  /** Drag-to-reorder: swap two items in the list. */
+  reorderItems: (fromIndex: number, toIndex: number) => void;
 
   addCategory: (name: string) => string;
   renameCategory: (id: string, name: string) => void;
@@ -99,11 +101,17 @@ export const usePdfLibrary = create<PdfLibraryStore>((set, get) => ({
     set((s) => ({ items: s.items.map((i) => (i.id === id ? { ...i, path } : i)) })),
 
   touchLastOpened: (id) =>
+    set((s) => ({
+      // Update the timestamp only — never reorder (the home screen keeps the
+      // user's drag-to-reorder sequence).
+      items: s.items.map((i) => (i.id === id ? { ...i, lastOpened: Date.now() } : i)),
+    })),
+
+  reorderItems: (fromIndex, toIndex) =>
     set((s) => {
-      const target = s.items.find((i) => i.id === id);
-      if (!target) return {};
-      const rest = s.items.filter((i) => i.id !== id);
-      return { items: [{ ...target, lastOpened: Date.now() }, ...rest] };
+      const items = [...s.items];
+      [items[fromIndex], items[toIndex]] = [items[toIndex], items[fromIndex]];
+      return { items };
     }),
 
   addCategory: (name) => {

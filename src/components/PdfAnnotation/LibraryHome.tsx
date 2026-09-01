@@ -13,6 +13,7 @@ import React, { useState, useEffect } from 'react';
 import { usePdfStore } from './PdfStore';
 import { usePdfLibrary, type PdfCategory, type PdfLibraryItem } from './PdfLibrary';
 import { pickPdfFile } from './PdfPicker';
+import FlowGrid from '../FlowGrid';
 
 // ---- helpers ------------------------------------------------------------------
 
@@ -70,7 +71,8 @@ const LibraryHome: React.FC = () => {
   const filtered = selectedCategory
     ? items.filter((i) => i.categoryId === selectedCategory)
     : items;
-  const sorted = [...filtered].sort((a, b) => b.lastOpened - a.lastOpened);
+  // Cards keep the user's drag-to-reorder sequence (no auto-sort by recency).
+  const sorted = filtered;
 
   // ---- import ---------------------------------------------------------------
 
@@ -229,40 +231,68 @@ const LibraryHome: React.FC = () => {
         </div>
       )}
 
-      {/* Card grid */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: 14 }}>
-        {sorted.map((item) => (
-          <div
-            key={item.id}
-            onClick={() => doOpen(item)}
-            onContextMenu={(e) => {
-              e.preventDefault();
-              e.stopPropagation();
-              setCardMenu({ x: e.clientX, y: e.clientY, item });
-            }}
-            style={{
-              padding: '16px', borderRadius: '12px', cursor: 'pointer',
-              background: 'var(--glass-bg-light)', border: '1px solid var(--glass-border)',
-              transition: 'all var(--transition)',
-              display: 'flex', flexDirection: 'column', gap: 10,
-            }}
-            onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--glass-bg-hover)'; e.currentTarget.style.borderColor = 'var(--glass-border-active)'; }}
-            onMouseLeave={(e) => { e.currentTarget.style.background = 'var(--glass-bg-light)'; e.currentTarget.style.borderColor = 'var(--glass-border)'; }}
-          >
-            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-              <div style={{ color: 'var(--accent)' }}><PdfCardIcon /></div>
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ fontSize: '13px', fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{item.name}</div>
-                <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: 2 }}>{item.pageCount} 页 · {formatBytes(item.sizeBytes)}</div>
+      {/* Card grid (drag-to-reorder) */}
+      {sorted.length > 0 && (
+        <FlowGrid
+          items={sorted}
+          itemWidth={220}
+          itemHeight={110}
+          gap={14}
+          getId={(i) => i.id}
+          onReorder={(from, to) => usePdfLibrary.getState().reorderItems(from, to)}
+          onCardClick={(item) => doOpen(item)}
+          renderCard={(item, _idx, hovered) => (
+            <div
+              onContextMenu={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                setCardMenu({ x: e.clientX, y: e.clientY, item });
+              }}
+              style={{
+                width: '100%', height: '100%', boxSizing: 'border-box',
+                padding: '16px', borderRadius: '12px', cursor: 'pointer',
+                background: hovered ? 'var(--glass-bg-hover)' : 'var(--glass-bg-light)',
+                border: hovered ? '1px solid var(--glass-border-active)' : '1px solid var(--glass-border)',
+                transition: 'all var(--transition)',
+                display: 'flex', flexDirection: 'column', gap: 10,
+                position: 'relative', userSelect: 'none',
+              }}
+            >
+              {hovered && (
+                <button
+                  title="删除"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    if (confirm(`从库中删除「${item.name}」？批注和磁盘上的 PDF 文件不会被删除。`)) {
+                      usePdfLibrary.getState().removeItem(item.id);
+                      window.electronAPI?.deletePdfAnnotation(item.id);
+                    }
+                  }}
+                  style={{
+                    position: 'absolute', top: 8, right: 8,
+                    width: 22, height: 22, borderRadius: '50%', border: 'none', cursor: 'pointer',
+                    background: 'rgba(231,76,60,0.8)', color: '#fff', fontSize: '12px', lineHeight: 1,
+                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  }}
+                >
+                  ×
+                </button>
+              )}
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                <div style={{ color: 'var(--accent)' }}><PdfCardIcon /></div>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: '13px', fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{item.name}</div>
+                  <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: 2 }}>{item.pageCount} 页 · {formatBytes(item.sizeBytes)}</div>
+                </div>
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '11px', color: 'var(--text-muted)' }}>
+                <span>{item.categoryId ? (categories.find((c) => c.id === item.categoryId)?.name ?? '') : ''}</span>
+                <span>{relativeTime(item.lastOpened)}</span>
               </div>
             </div>
-            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '11px', color: 'var(--text-muted)' }}>
-              <span>{item.categoryId ? (categories.find((c) => c.id === item.categoryId)?.name ?? '') : ''}</span>
-              <span>{relativeTime(item.lastOpened)}</span>
-            </div>
-          </div>
-        ))}
-      </div>
+          )}
+        />
+      )}
 
       {/* ---- Card context menu ---- */}
       {cardMenu && (
