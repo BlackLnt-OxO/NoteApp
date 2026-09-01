@@ -96,7 +96,7 @@ export interface EventLoopStats {
   avgMs: number; p95Ms: number; p99Ms: number;
   maxMs: number; over50ms: number; over100ms: number;
 }
-export type ViewMode = 'notes' | 'inkcanvas';
+export type ViewMode = 'notes' | 'inkcanvas' | 'pdf';
 
 export const DEFAULT_COLORS = [
   '#6b5ce7', // Purple

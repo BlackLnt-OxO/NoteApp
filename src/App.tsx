@@ -7,6 +7,7 @@ import SettingsDialog from './components/SettingsDialog';
 import ScreenshotTool from './components/ScreenshotTool';
 import DiagnosticPanel from './components/DiagnosticPanel';
 import InfiniteInkCanvas from './components/InfiniteInkCanvas/InfiniteInkCanvas';
+import PdfView from './components/PdfAnnotation/PdfView';
 import { fs, fsn } from './utils';
 
 const App: React.FC = () => {
@@ -147,6 +148,8 @@ const App: React.FC = () => {
         <div style={{ flex: 1, position: 'relative', overflow: 'hidden', borderRadius: '0 0 12px 0' }}>
           {viewMode === 'inkcanvas' ? (
             <InfiniteInkCanvas />
+          ) : viewMode === 'pdf' ? (
+            <PdfView />
           ) : (
             <>
               <div style={{

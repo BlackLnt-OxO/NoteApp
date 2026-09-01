@@ -98,6 +98,7 @@ const Sidebar: React.FC<SidebarProps> = ({ onCreateNote }) => {
         {([
           { id: 'notes' as const, label: '便笺' },
           { id: 'inkcanvas' as const, label: '画布' },
+          { id: 'pdf' as const, label: 'PDF' },
         ]).map((m) => (
           <button
             key={m.id}
