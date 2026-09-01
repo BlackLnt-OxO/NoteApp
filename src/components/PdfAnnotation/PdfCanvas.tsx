@@ -43,8 +43,9 @@ import type { PdfPoint, PdfStroke } from './PdfTypes';
 
 const TILE = 512; // world units per tile
 const SCALE = PDF_BAKE_SCALE;
-/** Max background page canvases kept hot; the anchor page survives eviction. */
-const BG_CACHE_MAX = 3;
+/** Background canvases always kept hot: every anchored page + the current page. */
+const BG_CACHE_MIN = 3;
+const BG_CACHE_MAX = 8;
 
 function tileKey(tx: number, ty: number): string {
   return `${tx}:${ty}`;
@@ -382,14 +383,16 @@ const PdfCanvas: React.FC = () => {
       await renderPageToCanvas(pdfDoc, pageNum, scratch, PDF_BAKE_SCALE);
       if (token !== pageLoadTokenRef.current) return;
 
-      // Insert into cache (LRU; the anchor page is never evicted).
+      // Insert into cache (LRU; anchored pages are never evicted). Capacity
+      // grows with the anchor count so every anchor + the current page stays hot.
       const cache = bgCacheRef.current;
       cache.set(pageNum, scratch);
-      const anchor = usePdfStore.getState().anchorPage;
-      while (cache.size > BG_CACHE_MAX) {
+      const anchors = usePdfStore.getState().anchorPages;
+      const cacheMax = Math.min(BG_CACHE_MAX, Math.max(BG_CACHE_MIN, anchors.length + 1));
+      while (cache.size > cacheMax) {
         let oldest: number | undefined;
         for (const k of cache.keys()) {
-          if (k !== anchor) { oldest = k; break; }
+          if (!anchors.includes(k)) { oldest = k; break; }
         }
         if (oldest === undefined) break;
         cache.delete(oldest);

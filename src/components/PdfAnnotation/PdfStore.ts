@@ -26,6 +26,8 @@ import type {
 import { loadPdfDocument, type PdfJsDocument } from './PdfLoader';
 
 const MAX_HISTORY = 50;
+/** Hard cap on how many pages can be anchored at once. */
+export const MAX_ANCHOR_PAGES = 7;
 
 export const DEFAULT_PDF_BRUSH: PdfBrush = {
   size: 8,
@@ -77,9 +79,9 @@ export interface PdfStore {
 
   // Thumbnail sidebar
   sidebarOpen: boolean;
-  /** Anchor page for the "back to current page" button; its bg render is cached. */
-  anchorPage: number | null;
-  /** One-shot: scroll the thumbnail rail to this page (set by the anchor button). */
+  /** Anchored pages for the back-jump buttons; their bg renders stay cached. */
+  anchorPages: number[];
+  /** One-shot: scroll the thumbnail rail to this page (set by the anchor buttons). */
   sidebarScrollTarget: number | null;
 
   // Actions
@@ -100,7 +102,9 @@ export interface PdfStore {
   resetCamera: (cam: PdfCamera) => void;
   setSidebarOpen: (open: boolean) => void;
   toggleSidebar: () => void;
-  setAnchorPage: (page: number | null) => void;
+  /** Add the current page to the anchors (no-op if already present or at cap). */
+  addAnchorPage: (page: number) => void;
+  removeAnchorPage: (page: number) => void;
   setSidebarScrollTarget: (page: number | null) => void;
 
   setActiveTool: (t: PdfTool) => void;
@@ -182,7 +186,7 @@ export const usePdfStore = create<PdfStore>((set, get) => ({
   camera: { x: 0, y: 0, zoom: 1 },
 
   sidebarOpen: true,
-  anchorPage: null,
+  anchorPages: [],
   sidebarScrollTarget: null,
 
   // --- document ------------------------------------------------------------
@@ -209,7 +213,7 @@ export const usePdfStore = create<PdfStore>((set, get) => ({
         showDotGrid: resume?.showDotGrid ?? false,
         sidebarOpen: resume?.sidebarOpen ?? true,
         camera: resume?.camera ?? { x: 0, y: 0, zoom: 1 },
-        anchorPage: lastPage,
+        anchorPages: [lastPage],
         sidebarScrollTarget: null,
         loading: false,
       });
@@ -235,7 +239,7 @@ export const usePdfStore = create<PdfStore>((set, get) => ({
       renderEpoch: 0,
       selectedIds: [],
       camera: { x: 0, y: 0, zoom: 1 },
-      anchorPage: null,
+      anchorPages: [],
       sidebarScrollTarget: null,
       loading: false,
       error: null,
@@ -271,7 +275,14 @@ export const usePdfStore = create<PdfStore>((set, get) => ({
 
   toggleSidebar: () => set((s) => ({ sidebarOpen: !s.sidebarOpen })),
 
-  setAnchorPage: (page) => set({ anchorPage: page }),
+  addAnchorPage: (page) => {
+    const cur = get().anchorPages;
+    if (cur.includes(page) || cur.length >= MAX_ANCHOR_PAGES) return;
+    set({ anchorPages: [...cur, page] });
+  },
+
+  removeAnchorPage: (page) =>
+    set((s) => ({ anchorPages: s.anchorPages.filter((p) => p !== page) })),
 
   setSidebarScrollTarget: (page) => set({ sidebarScrollTarget: page }),
 
@@ -504,7 +515,7 @@ export const usePdfStore = create<PdfStore>((set, get) => ({
       showDotGrid: false,
       camera: { x: 0, y: 0, zoom: 1 },
       sidebarOpen: true,
-      anchorPage: null,
+      anchorPages: [],
       sidebarScrollTarget: null,
       loading: false,
       error: null,

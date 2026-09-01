@@ -8,7 +8,7 @@
  */
 
 import React, { useRef, useState, useEffect, useCallback } from 'react';
-import { usePdfStore } from './PdfStore';
+import { usePdfStore, MAX_ANCHOR_PAGES } from './PdfStore';
 import { usePdfLibrary } from './PdfLibrary';
 import { useToolbarStore } from '../InfiniteInkCanvas/useToolbarStore';
 import PdfCanvas from './PdfCanvas';
@@ -92,6 +92,53 @@ const ImportScreen: React.FC = () => {
   );
 };
 
+// ---- Anchor badge (one per anchored page) -------------------------------------
+
+const AnchorBadge: React.FC<{
+  page: number;
+  current: boolean;
+  onJump: () => void;
+  onRemove: () => void;
+}> = ({ page, current, onJump, onRemove }) => {
+  const [hover, setHover] = useState(false);
+  return (
+    <div
+      onClick={onJump}
+      title={current ? `当前就在标记的第 ${page} 页` : `回到标记的第 ${page} 页（渲染已缓存，秒回）`}
+      onMouseEnter={() => setHover(true)}
+      onMouseLeave={() => setHover(false)}
+      style={{
+        position: 'relative',
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        minWidth: 26, padding: '5px 8px', borderRadius: '6px',
+        cursor: current ? 'default' : 'pointer',
+        border: '1px solid var(--accent)',
+        background: hover ? 'rgba(107,92,231,0.22)' : 'rgba(107,92,231,0.12)',
+        color: 'var(--accent)', fontSize: '12px', fontWeight: 600,
+        userSelect: 'none', transition: 'background 0.12s',
+      }}
+    >
+      <span>{page}</span>
+      <span
+        onClick={(e) => { e.stopPropagation(); onRemove(); }}
+        title="删除标记"
+        style={{
+          position: 'absolute', top: -6, right: -6,
+          width: 15, height: 15, borderRadius: '50%',
+          background: '#444', color: '#eee',
+          border: '1px solid var(--glass-border)',
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+          fontSize: '10px', cursor: 'pointer', lineHeight: 1,
+          opacity: hover ? 1 : 0, pointerEvents: hover ? 'auto' : 'none',
+          transition: 'opacity 0.12s',
+        }}
+      >
+        ×
+      </span>
+    </div>
+  );
+};
+
 // ---- Navigation bar -----------------------------------------------------------
 
 const NavBar: React.FC<{
@@ -106,11 +153,11 @@ const NavBar: React.FC<{
   const nextPage = usePdfStore((s) => s.nextPage);
   const prevPage = usePdfStore((s) => s.prevPage);
   const setCurrentPage = usePdfStore((s) => s.setCurrentPage);
-  const anchorPage = usePdfStore((s) => s.anchorPage);
-  const setAnchorPage = usePdfStore((s) => s.setAnchorPage);
+  const anchorPages = usePdfStore((s) => s.anchorPages);
+  const addAnchorPage = usePdfStore((s) => s.addAnchorPage);
+  const removeAnchorPage = usePdfStore((s) => s.removeAnchorPage);
   const setSidebarScrollTarget = usePdfStore((s) => s.setSidebarScrollTarget);
   const [pageInput, setPageInput] = useState(String(currentPage));
-  const [anchorHover, setAnchorHover] = useState(false);
 
   useEffect(() => { setPageInput(String(currentPage)); }, [currentPage]);
 
@@ -155,67 +202,44 @@ const NavBar: React.FC<{
         下一页 ›
       </button>
 
+      {anchorPages.map((p) => (
+        <AnchorBadge
+          key={p}
+          page={p}
+          current={p === currentPage}
+          onJump={() => { if (p !== currentPage) { setCurrentPage(p); setSidebarScrollTarget(p); } }}
+          onRemove={() => removeAnchorPage(p)}
+        />
+      ))}
+
+      {(() => {
+        const atCap = anchorPages.length >= MAX_ANCHOR_PAGES;
+        const already = anchorPages.includes(currentPage);
+        return (
+          <button
+            onClick={() => addAnchorPage(currentPage)}
+            disabled={already || atCap}
+            title={already ? '当前页已在标记中' : atCap ? `已达标记上限（${MAX_ANCHOR_PAGES} 个）` : '把当前页添加为标记（回跳目标，保留渲染缓存）'}
+            style={{
+              width: 28, padding: 0, lineHeight: '24px', textAlign: 'center',
+              borderRadius: '6px', cursor: (already || atCap) ? 'default' : 'pointer',
+              fontFamily: 'inherit', fontSize: '16px', fontWeight: 600,
+              border: '1px solid var(--glass-border)',
+              background: 'var(--glass-bg-light)', color: 'var(--text-secondary)',
+              opacity: (already || atCap) ? 0.35 : 1,
+            }}
+          >
+            +
+          </button>
+        );
+      })()}
+
       <span style={{
         marginLeft: 'auto', fontSize: '12px', color: 'var(--text-muted)',
         overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '280px',
       }}>
         {fileName}
       </span>
-
-      {anchorPage != null && (
-        <div
-          onClick={() => { if (anchorPage !== currentPage) { setCurrentPage(anchorPage); setSidebarScrollTarget(anchorPage); } }}
-          title={anchorPage === currentPage ? `当前就在标记的第 ${anchorPage} 页` : `回到标记的第 ${anchorPage} 页（渲染已缓存，秒回）`}
-          onMouseEnter={() => setAnchorHover(true)}
-          onMouseLeave={() => setAnchorHover(false)}
-          style={{
-            position: 'relative',
-            display: 'flex', alignItems: 'center', gap: 5,
-            padding: '5px 10px', borderRadius: '6px',
-            cursor: anchorPage !== currentPage ? 'pointer' : 'default',
-            border: '1px solid var(--accent)',
-            background: anchorHover ? 'rgba(107,92,231,0.22)' : 'rgba(107,92,231,0.12)',
-            color: 'var(--accent)', fontSize: '12px', fontWeight: 600,
-            userSelect: 'none', transition: 'background 0.12s',
-          }}
-        >
-          <svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor" style={{ flexShrink: 0 }} aria-hidden="true">
-            <path d="M12 17v5M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6h1a2 2 0 0 0 0-4H8a2 2 0 0 0 0 4h1z" />
-          </svg>
-          <span>第 {anchorPage} 页</span>
-          <span
-            onClick={(e) => { e.stopPropagation(); setAnchorPage(null); }}
-            title="删除标记"
-            style={{
-              position: 'absolute', top: -6, right: -6,
-              width: 15, height: 15, borderRadius: '50%',
-              background: '#444', color: '#eee',
-              border: '1px solid var(--glass-border)',
-              display: 'flex', alignItems: 'center', justifyContent: 'center',
-              fontSize: '10px', cursor: 'pointer', lineHeight: 1,
-              opacity: anchorHover ? 1 : 0, pointerEvents: anchorHover ? 'auto' : 'none',
-              transition: 'opacity 0.12s',
-            }}
-          >
-            ×
-          </span>
-        </div>
-      )}
-
-      <button
-        onClick={() => setAnchorPage(currentPage)}
-        title="把当前页添加为标记（回跳目标，保留该页渲染缓存）"
-        style={{
-          width: 28, padding: 0, lineHeight: '24px', textAlign: 'center',
-          borderRadius: '6px', cursor: 'pointer', fontFamily: 'inherit',
-          fontSize: '16px', fontWeight: 600,
-          border: '1px solid var(--glass-border)',
-          background: 'var(--glass-bg-light)', color: 'var(--text-secondary)',
-          transition: 'all var(--transition)',
-        }}
-      >
-        +
-      </button>
 
       <button onClick={() => importPdf(null)} style={btnStyle} title="导入其它 PDF">
         导入
