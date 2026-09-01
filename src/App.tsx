@@ -25,6 +25,13 @@ const App: React.FC = () => {
   const [dataDirState, setDataDirState] = useState<'checking' | 'ready' | 'prompt'>('checking');
   const [isMaximized, setIsMaximized] = useState(false);
   const [fontToast, setFontToast] = useState({ show: false, size: 14, fading: false });
+  // Whole-UI zoom (viewport-style scale, keeps layout proportions — unlike the
+  // font-size zoom which widens the sidebar). Default one notch above 1.0.
+  const [uiScale, setUiScale] = useState(() => {
+    const v = parseFloat(localStorage.getItem('sticky-notes-ui-zoom') || '');
+    return Number.isFinite(v) && v >= 0.7 && v <= 1.6 ? v : 1.1;
+  });
+  const [uiZoomToast, setUiZoomToast] = useState(0);
 
   useEffect(() => { loadData(); }, []);
 
@@ -66,6 +73,22 @@ const App: React.FC = () => {
     }
   }, [settings.theme, settings.fontFamily, settings.fontSize, settings.backgroundOpacity]);
 
+  // Apply the whole-UI zoom (Chromium `zoom` = browser-style page scaling).
+  useEffect(() => {
+    document.documentElement.style.zoom = String(uiScale);
+  }, [uiScale]);
+
+  const zoomStep = useCallback((delta: number) => {
+    setUiScale((prev) => {
+      const n = Math.min(1.6, Math.max(0.7, Math.round((prev + delta) * 10) / 10));
+      localStorage.setItem('sticky-notes-ui-zoom', String(n));
+      setUiZoomToast(n);
+      clearTimeout((window as any).__uiZoomTimer);
+      (window as any).__uiZoomTimer = setTimeout(() => setUiZoomToast(0), 1500);
+      return n;
+    });
+  }, []);
+
   // Ctrl+Scroll font zoom (throttled)
   useEffect(() => {
     let lastTime = 0;
@@ -102,10 +125,19 @@ const App: React.FC = () => {
         e.preventDefault();
         setShowDiagnostic(v => !v);
       }
+      // Ctrl+Shift+= / Ctrl+Shift+- → whole-UI zoom (proportional).
+      if (e.ctrlKey && e.shiftKey && (e.key === '=' || e.key === '+')) {
+        e.preventDefault();
+        zoomStep(0.1);
+      }
+      if (e.ctrlKey && e.shiftKey && (e.key === '-' || e.key === '_')) {
+        e.preventDefault();
+        zoomStep(-0.1);
+      }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, []);
+  }, [zoomStep]);
 
 
   useEffect(() => {
@@ -240,6 +272,16 @@ const App: React.FC = () => {
           transition: 'opacity 0.5s ease',
           pointerEvents: 'auto',
         }}>{fontToast.size}px</div>
+      )}
+      {uiZoomToast > 0 && (
+        <div style={{
+          position: 'fixed', bottom: '60px', right: '20px', zIndex: 10001,
+          background: 'var(--glass-bg)', backdropFilter: 'blur(12px)',
+          border: '1px solid var(--glass-border)', borderRadius: '12px',
+          padding: '6px 16px', color: 'var(--text-primary)',
+          fontSize: '16px', fontWeight: 600, fontFamily: 'inherit',
+          boxShadow: 'var(--glass-shadow)',
+        }}>{Math.round(uiZoomToast * 100)}%</div>
       )}
       {showCreateDialog && <CreateNoteDialog onClose={() => setShowCreateDialog(false)} />}
       {showSettings && <SettingsDialog onClose={() => setShowSettings(false)} />}
