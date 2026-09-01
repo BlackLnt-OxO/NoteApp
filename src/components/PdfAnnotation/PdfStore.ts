@@ -77,6 +77,10 @@ export interface PdfStore {
 
   // Thumbnail sidebar
   sidebarOpen: boolean;
+  /** Anchor page for the "back to current page" button; its bg render is cached. */
+  anchorPage: number | null;
+  /** One-shot: scroll the thumbnail rail to this page (set by the anchor button). */
+  sidebarScrollTarget: number | null;
 
   // Actions
   /** Load a PDF from raw bytes (from the library / file picker). */
@@ -96,6 +100,8 @@ export interface PdfStore {
   resetCamera: (cam: PdfCamera) => void;
   setSidebarOpen: (open: boolean) => void;
   toggleSidebar: () => void;
+  setAnchorPage: (page: number | null) => void;
+  setSidebarScrollTarget: (page: number | null) => void;
 
   setActiveTool: (t: PdfTool) => void;
   setBrush: (partial: Partial<PdfBrush>) => void;
@@ -176,6 +182,8 @@ export const usePdfStore = create<PdfStore>((set, get) => ({
   camera: { x: 0, y: 0, zoom: 1 },
 
   sidebarOpen: true,
+  anchorPage: null,
+  sidebarScrollTarget: null,
 
   // --- document ------------------------------------------------------------
 
@@ -201,6 +209,8 @@ export const usePdfStore = create<PdfStore>((set, get) => ({
         showDotGrid: resume?.showDotGrid ?? false,
         sidebarOpen: resume?.sidebarOpen ?? true,
         camera: resume?.camera ?? { x: 0, y: 0, zoom: 1 },
+        anchorPage: lastPage,
+        sidebarScrollTarget: null,
         loading: false,
       });
     } catch (e) {
@@ -225,6 +235,8 @@ export const usePdfStore = create<PdfStore>((set, get) => ({
       renderEpoch: 0,
       selectedIds: [],
       camera: { x: 0, y: 0, zoom: 1 },
+      anchorPage: null,
+      sidebarScrollTarget: null,
       loading: false,
       error: null,
     });
@@ -235,7 +247,10 @@ export const usePdfStore = create<PdfStore>((set, get) => ({
 
   setCurrentPage: (page) => {
     const clamped = Math.max(1, Math.min(get().numPages, page));
-    set((s) => ({ currentPage: clamped, selectedIds: [], camera: { x: 0, y: 0, zoom: 1 } }));
+    // NOTE: the camera is intentionally left untouched here — PdfCanvas resets
+    // it (fit/resume) once the new page's background is ready. Zeroing it now
+    // would let a mid-render frame paint old bg + a default camera → visible flash.
+    set((s) => ({ currentPage: clamped, selectedIds: [] }));
   },
 
   nextPage: () => {
@@ -255,6 +270,10 @@ export const usePdfStore = create<PdfStore>((set, get) => ({
   setSidebarOpen: (open) => set({ sidebarOpen: open }),
 
   toggleSidebar: () => set((s) => ({ sidebarOpen: !s.sidebarOpen })),
+
+  setAnchorPage: (page) => set({ anchorPage: page }),
+
+  setSidebarScrollTarget: (page) => set({ sidebarScrollTarget: page }),
 
   // --- tool / brush --------------------------------------------------------
 
@@ -485,6 +504,8 @@ export const usePdfStore = create<PdfStore>((set, get) => ({
       showDotGrid: false,
       camera: { x: 0, y: 0, zoom: 1 },
       sidebarOpen: true,
+      anchorPage: null,
+      sidebarScrollTarget: null,
       loading: false,
       error: null,
     }),

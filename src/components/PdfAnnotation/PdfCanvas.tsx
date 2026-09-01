@@ -43,6 +43,8 @@ import type { PdfPoint, PdfStroke } from './PdfTypes';
 
 const TILE = 512; // world units per tile
 const SCALE = PDF_BAKE_SCALE;
+/** Max background page canvases kept hot; the anchor page survives eviction. */
+const BG_CACHE_MAX = 3;
 
 function tileKey(tx: number, ty: number): string {
   return `${tx}:${ty}`;
@@ -168,6 +170,7 @@ const PdfCanvas: React.FC = () => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const bgCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const bgCacheRef = useRef<Map<number, HTMLCanvasElement>>(new Map());
   const inkTilesRef = useRef<Map<string, HTMLCanvasElement>>(new Map());
 
   const dprRef = useRef(1);
@@ -341,32 +344,66 @@ const PdfCanvas: React.FC = () => {
     const vw = container?.clientWidth ?? window.innerWidth;
     const vh = container?.clientHeight ?? window.innerHeight;
 
+    const finish = (bg: HTMLCanvasElement) => {
+      const st = usePdfStore.getState();
+      const size = st.pageSizes[pageNum];
+      if (!size) return;
+      // Resume a saved camera if present, otherwise fit the page to the viewport.
+      const cam = st.pendingResumeCamera ?? fitCamera(size.width, size.height, vw, vh);
+      if (st.pendingResumeCamera) usePdfStore.setState({ pendingResumeCamera: null });
+      usePdfStore.getState().resetCamera(cam);
+      // Swap in the ready background atomically — the canvas visible to the
+      // render loop is never the one being written, so the view can't flash a
+      // half-rendered (or just-cleared) page mid-switch.
+      bgCanvasRef.current = bg;
+      rebuildInk();
+      dirtyRef.current = true;
+      scheduleRender();
+      if (prevPageRef.current && prevPageRef.current !== pageNum) {
+        cleanupPage(pdfDoc, prevPageRef.current);
+      }
+      prevPageRef.current = pageNum;
+    };
+
     (async () => {
       const size = await getPageSize(pdfDoc, pageNum);
       if (token !== pageLoadTokenRef.current) return;
       usePdfStore.getState().setPageSize(pageNum, size);
 
-      const bg = bgCanvasRef.current ??= document.createElement('canvas');
-      await renderPageToCanvas(pdfDoc, pageNum, bg, PDF_BAKE_SCALE);
+      // Cache hit (anchor page / recently visited) → instant switch, no wait.
+      const cached = bgCacheRef.current.get(pageNum);
+      if (cached) {
+        finish(cached);
+        return;
+      }
+
+      // Miss → render into a scratch canvas, then atomically swap it in.
+      const scratch = document.createElement('canvas');
+      await renderPageToCanvas(pdfDoc, pageNum, scratch, PDF_BAKE_SCALE);
       if (token !== pageLoadTokenRef.current) return;
 
-      // Resume a saved camera if present, otherwise fit the page to the viewport.
-      const stNow = usePdfStore.getState();
-      const cam = stNow.pendingResumeCamera ?? fitCamera(size.width, size.height, vw, vh);
-      if (stNow.pendingResumeCamera) {
-        usePdfStore.setState({ pendingResumeCamera: null });
+      // Insert into cache (LRU; the anchor page is never evicted).
+      const cache = bgCacheRef.current;
+      cache.set(pageNum, scratch);
+      const anchor = usePdfStore.getState().anchorPage;
+      while (cache.size > BG_CACHE_MAX) {
+        let oldest: number | undefined;
+        for (const k of cache.keys()) {
+          if (k !== anchor) { oldest = k; break; }
+        }
+        if (oldest === undefined) break;
+        cache.delete(oldest);
       }
-      usePdfStore.getState().resetCamera(cam);
-      rebuildInk();
-      dirtyRef.current = true;
-      scheduleRender();
 
-      if (prevPageRef.current && prevPageRef.current !== pageNum) {
-        cleanupPage(pdfDoc, prevPageRef.current);
-      }
-      prevPageRef.current = pageNum;
+      finish(scratch);
     })();
   }, [pdfDoc, currentPage, rebuildInk, scheduleRender]);
+
+  // Drop the background cache when the document closes (in case this component
+  // stays mounted across open/close cycles).
+  useEffect(() => {
+    if (!pdfDoc) bgCacheRef.current.clear();
+  }, [pdfDoc]);
 
   // ---- Space key for pan ------------------------------------------------------
 

@@ -106,6 +106,9 @@ const NavBar: React.FC<{
   const nextPage = usePdfStore((s) => s.nextPage);
   const prevPage = usePdfStore((s) => s.prevPage);
   const setCurrentPage = usePdfStore((s) => s.setCurrentPage);
+  const anchorPage = usePdfStore((s) => s.anchorPage);
+  const setAnchorPage = usePdfStore((s) => s.setAnchorPage);
+  const setSidebarScrollTarget = usePdfStore((s) => s.setSidebarScrollTarget);
   const [pageInput, setPageInput] = useState(String(currentPage));
 
   useEffect(() => { setPageInput(String(currentPage)); }, [currentPage]);
@@ -150,6 +153,41 @@ const NavBar: React.FC<{
       <button onClick={nextPage} disabled={currentPage >= numPages} style={{ ...btnStyle, opacity: currentPage >= numPages ? 0.35 : 1 }}>
         下一页 ›
       </button>
+
+      {(() => {
+        const isAnchored = anchorPage != null && anchorPage === currentPage;
+        const label = anchorPage == null
+          ? '标记当前页'
+          : isAnchored
+            ? `已标记 · 第 ${anchorPage} 页`
+            : `回到第 ${anchorPage} 页`;
+        const title = anchorPage == null
+          ? '把当前页标记为回跳目标（保留该页渲染缓存，回来不用等待）'
+          : isAnchored
+            ? `当前就在标记的第 ${anchorPage} 页`
+            : `回到标记的第 ${anchorPage} 页（渲染已缓存，秒回）`;
+        return (
+          <button
+            onClick={() => {
+              if (anchorPage != null && anchorPage !== currentPage) {
+                setCurrentPage(anchorPage);
+                setSidebarScrollTarget(anchorPage);
+              } else {
+                setAnchorPage(currentPage);
+              }
+            }}
+            title={title}
+            style={{
+              ...btnStyle,
+              borderColor: isAnchored ? 'var(--accent)' : undefined,
+              color: isAnchored ? 'var(--accent)' : 'var(--text-secondary)',
+              fontWeight: isAnchored ? 600 : undefined,
+            }}
+          >
+            {label}
+          </button>
+        );
+      })()}
 
       <span style={{
         marginLeft: 'auto', fontSize: '12px', color: 'var(--text-muted)',

@@ -7,7 +7,8 @@
  *     page count.
  *   - Lazy thumbnails: a page's thumbnail is rendered by pdf.js only when it
  *     enters view; an LRU cache (bounded) evicts the least-recently-used ones.
- *   - Wheel scrolls the rail and selects the page nearest the viewport center.
+ *   - Wheel only scrolls the rail — the current page changes exclusively via
+ *     clicking a thumbnail (or the page input / anchor button).
  *
  * Toggle visibility via the chevron button; the store owns `sidebarOpen`.
  */
@@ -108,7 +109,6 @@ const PdfSidebar: React.FC = () => {
   const scrollRef = useRef<HTMLDivElement>(null);
   const [scrollTop, setScrollTop] = useState(0);
   const [viewportH, setViewportH] = useState(0);
-  const pickTimerRef = useRef<ReturnType<typeof setTimeout>>();
 
   // Thumbnail aspect ratio is unknown until the first render; assume A4-ish
   // (1.414) so layout is stable. We use the first page's size if available.
@@ -127,31 +127,29 @@ const PdfSidebar: React.FC = () => {
   const pages: number[] = [];
   for (let i = firstIndex; i <= lastIndex; i++) pages.push(i + 1);
 
-  // Debounce page selection: after the user pauses scrolling, select the page
-  // nearest the viewport center (avoids loading every page while fast-scrolling).
-  // NOTE: this only changes `currentPage` — the rail itself is NOT auto-scrolled
-  // (selection just highlights the thumbnail in place).
-  const pickCenterPage = useCallback(() => {
-    clearTimeout(pickTimerRef.current);
-    pickTimerRef.current = setTimeout(() => {
-      const el = scrollRef.current;
-      if (!el) return;
-      const center = el.scrollTop + el.clientHeight / 2;
-      const idx = Math.max(0, Math.min(numPages - 1, Math.floor(center / itemH)));
-      const page = idx + 1;
-      if (page !== usePdfStore.getState().currentPage) setCurrentPage(page);
-    }, 120);
-  }, [numPages, itemH, setCurrentPage]);
-
+  // Wheel scroll only scrolls the rail — page changes come exclusively from
+  // clicking a thumbnail (or the page input / anchor button).
   const onScroll = useCallback((e: React.UIEvent<HTMLDivElement>) => {
     setScrollTop(e.currentTarget.scrollTop);
-    pickCenterPage();
-  }, [pickCenterPage]);
+  }, []);
 
   useEffect(() => {
     const el = scrollRef.current;
     if (el) setViewportH(el.clientHeight);
   }, [sidebarOpen]);
+
+  // Scroll the rail to the anchor page when the "back to current page" button
+  // fires (one-shot store signal). Pure scroll — it never changes the page.
+  const sidebarScrollTarget = usePdfStore((s) => s.sidebarScrollTarget);
+  useEffect(() => {
+    if (sidebarScrollTarget == null) return;
+    const el = scrollRef.current;
+    if (el) {
+      const idx = Math.max(0, Math.min(numPages - 1, sidebarScrollTarget - 1));
+      el.scrollTop = Math.max(0, idx * itemH - 10);
+    }
+    usePdfStore.getState().setSidebarScrollTarget(null);
+  }, [sidebarScrollTarget, numPages, itemH]);
 
   if (!pdfDoc) return null;
 
