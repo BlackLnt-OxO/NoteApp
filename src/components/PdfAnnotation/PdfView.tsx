@@ -45,7 +45,7 @@ const ImportScreen: React.FC = () => {
     <div style={{
       position: 'absolute', inset: 0,
       display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
-      gap: 16, background: '#1a1a2e', color: 'var(--text-secondary)',
+      gap: 16, background: 'var(--page-bg)', color: 'var(--text-secondary)',
     }}>
       <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" opacity="0.8">
         <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
@@ -178,7 +178,7 @@ const NavBar: React.FC<{
     <div style={{
       position: 'absolute', top: 0, left: 0, right: 0, height: 44, zIndex: 95,
       display: 'flex', alignItems: 'center', gap: '8px', padding: '0 12px',
-      background: 'rgba(30,30,48,0.92)', borderBottom: '1px solid var(--glass-border)',
+      background: 'var(--chrome-bg)', borderBottom: '1px solid var(--glass-border)',
       backdropFilter: 'blur(10px)', WebkitBackdropFilter: 'blur(10px)',
     }}>
       <button onClick={prevPage} disabled={currentPage <= 1} style={{ ...btnStyle, opacity: currentPage <= 1 ? 0.35 : 1 }}>
@@ -343,7 +343,7 @@ const PdfView: React.FC = () => {
   }, [doSave]);
 
   return (
-    <div style={{ position: 'absolute', inset: 0, overflow: 'hidden', background: '#1a1a2e' }}>
+    <div style={{ position: 'absolute', inset: 0, overflow: 'hidden', background: 'var(--page-bg)' }}>
       {!fileName ? (
         libraryItems.length === 0 ? <ImportScreen /> : <LibraryHome />
       ) : (

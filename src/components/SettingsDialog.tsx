@@ -101,7 +101,13 @@ const SettingsDialog: React.FC<SettingsDialogProps> = ({ onClose }) => {
           <label style={labelStyle(gfs)}>主题模式</label>
           <div style={{ display: 'flex', gap: fs(8, gfs) }}>
             {(['dark', 'light'] as const).map((t) => (
-              <button key={t} onClick={() => handleChange('theme', t)} style={{
+              <button key={t} onClick={() => {
+                // Theme switches apply immediately (and persist) — no "保存设置"
+                // needed; every other setting still waits for the save button.
+                setLocalSettings(prev => ({ ...prev, theme: t }));
+                updateSettings({ theme: t });
+                saveData();
+              }} style={{
                 flex: 1, padding: `${fs(9, gfs)} ${fs(14, gfs)}`, border: '1px solid',
                 borderRadius: 'var(--radius-md)', cursor: 'pointer', fontSize: fs(13, gfs), fontFamily: 'inherit',
                 transition: 'all var(--transition)',

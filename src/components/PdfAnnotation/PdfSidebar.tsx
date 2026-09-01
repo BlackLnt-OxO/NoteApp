@@ -173,7 +173,7 @@ const PdfSidebar: React.FC = () => {
           style={{
             position: 'absolute', top: 12, left: 0, zIndex: 94,
             width: 16, height: 48, border: 0, cursor: 'pointer',
-            background: 'rgba(30,30,48,0.94)', color: 'rgba(255,255,255,0.7)',
+            background: 'var(--chrome-bg)', color: 'var(--text-secondary)',
             borderRadius: '0 6px 6px 0', fontSize: '11px', fontWeight: 700, padding: 0,
             boxShadow: '0 2px 10px rgba(0,0,0,0.3)',
             borderRight: '1px solid rgba(255,255,255,0.08)',
@@ -187,7 +187,7 @@ const PdfSidebar: React.FC = () => {
         <div style={{
           position: 'absolute', top: 0, left: 0, bottom: 0, width: THUMB_W + 28, zIndex: 93,
           display: 'flex', flexDirection: 'column',
-          background: 'rgba(30,30,48,0.95)', borderRight: '1px solid var(--glass-border)',
+          background: 'var(--chrome-bg)', borderRight: '1px solid var(--glass-border)',
           backdropFilter: 'blur(10px)', WebkitBackdropFilter: 'blur(10px)',
         }}>
           <div style={{

@@ -161,7 +161,7 @@ const LibraryHome: React.FC = () => {
   return (
     <div style={{
       position: 'absolute', inset: 0, overflowY: 'auto', padding: '28px 32px',
-      background: '#1a1a2e', color: 'var(--text-primary)',
+      background: 'var(--page-bg)', color: 'var(--text-primary)',
     }}>
       {/* Header */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 20 }}>
