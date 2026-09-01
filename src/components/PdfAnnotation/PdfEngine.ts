@@ -260,3 +260,37 @@ export function fitCamera(pageW: number, pageH: number, vw: number, vh: number, 
   const zoom = clampZoom(Math.min((vw - pad * 2) / pageW, (vh - pad * 2) / pageH));
   return { zoom, x: (vw - pageW * zoom) / 2, y: (vh - pageH * zoom) / 2 };
 }
+
+// ---- Dot grid -----------------------------------------------------------------
+
+const DOT_SCREEN_STEP = 24;
+const DOT_ALPHA = 0.18;
+const DOT_RADIUS = 0.7;
+
+/** Dot-grid overlay, drawn in screen space but anchored to the world (zoom-consistent). */
+export function drawDotGrid(
+  ctx: CanvasRenderingContext2D,
+  cam: PdfCamera,
+  canvasW: number,
+  canvasH: number,
+): void {
+  const worldStep = DOT_SCREEN_STEP / cam.zoom;
+  const tl = screenToWorld(0, 0, cam);
+  const br = screenToWorld(canvasW, canvasH, cam);
+  const sx = Math.floor(tl.x / worldStep) * worldStep;
+  const sy = Math.floor(tl.y / worldStep) * worldStep;
+  const ex = br.x + worldStep;
+  const ey = br.y + worldStep;
+  if (((ex - sx) / worldStep) * ((ey - sy) / worldStep) > 40000) return;
+
+  ctx.fillStyle = `rgba(255,255,255,${DOT_ALPHA.toFixed(3)})`;
+  ctx.beginPath();
+  for (let wx = sx; wx <= ex; wx += worldStep) {
+    for (let wy = sy; wy <= ey; wy += worldStep) {
+      const s = worldToScreen(wx, wy, cam);
+      ctx.moveTo(s.x + DOT_RADIUS, s.y);
+      ctx.arc(s.x, s.y, DOT_RADIUS, 0, Math.PI * 2);
+    }
+  }
+  ctx.fill();
+}

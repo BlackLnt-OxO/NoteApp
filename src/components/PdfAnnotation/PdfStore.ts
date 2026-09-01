@@ -18,6 +18,7 @@ import type {
   PdfCamera,
   PdfEraserMode,
   PdfPageSize,
+  PdfPoint,
   PdfSelectionMode,
   PdfStroke,
   PdfTool,
@@ -61,6 +62,8 @@ export interface PdfStore {
   eraserMode: PdfEraserMode;
   selectionMode: PdfSelectionMode;
   selectedIds: string[];
+  /** Dot-grid overlay behind the annotations (independent of the canvas, default off). */
+  showDotGrid: boolean;
 
   // Camera (per current page)
   camera: PdfCamera;
@@ -83,6 +86,9 @@ export interface PdfStore {
   setSelectedIds: (ids: string[]) => void;
   clearSelection: () => void;
   toggleSelected: (id: string) => void;
+  setShowDotGrid: (show: boolean) => void;
+  /** Batch-replace stroke points (drag-move drop). Structural → rebuilds inkLayer. */
+  commitStrokesPoints: (page: number, entries: { id: string; points: PdfPoint[] }[]) => void;
 
   /** Additive: appends a stroke + records history. Canvas already rasterized it. */
   commitStroke: (page: number, stroke: PdfStroke) => void;
@@ -139,6 +145,7 @@ export const usePdfStore = create<PdfStore>((set, get) => ({
   eraserMode: 'free',
   selectionMode: 'box',
   selectedIds: [],
+  showDotGrid: false,
 
   camera: { x: 0, y: 0, zoom: 1 },
 
@@ -228,6 +235,20 @@ export const usePdfStore = create<PdfStore>((set, get) => ({
         ? s.selectedIds.filter((x) => x !== id)
         : [...s.selectedIds, id],
     })),
+
+  setShowDotGrid: (show) => set({ showDotGrid: show }),
+
+  commitStrokesPoints: (page, entries) => {
+    if (entries.length === 0) return;
+    const map = new Map(entries.map((e) => [e.id, e.points]));
+    const cur = get().strokes[page] ?? [];
+    const next = cur.map((o) => (map.has(o.id) ? { ...o, points: map.get(o.id)! } : o));
+    set((s) => ({
+      strokes: { ...s.strokes, [page]: next },
+      redoStack: { ...s.redoStack, [page]: [] },
+      renderEpoch: get().renderEpoch + 1,
+    }));
+  },
 
   // --- editing -------------------------------------------------------------
 
@@ -368,6 +389,7 @@ export const usePdfStore = create<PdfStore>((set, get) => ({
       eraserMode: 'free',
       selectionMode: 'box',
       selectedIds: [],
+      showDotGrid: false,
       camera: { x: 0, y: 0, zoom: 1 },
       loading: false,
       error: null,

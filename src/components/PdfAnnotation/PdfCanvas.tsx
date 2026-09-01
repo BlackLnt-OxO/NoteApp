@@ -1,15 +1,19 @@
 /**
  * PdfCanvas — the interactive canvas for the PDF annotation view.
  *
- * Rendering model (two-layer raster):
+ * Rendering model (tiled two-layer raster):
  *   backgroundLayer  = pdf.js page render (read-only offscreen canvas)
- *   inkLayer         = rasterized strokes (offscreen canvas; pen source-over,
- *                      eraser destination-out) — rebuilt from vector source of
- *                      truth whenever the store's renderEpoch bumps
- *   main canvas      = drawImage(bg) + drawImage(ink) + live stroke + selection
+ *   inkTiles         = a sparse grid of offscreen canvases (TILE×TILE world
+ *                      units each) holding the rasterized strokes. Pen = source-over,
+ *                      eraser = destination-out (only touches ink, never the page).
+ *                      Tiles are created on demand, so annotations can be written
+ *                      ANYWHERE on the canvas — not just over the PDF page.
+ *   main canvas      = drawImage(bg) + draw visible ink tiles + live stroke + selection
  *
- * Writing is O(1) per frame (2 drawImage + the single live stroke).  Pen-up
- * rasterizes just the new stroke; the eraser rasterizes incrementally live.
+ * Writing/erasing is O(1) per frame.  Pen-up stamps the finished stroke into
+ * tiles; free-erase stamps destination-out into tiles live.  Structural ops
+ * (undo/redo/delete/move/clear) rebuild the tiles from the vector source of
+ * truth when the store's renderEpoch bumps.
  */
 
 import React, { useRef, useEffect, useCallback, useState } from 'react';
@@ -23,6 +27,7 @@ import {
   drawStrokePath,
   drawEraserSegment,
   drawEraserDot,
+  drawDotGrid,
   hitTestStroke,
   getStrokeBounds,
   boundsIntersectRect,
@@ -32,7 +37,94 @@ import {
   fitCamera,
 } from './PdfEngine';
 import { renderPageToCanvas, getPageSize, cleanupPage } from './PdfLoader';
-import type { PdfStroke } from './PdfTypes';
+import type { PdfPoint, PdfStroke } from './PdfTypes';
+
+// ---- Tiling -------------------------------------------------------------------
+
+const TILE = 512; // world units per tile
+const SCALE = PDF_BAKE_SCALE;
+
+function tileKey(tx: number, ty: number): string {
+  return `${tx}:${ty}`;
+}
+
+function getTile(tiles: Map<string, HTMLCanvasElement>, tx: number, ty: number): HTMLCanvasElement {
+  const key = tileKey(tx, ty);
+  let c = tiles.get(key);
+  if (!c) {
+    c = document.createElement('canvas');
+    c.width = Math.round(TILE * SCALE);
+    c.height = Math.round(TILE * SCALE);
+    tiles.set(key, c);
+  }
+  return c;
+}
+
+function tileCtx(tiles: Map<string, HTMLCanvasElement>, tx: number, ty: number): CanvasRenderingContext2D {
+  return getTile(tiles, tx, ty).getContext('2d')!;
+}
+
+/** Draw a stroke into whichever tiles it intersects. */
+function stampStroke(tiles: Map<string, HTMLCanvasElement>, stroke: PdfStroke): void {
+  const b = getStrokeBounds(stroke);
+  const tx0 = Math.floor(b.minX / TILE), tx1 = Math.floor(b.maxX / TILE);
+  const ty0 = Math.floor(b.minY / TILE), ty1 = Math.floor(b.maxY / TILE);
+  for (let ty = ty0; ty <= ty1; ty++) {
+    for (let tx = tx0; tx <= tx1; tx++) {
+      const ctx = tileCtx(tiles, tx, ty);
+      ctx.setTransform(SCALE, 0, 0, SCALE, -tx * TILE * SCALE, -ty * TILE * SCALE);
+      drawStrokePath(ctx, stroke);
+    }
+  }
+}
+
+/** Erase a segment (destination-out) across the tiles it touches. */
+function eraseSegTiles(tiles: Map<string, HTMLCanvasElement>, x1: number, y1: number, x2: number, y2: number, size: number): void {
+  const pad = size / 2 + 2;
+  const tx0 = Math.floor((Math.min(x1, x2) - pad) / TILE), tx1 = Math.floor((Math.max(x1, x2) + pad) / TILE);
+  const ty0 = Math.floor((Math.min(y1, y2) - pad) / TILE), ty1 = Math.floor((Math.max(y1, y2) + pad) / TILE);
+  for (let ty = ty0; ty <= ty1; ty++) {
+    for (let tx = tx0; tx <= tx1; tx++) {
+      const ctx = tileCtx(tiles, tx, ty);
+      ctx.setTransform(SCALE, 0, 0, SCALE, -tx * TILE * SCALE, -ty * TILE * SCALE);
+      drawEraserSegment(ctx, x1, y1, x2, y2, size);
+    }
+  }
+}
+
+/** Erase a single dot (destination-out) across the tiles it touches. */
+function eraseDotTiles(tiles: Map<string, HTMLCanvasElement>, x: number, y: number, size: number): void {
+  const pad = size / 2 + 2;
+  const tx0 = Math.floor((x - pad) / TILE), tx1 = Math.floor((x + pad) / TILE);
+  const ty0 = Math.floor((y - pad) / TILE), ty1 = Math.floor((y + pad) / TILE);
+  for (let ty = ty0; ty <= ty1; ty++) {
+    for (let tx = tx0; tx <= tx1; tx++) {
+      const ctx = tileCtx(tiles, tx, ty);
+      ctx.setTransform(SCALE, 0, 0, SCALE, -tx * TILE * SCALE, -ty * TILE * SCALE);
+      drawEraserDot(ctx, x, y, size);
+    }
+  }
+}
+
+/** Draw all ink tiles that intersect the current viewport (already in world transform). */
+function drawVisibleTiles(
+  ctx: CanvasRenderingContext2D,
+  tiles: Map<string, HTMLCanvasElement>,
+  cam: { x: number; y: number; zoom: number },
+  vw: number,
+  vh: number,
+): void {
+  const tl = screenToWorld(0, 0, cam);
+  const br = screenToWorld(vw, vh, cam);
+  const tx0 = Math.floor(tl.x / TILE), tx1 = Math.floor(br.x / TILE);
+  const ty0 = Math.floor(tl.y / TILE), ty1 = Math.floor(br.y / TILE);
+  for (let ty = ty0; ty <= ty1; ty++) {
+    for (let tx = tx0; tx <= tx1; tx++) {
+      const c = tiles.get(tileKey(tx, ty));
+      if (c) ctx.drawImage(c, tx * TILE, ty * TILE, TILE, TILE);
+    }
+  }
+}
 
 // ---- Selection drawing helpers (world coords) ---------------------------------
 
@@ -76,7 +168,7 @@ const PdfCanvas: React.FC = () => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const bgCanvasRef = useRef<HTMLCanvasElement | null>(null);
-  const inkCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const inkTilesRef = useRef<Map<string, HTMLCanvasElement>>(new Map());
 
   const dprRef = useRef(1);
   const rafRef = useRef(0);
@@ -90,18 +182,26 @@ const PdfCanvas: React.FC = () => {
 
   const selectAnchorRef = useRef<{ x: number; y: number } | null>(null);
   const selectionRectRef = useRef<{ x1: number; y1: number; x2: number; y2: number } | null>(null);
-  const selectDragRef = useRef<{ start: { x: number; y: number } } | null>(null);
+  // Drag-move state: absolute snapshots + live delta (no cumulative drift).
+  const selectDragRef = useRef<{
+    start: { x: number; y: number };
+    ids: string[];
+    snapshots: Map<string, PdfPoint[]>;
+    dx: number;
+    dy: number;
+  } | null>(null);
 
   const pageLoadTokenRef = useRef(0);
   const prevPageRef = useRef(0);
 
-  // React-level subscriptions (drives cursor + page-load/rebuild effects)
+  // React-level subscriptions
   const pdfDoc = usePdfStore((s) => s.pdfDoc);
   const currentPage = usePdfStore((s) => s.currentPage);
   const renderEpoch = usePdfStore((s) => s.renderEpoch);
   const activeTool = usePdfStore((s) => s.activeTool);
   const brush = usePdfStore((s) => s.brush);
   const eraserMode = usePdfStore((s) => s.eraserMode);
+  const showDotGrid = usePdfStore((s) => s.showDotGrid);
   const camera = usePdfStore((s) => s.camera);
   const isDraggingToolbar = useToolbarStore((s) => s.isDragging);
   const [cursorScreen, setCursorScreen] = useState<{ x: number; y: number } | null>(null);
@@ -151,18 +251,39 @@ const PdfCanvas: React.FC = () => {
     ctx.fillStyle = '#1a1a2e';
     ctx.fillRect(0, 0, vw, vh);
 
+    // Dot grid (behind everything, screen-space, zoom-consistent)
+    if (st.showDotGrid) drawDotGrid(ctx, cam, vw, vh);
+
     if (size) {
       ctx.save();
       ctx.translate(cam.x, cam.y);
       ctx.scale(cam.zoom, cam.zoom);
 
       const bg = bgCanvasRef.current;
-      const ink = inkCanvasRef.current;
       if (bg) ctx.drawImage(bg, 0, 0, size.width, size.height);
-      if (ink) ctx.drawImage(ink, 0, 0, size.width, size.height);
+
+      drawVisibleTiles(ctx, inkTilesRef.current, cam, vw, vh);
 
       const strokes = st.strokes[st.currentPage] ?? [];
-      if (st.selectedIds.length > 0) drawSelectionHighlight(ctx, strokes, st.selectedIds);
+
+      // Live drag-move: selected strokes are excluded from tiles and drawn here
+      // at their snapped positions (snapshot + delta), so they track the cursor.
+      if (selectDragRef.current) {
+        const d = selectDragRef.current;
+        const byId = new Map(strokes.map((s) => [s.id, s]));
+        const moved: PdfStroke[] = [];
+        for (const id of d.ids) {
+          const orig = byId.get(id);
+          const snap = d.snapshots.get(id);
+          if (!orig || !snap) continue;
+          moved.push({ ...orig, points: snap.map((p) => ({ ...p, x: p.x + d.dx, y: p.y + d.dy })) });
+        }
+        for (const m of moved) drawStrokePath(ctx, m);
+        if (st.selectedIds.length > 0) drawSelectionHighlight(ctx, moved, st.selectedIds);
+      } else if (st.selectedIds.length > 0) {
+        drawSelectionHighlight(ctx, strokes, st.selectedIds);
+      }
+
       if (selectionRectRef.current) drawSelectionRect(ctx, selectionRectRef.current);
 
       if (isDrawingRef.current && currentStrokeRef.current) {
@@ -182,37 +303,32 @@ const PdfCanvas: React.FC = () => {
     });
   }, [doRender]);
 
-  // ---- Rebuild inkLayer from vector source of truth ---------------------------
+  // ---- Rebuild ink tiles from vector source of truth --------------------------
 
-  const rebuildInk = useCallback(() => {
+  const rebuildInk = useCallback((excludeIds?: Set<string>) => {
     const st = usePdfStore.getState();
-    const size = st.pageSizes[st.currentPage];
-    if (!size) return;
-    // Lazy-create the offscreen ink layer (it holds the rasterized strokes).
-    if (!inkCanvasRef.current) inkCanvasRef.current = document.createElement('canvas');
-    const ink = inkCanvasRef.current;
-    const w = Math.round(size.width * PDF_BAKE_SCALE);
-    const h = Math.round(size.height * PDF_BAKE_SCALE);
-    if (ink.width !== w || ink.height !== h) {
-      ink.width = w;
-      ink.height = h;
-    }
-    const ctx = ink.getContext('2d');
-    if (!ctx) return;
-    ctx.setTransform(1, 0, 0, 1, 0, 0);
-    ctx.clearRect(0, 0, ink.width, ink.height);
-    ctx.setTransform(PDF_BAKE_SCALE, 0, 0, PDF_BAKE_SCALE, 0, 0);
     const strokes = st.strokes[st.currentPage] ?? [];
-    for (const s of strokes) drawStrokePath(ctx, s);
+    const tiles = new Map<string, HTMLCanvasElement>();
+    for (const s of strokes) {
+      if (excludeIds?.has(s.id)) continue;
+      stampStroke(tiles, s);
+    }
+    inkTilesRef.current = tiles;
   }, []);
 
-  // Structural changes (undo/redo/delete/move/clear) → rebuild inkLayer
+  // Structural changes (undo/redo/delete/move/clear) → rebuild tiles
   useEffect(() => {
     if (!pdfDoc) return;
     rebuildInk();
     dirtyRef.current = true;
     scheduleRender();
   }, [renderEpoch, pdfDoc, rebuildInk, scheduleRender]);
+
+  // Dot-grid toggle → repaint
+  useEffect(() => {
+    dirtyRef.current = true;
+    scheduleRender();
+  }, [showDotGrid, scheduleRender]);
 
   // ---- Page load (render background + fit camera + rebuild ink) ---------------
 
@@ -302,12 +418,20 @@ const PdfCanvas: React.FC = () => {
       const hit = [...strokes].reverse().find((o) => hitTestStroke(o, world.x, world.y));
 
       if (hit) {
-        // Press on a stroke → select (or keep the group) and drag-move it
+        // Press on a stroke → select (or keep the group) and begin drag-move.
         const alreadySelected = st.selectedIds.includes(hit.id);
         const ids = alreadySelected ? st.selectedIds : [hit.id];
         if (!alreadySelected) st.setSelectedIds(ids);
+
+        // Snapshot the selected strokes' points (absolute), record history once.
+        const snapshots = new Map<string, PdfPoint[]>();
+        for (const s of strokes) {
+          if (ids.includes(s.id)) snapshots.set(s.id, s.points.map((p) => ({ ...p })));
+        }
         st.pushHistory(st.currentPage);
-        selectDragRef.current = { start: world };
+        selectDragRef.current = { start: world, ids, snapshots, dx: 0, dy: 0 };
+        // Hide the selected strokes from tiles; they're drawn live during drag.
+        rebuildInk(new Set(ids));
         dirtyRef.current = true;
         scheduleRender();
       } else if (st.selectionMode === 'click') {
@@ -346,12 +470,14 @@ const PdfCanvas: React.FC = () => {
     addRawPoint(stroke, world.x, world.y, getPressure(e), e.timeStamp);
     if (isEraser) {
       eraserStrokeRef.current = stroke;
+      // Erase the initial dot immediately for instant feedback.
+      eraseDotTiles(inkTilesRef.current, world.x, world.y, PDF_ERASER_RADIUS);
     } else {
       currentStrokeRef.current = stroke;
     }
     dirtyRef.current = true;
     scheduleRender();
-  }, [getCanvasPos, scheduleRender]);
+  }, [getCanvasPos, scheduleRender, rebuildInk]);
 
   // ---- Pointer Move -----------------------------------------------------------
 
@@ -380,25 +506,23 @@ const PdfCanvas: React.FC = () => {
       return;
     }
 
-    // Drag-move selected strokes (applied to the store; inkLayer rebuilds via epoch)
+    // Drag-move selected strokes: update the live delta (absolute, no drift).
     if (selectDragRef.current) {
+      const d = selectDragRef.current;
       const w = screenToWorld(sx, sy, st.camera);
-      const dx = w.x - selectDragRef.current.start.x;
-      const dy = w.y - selectDragRef.current.start.y;
-      st.moveStrokesLive(st.currentPage, st.selectedIds, dx, dy);
+      d.dx = w.x - d.start.x;
+      d.dy = w.y - d.start.y;
+      dirtyRef.current = true;
+      scheduleRender();
       return;
     }
 
     if (!isDrawingRef.current) return;
 
-    // Free eraser — rasterize incrementally onto inkLayer (destination-out)
+    // Free eraser — erase into tiles incrementally (destination-out)
     if (eraserStrokeRef.current) {
-      const ink = inkCanvasRef.current;
-      const ctx = ink?.getContext('2d');
-      if (!ink || !ctx) return;
-      const rect = canvas.getBoundingClientRect();
       const es = eraserStrokeRef.current;
-      ctx.setTransform(PDF_BAKE_SCALE, 0, 0, PDF_BAKE_SCALE, 0, 0);
+      const rect = canvas.getBoundingClientRect();
       const events: PointerEvent[] = (e.nativeEvent as any).getCoalescedEvents?.() || [e.nativeEvent];
       for (const ce of events) {
         const w = screenToWorld(ce.clientX - rect.left, ce.clientY - rect.top, st.camera);
@@ -407,7 +531,7 @@ const PdfCanvas: React.FC = () => {
         addRawPoint(es, w.x, w.y, 1, ce.timeStamp);
         if (es.points.length >= 2) {
           const a = es.points[es.points.length - 2];
-          drawEraserSegment(ctx, a.x, a.y, w.x, w.y, PDF_ERASER_RADIUS);
+          eraseSegTiles(inkTilesRef.current, a.x, a.y, w.x, w.y, PDF_ERASER_RADIUS);
         }
       }
       dirtyRef.current = true;
@@ -457,25 +581,27 @@ const PdfCanvas: React.FC = () => {
       return;
     }
 
+    // End drag-move: commit final positions (bumps epoch → rebuild tiles).
     if (selectDragRef.current) {
+      const d = selectDragRef.current;
       selectDragRef.current = null;
+      const st = usePdfStore.getState();
+      const entries = d.ids
+        .map((id) => {
+          const snap = d.snapshots.get(id);
+          return snap ? { id, points: snap.map((p) => ({ ...p, x: p.x + d.dx, y: p.y + d.dy })) } : null;
+        })
+        .filter((x): x is { id: string; points: PdfPoint[] } => x !== null);
+      st.commitStrokesPoints(st.currentPage, entries);
       return;
     }
 
     if (!isDrawingRef.current) return;
 
-    // Free eraser — commit (already rasterized incrementally)
+    // Free eraser — commit (already erased into tiles live)
     if (eraserStrokeRef.current) {
       const es = eraserStrokeRef.current;
       eraserStrokeRef.current = null;
-      if (es.points.length === 1) {
-        const ink = inkCanvasRef.current;
-        const ctx = ink?.getContext('2d');
-        if (ink && ctx) {
-          ctx.setTransform(PDF_BAKE_SCALE, 0, 0, PDF_BAKE_SCALE, 0, 0);
-          drawEraserDot(ctx, es.points[0].x, es.points[0].y, PDF_ERASER_RADIUS);
-        }
-      }
       const st = usePdfStore.getState();
       if (es.points.length > 0) st.commitStroke(st.currentPage, es);
       isDrawingRef.current = false;
@@ -484,18 +610,13 @@ const PdfCanvas: React.FC = () => {
       return;
     }
 
-    // Pen — rasterize the finished stroke onto inkLayer, then commit
+    // Pen — stamp the finished stroke into tiles, then commit
     if (currentStrokeRef.current) {
       const stroke = currentStrokeRef.current;
       currentStrokeRef.current = null;
       if (stroke.points.length > 0) {
         const st = usePdfStore.getState();
-        const ink = inkCanvasRef.current;
-        const ctx = ink?.getContext('2d');
-        if (ink && ctx) {
-          ctx.setTransform(PDF_BAKE_SCALE, 0, 0, PDF_BAKE_SCALE, 0, 0);
-          drawStrokePath(ctx, stroke);
-        }
+        stampStroke(inkTilesRef.current, stroke);
         st.commitStroke(st.currentPage, stroke);
       }
       isDrawingRef.current = false;

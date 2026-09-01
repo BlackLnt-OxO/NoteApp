@@ -151,8 +151,8 @@ const trackStyle: React.CSSProperties = { width: '100%', height: '4px', WebkitAp
 
 const PdfToolbar: React.FC = () => {
   const {
-    activeTool, brush, eraserMode, selectionMode, history, redoStack, currentPage,
-    setActiveTool, setBrush, setEraserMode, setSelectionMode, undo, redo, clearPage,
+    activeTool, brush, eraserMode, selectionMode, history, redoStack, currentPage, showDotGrid,
+    setActiveTool, setBrush, setEraserMode, setSelectionMode, setShowDotGrid, undo, redo, clearPage,
   } = usePdfStore();
 
   const canUndo = (history[currentPage]?.length ?? 0) > 0;
@@ -217,6 +217,14 @@ const PdfToolbar: React.FC = () => {
       <div style={sectionStyle}>
         <div style={labelStyle}><span>平滑</span><span>{Math.round(brush.smoothing * 100)}%</span></div>
         <input type="range" min={0} max={100} value={Math.round(brush.smoothing * 100)} onChange={(e) => update({ smoothing: Number(e.target.value) / 100 })} style={trackStyle} />
+      </div>
+
+      {/* ---- Dot grid show/hide ---- */}
+      <div style={sectionStyle}>
+        <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '11px', color: 'var(--text-secondary)', cursor: 'pointer' }}>
+          <input type="checkbox" checked={showDotGrid} onChange={(e) => setShowDotGrid(e.target.checked)} style={{ accentColor: 'var(--accent)' }} />
+          显示点阵背景
+        </label>
       </div>
 
       {/* ---- Undo / Redo ---- */}
