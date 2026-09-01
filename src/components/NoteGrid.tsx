@@ -1,4 +1,4 @@
-import React, { useState, useRef, useCallback, useMemo } from 'react';
+import React, { useState, useRef, useCallback, useMemo, useLayoutEffect } from 'react';
 import { useNoteStore } from '../store';
 import NoteCard from './NoteCard';
 import { fs, fsn } from '../utils';
@@ -9,7 +9,7 @@ const DRAG_THRESHOLD = 5;
 const NoteGrid: React.FC = () => {
   const { notes, activeTag, selectNote, selectedNoteId, settings } = useNoteStore();
   const gfs = settings.fontSize;
-  const [containerW, setContainerW] = useState(1200);
+  const [containerW, setContainerW] = useState(0);
 
   // Cell sizes: proportional to container width (same relative size on any screen)
   const TARGET_COLS = 3;
@@ -35,6 +35,13 @@ const NoteGrid: React.FC = () => {
 
   const [cols, setCols] = useState(3);
   const [sidePad, setSidePad] = useState(PADDING);
+
+  // Measure the real width synchronously before first paint, so cards render at
+  // their final positions immediately — otherwise each mount re-plays the
+  // left/top transition from a stale default width ("fly in" from a corner).
+  useLayoutEffect(() => {
+    if (containerRef.current) setContainerW(containerRef.current.clientWidth);
+  }, []);
 
   React.useEffect(() => {
     const observer = new ResizeObserver((entries) => {
@@ -165,7 +172,7 @@ const NoteGrid: React.FC = () => {
       onClick={handleContainerClick} onPointerLeave={() => { }}
       style={{ position: 'relative', width: '100%', height: '100%', overflow: 'auto', zIndex: 1, touchAction: 'none' }}>
       <div style={{ position: 'relative', minHeight: totalHeight }} data-grid-bg="true">
-        {filteredNotes.map((note, idx) => {
+        {containerW > 0 && filteredNotes.map((note, idx) => {
           const pos = indexToPos(idx);
           const isBeingDragged = dragging?.noteId === note.id;
           const isSelected = selectedNoteId === note.id;
