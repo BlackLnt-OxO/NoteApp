@@ -349,7 +349,12 @@ const PdfCanvas: React.FC = () => {
       await renderPageToCanvas(pdfDoc, pageNum, bg, PDF_BAKE_SCALE);
       if (token !== pageLoadTokenRef.current) return;
 
-      const cam = fitCamera(size.width, size.height, vw, vh);
+      // Resume a saved camera if present, otherwise fit the page to the viewport.
+      const stNow = usePdfStore.getState();
+      const cam = stNow.pendingResumeCamera ?? fitCamera(size.width, size.height, vw, vh);
+      if (stNow.pendingResumeCamera) {
+        usePdfStore.setState({ pendingResumeCamera: null });
+      }
       usePdfStore.getState().resetCamera(cam);
       rebuildInk();
       dirtyRef.current = true;

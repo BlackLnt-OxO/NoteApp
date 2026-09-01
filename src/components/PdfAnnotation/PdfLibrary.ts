@@ -26,6 +26,11 @@ export interface PdfLibraryItem {
   sizeBytes: number;
   lastOpened: number;
   addedAt: number;
+  // Resume state (restored when reopened from the library)
+  lastPage?: number;
+  camera?: { x: number; y: number; zoom: number };
+  showDotGrid?: boolean;
+  sidebarOpen?: boolean;
 }
 
 const STORAGE_KEY = 'stickynotes-pdf-library';
@@ -44,6 +49,8 @@ export interface PdfLibraryStore {
   addCategory: (name: string) => string;
   renameCategory: (id: string, name: string) => void;
   deleteCategory: (id: string) => void;
+  /** Persist resume state (last page / camera / toggles) onto an item. */
+  updateItemResume: (id: string, resume: { lastPage: number; camera: { x: number; y: number; zoom: number }; showDotGrid: boolean; sidebarOpen: boolean }) => void;
 
   saveState: () => void;
   loadState: () => void;
@@ -112,6 +119,11 @@ export const usePdfLibrary = create<PdfLibraryStore>((set, get) => ({
     set((s) => ({
       categories: s.categories.filter((c) => c.id !== id),
       items: s.items.map((i) => (i.categoryId === id ? { ...i, categoryId: null } : i)),
+    })),
+
+  updateItemResume: (id, resume) =>
+    set((s) => ({
+      items: s.items.map((i) => (i.id === id ? { ...i, ...resume } : i)),
     })),
 
   saveState: () => {

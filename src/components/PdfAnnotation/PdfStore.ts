@@ -41,6 +41,10 @@ export interface PdfStore {
   numPages: number;
   currentPage: number;
   pageSizes: Record<number, PdfPageSize>;
+  /** Library item currently open (for writing resume state back). */
+  currentItemId: string | null;
+  /** Non-null when resuming: the canvas uses this camera instead of fit-to-page. */
+  pendingResumeCamera: PdfCamera | null;
   /** Set while a PDF is being parsed / rendered. */
   loading: boolean;
   /** Human-readable import error, shown on the import screen. */
@@ -73,7 +77,13 @@ export interface PdfStore {
 
   // Actions
   /** Load a PDF from raw bytes (from the library / file picker). */
-  loadPdfFromBuffer: (buffer: ArrayBuffer, name: string) => Promise<void>;
+  loadPdfFromBuffer: (buffer: ArrayBuffer, name: string, resume?: {
+    itemId?: string;
+    lastPage?: number;
+    camera?: PdfCamera;
+    showDotGrid?: boolean;
+    sidebarOpen?: boolean;
+  }) => Promise<void>;
   closePdf: () => void;
   setPageSize: (page: number, size: PdfPageSize) => void;
   setCurrentPage: (page: number) => void;
@@ -136,6 +146,8 @@ export const usePdfStore = create<PdfStore>((set, get) => ({
   numPages: 0,
   currentPage: 1,
   pageSizes: {},
+  currentItemId: null,
+  pendingResumeCamera: null,
   loading: false,
   error: null,
 
@@ -158,22 +170,27 @@ export const usePdfStore = create<PdfStore>((set, get) => ({
 
   // --- document ------------------------------------------------------------
 
-  loadPdfFromBuffer: async (buffer: ArrayBuffer, name: string) => {
+  loadPdfFromBuffer: async (buffer: ArrayBuffer, name: string, resume) => {
     try {
       set({ loading: true, error: null });
       const { doc, numPages, firstPage } = await loadPdfDocument(buffer);
+      const lastPage = Math.min(numPages, Math.max(1, resume?.lastPage ?? 1));
       set({
         fileName: name,
         pdfDoc: doc,
         numPages,
-        currentPage: 1,
+        currentPage: lastPage,
         pageSizes: { 1: firstPage },
+        currentItemId: resume?.itemId ?? null,
+        pendingResumeCamera: resume?.camera ?? null,
         strokes: {},
         history: emptyHistoryRecord(),
         redoStack: emptyHistoryRecord(),
         renderEpoch: 0,
         selectedIds: [],
-        camera: { x: 0, y: 0, zoom: 1 },
+        showDotGrid: resume?.showDotGrid ?? false,
+        sidebarOpen: resume?.sidebarOpen ?? true,
+        camera: resume?.camera ?? { x: 0, y: 0, zoom: 1 },
         loading: false,
       });
     } catch (e) {
@@ -189,6 +206,8 @@ export const usePdfStore = create<PdfStore>((set, get) => ({
       numPages: 0,
       currentPage: 1,
       pageSizes: {},
+      currentItemId: null,
+      pendingResumeCamera: null,
       strokes: {},
       history: emptyHistoryRecord(),
       redoStack: emptyHistoryRecord(),
@@ -391,6 +410,8 @@ export const usePdfStore = create<PdfStore>((set, get) => ({
       numPages: 0,
       currentPage: 1,
       pageSizes: {},
+      currentItemId: null,
+      pendingResumeCamera: null,
       strokes: {},
       history: {},
       redoStack: {},

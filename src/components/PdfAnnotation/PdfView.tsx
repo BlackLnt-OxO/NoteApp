@@ -25,13 +25,15 @@ async function importPdf(categoryId: string | null): Promise<void> {
   if (!picked) return;
   await usePdfStore.getState().loadPdfFromBuffer(picked.buffer, picked.name);
   const numPages = usePdfStore.getState().numPages;
-  usePdfLibrary.getState().addItem({
+  const id = usePdfLibrary.getState().addItem({
     name: picked.name,
     path: picked.path,
     categoryId,
     pageCount: numPages,
     sizeBytes: picked.buffer.byteLength,
   });
+  // Link the open doc to its library item so resume state persists.
+  usePdfStore.setState({ currentItemId: id });
 }
 
 // ---- Import screen (first-time) -----------------------------------------------
@@ -167,6 +169,26 @@ const NavBar: React.FC = () => {
 const PdfView: React.FC = () => {
   const fileName = usePdfStore((s) => s.fileName);
   const libraryItems = usePdfLibrary((s) => s.items);
+
+  // ---- Persist resume state to the open library item (debounced) --------------
+  const currentItemId = usePdfStore((s) => s.currentItemId);
+  const currentPage = usePdfStore((s) => s.currentPage);
+  const camera = usePdfStore((s) => s.camera);
+  const showDotGrid = usePdfStore((s) => s.showDotGrid);
+  const sidebarOpen = usePdfStore((s) => s.sidebarOpen);
+
+  useEffect(() => {
+    if (!currentItemId || !fileName) return;
+    const t = setTimeout(() => {
+      usePdfLibrary.getState().updateItemResume(currentItemId, {
+        lastPage: currentPage,
+        camera,
+        showDotGrid,
+        sidebarOpen,
+      });
+    }, 400);
+    return () => clearTimeout(t);
+  }, [currentItemId, fileName, currentPage, camera, showDotGrid, sidebarOpen]);
 
   // Toolbar drag overlay (same behavior as the infinite canvas)
   const isDraggingToolbar = useToolbarStore((s) => s.isDragging);

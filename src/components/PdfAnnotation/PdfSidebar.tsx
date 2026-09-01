@@ -108,7 +108,6 @@ const PdfSidebar: React.FC = () => {
   const scrollRef = useRef<HTMLDivElement>(null);
   const [scrollTop, setScrollTop] = useState(0);
   const [viewportH, setViewportH] = useState(0);
-  const suppressJumpRef = useRef(false);
   const pickTimerRef = useRef<ReturnType<typeof setTimeout>>();
 
   // Thumbnail aspect ratio is unknown until the first render; assume A4-ish
@@ -130,6 +129,8 @@ const PdfSidebar: React.FC = () => {
 
   // Debounce page selection: after the user pauses scrolling, select the page
   // nearest the viewport center (avoids loading every page while fast-scrolling).
+  // NOTE: this only changes `currentPage` — the rail itself is NOT auto-scrolled
+  // (selection just highlights the thumbnail in place).
   const pickCenterPage = useCallback(() => {
     clearTimeout(pickTimerRef.current);
     pickTimerRef.current = setTimeout(() => {
@@ -138,10 +139,7 @@ const PdfSidebar: React.FC = () => {
       const center = el.scrollTop + el.clientHeight / 2;
       const idx = Math.max(0, Math.min(numPages - 1, Math.floor(center / itemH)));
       const page = idx + 1;
-      if (page !== usePdfStore.getState().currentPage) {
-        suppressJumpRef.current = true;
-        setCurrentPage(page);
-      }
+      if (page !== usePdfStore.getState().currentPage) setCurrentPage(page);
     }, 120);
   }, [numPages, itemH, setCurrentPage]);
 
@@ -154,21 +152,6 @@ const PdfSidebar: React.FC = () => {
     const el = scrollRef.current;
     if (el) setViewportH(el.clientHeight);
   }, [sidebarOpen]);
-
-  // Jump the rail so the current page is centered when it changes EXTERNALLY
-  // (nav buttons, keyboard, or clicking a thumbnail) — but not when the rail's
-  // own scroll selected the page.
-  useEffect(() => {
-    const el = scrollRef.current;
-    if (!el) return;
-    if (suppressJumpRef.current) {
-      suppressJumpRef.current = false;
-      return;
-    }
-    const target = (currentPage - 1) * itemH - el.clientHeight / 2 + thumbH / 2;
-    el.scrollTop = Math.max(0, target);
-    setScrollTop(el.scrollTop);
-  }, [currentPage, itemH, thumbH]);
 
   if (!pdfDoc) return null;
 

@@ -103,7 +103,13 @@ const LibraryHome: React.FC = () => {
       if (exists) {
         const res = await api.readPdfFile(item.path);
         if (res?.ok) {
-          await usePdfStore.getState().loadPdfFromBuffer(res.data, item.name);
+          await usePdfStore.getState().loadPdfFromBuffer(res.data, item.name, {
+            itemId: item.id,
+            lastPage: item.lastPage,
+            camera: item.camera,
+            showDotGrid: item.showDotGrid,
+            sidebarOpen: item.sidebarOpen,
+          });
           usePdfLibrary.getState().touchLastOpened(item.id);
           return;
         }
@@ -123,7 +129,13 @@ const LibraryHome: React.FC = () => {
     const picked = await pickPdfFile();
     if (!picked) return;
     usePdfLibrary.getState().updateItemPath(item.id, picked.path);
-    await usePdfStore.getState().loadPdfFromBuffer(picked.buffer, picked.name);
+    await usePdfStore.getState().loadPdfFromBuffer(picked.buffer, picked.name, {
+      itemId: item.id,
+      lastPage: item.lastPage,
+      camera: item.camera,
+      showDotGrid: item.showDotGrid,
+      sidebarOpen: item.sidebarOpen,
+    });
     usePdfLibrary.getState().touchLastOpened(item.id);
   };
 
