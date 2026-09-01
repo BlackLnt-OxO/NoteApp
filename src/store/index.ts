@@ -18,6 +18,8 @@ interface NoteStore {
 
   // View
   viewMode: ViewMode;
+  /** Whether the left sidebar is collapsed. */
+  sidebarCollapsed: boolean;
 
   // Mind map (global)
   mindMap: MindMapState;
@@ -46,6 +48,7 @@ interface NoteStore {
 
   // Actions - View
   setViewMode: (mode: ViewMode) => void;
+  toggleSidebar: () => void;
 
   // Actions - Mind Map
   updateMindMap: (data: Partial<MindMapState>) => void;
@@ -67,6 +70,7 @@ export const useNoteStore = create<NoteStore>((set, get) => ({
   tags: DEFAULT_TAGS,
   settings: DEFAULT_SETTINGS,
   viewMode: 'notes',
+  sidebarCollapsed: false,
   mindMap: {
     offsetX: 0,
     offsetY: 0,
@@ -171,6 +175,8 @@ export const useNoteStore = create<NoteStore>((set, get) => ({
 
   setViewMode: (mode) => set({ viewMode: mode }),
 
+  toggleSidebar: () => set((s) => ({ sidebarCollapsed: !s.sidebarCollapsed })),
+
   updateMindMap: (data) => {
     set((state) => ({ mindMap: { ...state.mindMap, ...data } }));
   },
@@ -183,6 +189,7 @@ export const useNoteStore = create<NoteStore>((set, get) => ({
         tags: state.tags,
         settings: state.settings,
         mindMap: state.mindMap,
+        sidebarCollapsed: state.sidebarCollapsed,
       };
       if (window.electronAPI) {
         await window.electronAPI.saveStore(data);
@@ -220,6 +227,7 @@ export const useNoteStore = create<NoteStore>((set, get) => ({
             offsetX: 0, offsetY: 0, scale: 1,
             backgroundImage: null, showDots: true,
           },
+          sidebarCollapsed: data.sidebarCollapsed ?? false,
         });
       } else {
         // First run - add welcome notes introducing the three sections.

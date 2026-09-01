@@ -16,7 +16,7 @@ import { themeCanvasColors, isDefaultBrushColor } from './themeColors';
 import { fs, fsn } from './utils';
 
 const App: React.FC = () => {
-  const { settings, loadData, saveData, setNoteFloating, viewMode } = useNoteStore();
+  const { settings, loadData, saveData, setNoteFloating, viewMode, sidebarCollapsed, toggleSidebar } = useNoteStore();
   const gfs = settings.fontSize;
   const titleBarH = gfs >= 18 ? fsn(38, gfs) : 38;
   const [showCreateDialog, setShowCreateDialog] = useState(false);
@@ -213,7 +213,23 @@ const App: React.FC = () => {
       </div>
 
       <div style={{ flex: 1, display: 'flex', overflow: 'hidden' }}>
-        <Sidebar onCreateNote={() => setShowCreateDialog(true)} />
+        {!sidebarCollapsed ? (
+          <Sidebar onCreateNote={() => setShowCreateDialog(true)} />
+        ) : (
+          <button
+            onClick={toggleSidebar}
+            title="展开边栏"
+            style={{
+              width: 18, flexShrink: 0, border: 0, cursor: 'pointer',
+              background: 'var(--sidebar-bg, var(--glass-bg))', color: 'var(--text-secondary)',
+              borderRight: '1px solid var(--glass-border)',
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              fontSize: 11, fontWeight: 700, padding: 0, fontFamily: 'inherit',
+            }}
+          >
+            ▷
+          </button>
+        )}
         <div style={{ flex: 1, position: 'relative', overflow: 'hidden', borderRadius: '0 0 12px 0' }}>
           {viewMode === 'inkcanvas' ? (
             <CanvasView />
