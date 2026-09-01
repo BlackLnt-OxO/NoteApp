@@ -53,6 +53,9 @@ export interface PdfStore {
   // Vector source of truth, per page
   strokes: Record<number, PdfStroke[]>;
 
+  /** True when there are unsaved annotation changes (since last save/load). */
+  dirty: boolean;
+
   // Reference-sharing undo stacks, per page
   history: Record<number, PdfStroke[][]>;
   redoStack: Record<number, PdfStroke[][]>;
@@ -118,6 +121,11 @@ export interface PdfStore {
   moveStrokes: (page: number, ids: string[], dx: number, dy: number) => void;
   clearPage: () => void;
 
+  /** Save all annotations to disk (manual, Ctrl+S). */
+  saveAnnotations: () => Promise<{ ok: boolean }>;
+  /** Load saved annotations for an item. */
+  loadAnnotations: (itemId: string) => Promise<void>;
+
   reset: () => void;
 }
 
@@ -152,6 +160,7 @@ export const usePdfStore = create<PdfStore>((set, get) => ({
   error: null,
 
   strokes: {},
+  dirty: false,
   history: {},
   redoStack: {},
 
@@ -184,6 +193,7 @@ export const usePdfStore = create<PdfStore>((set, get) => ({
         currentItemId: resume?.itemId ?? null,
         pendingResumeCamera: resume?.camera ?? null,
         strokes: {},
+        dirty: false,
         history: emptyHistoryRecord(),
         redoStack: emptyHistoryRecord(),
         renderEpoch: 0,
@@ -209,6 +219,7 @@ export const usePdfStore = create<PdfStore>((set, get) => ({
       currentItemId: null,
       pendingResumeCamera: null,
       strokes: {},
+      dirty: false,
       history: emptyHistoryRecord(),
       redoStack: emptyHistoryRecord(),
       renderEpoch: 0,
@@ -277,6 +288,7 @@ export const usePdfStore = create<PdfStore>((set, get) => ({
       strokes: { ...s.strokes, [page]: next },
       redoStack: { ...s.redoStack, [page]: [] },
       renderEpoch: get().renderEpoch + 1,
+      dirty: true,
     }));
   },
 
@@ -288,6 +300,7 @@ export const usePdfStore = create<PdfStore>((set, get) => ({
       strokes: { ...s.strokes, [page]: [...cur, stroke] },
       history: pushHistoryEntry(s.history, page, cur),
       redoStack: { ...s.redoStack, [page]: [] },
+      dirty: true,
     }));
   },
 
@@ -301,6 +314,7 @@ export const usePdfStore = create<PdfStore>((set, get) => ({
       redoStack: { ...s.redoStack, [page]: [] },
       selectedIds: s.selectedIds.filter((x) => x !== id),
       renderEpoch: get().renderEpoch + 1,
+      dirty: true,
     }));
   },
 
@@ -323,6 +337,7 @@ export const usePdfStore = create<PdfStore>((set, get) => ({
     set((s) => ({
       strokes: { ...s.strokes, [page]: next },
       renderEpoch: get().renderEpoch + 1,
+      dirty: true,
     }));
   },
 
@@ -338,6 +353,7 @@ export const usePdfStore = create<PdfStore>((set, get) => ({
       strokes: { ...s.strokes, [page]: prev },
       selectedIds: [],
       renderEpoch: get().renderEpoch + 1,
+      dirty: true,
     }));
   },
 
@@ -353,6 +369,7 @@ export const usePdfStore = create<PdfStore>((set, get) => ({
       strokes: { ...s.strokes, [page]: next },
       selectedIds: [],
       renderEpoch: get().renderEpoch + 1,
+      dirty: true,
     }));
   },
 
@@ -369,6 +386,7 @@ export const usePdfStore = create<PdfStore>((set, get) => ({
       redoStack: { ...s.redoStack, [page]: [] },
       selectedIds: [],
       renderEpoch: get().renderEpoch + 1,
+      dirty: true,
     }));
   },
 
@@ -387,6 +405,7 @@ export const usePdfStore = create<PdfStore>((set, get) => ({
       history: pushHistoryEntry(s.history, page, cur),
       redoStack: { ...s.redoStack, [page]: [] },
       renderEpoch: get().renderEpoch + 1,
+      dirty: true,
     }));
   },
 
@@ -400,7 +419,48 @@ export const usePdfStore = create<PdfStore>((set, get) => ({
       redoStack: { ...s.redoStack, [page]: [] },
       selectedIds: [],
       renderEpoch: get().renderEpoch + 1,
+      dirty: true,
     }));
+  },
+
+  saveAnnotations: async () => {
+    const { currentItemId, strokes } = get();
+    if (!currentItemId) return { ok: false };
+    const data = { strokes, savedAt: Date.now() };
+    try {
+      if (window.electronAPI?.savePdfAnnotation) {
+        await window.electronAPI.savePdfAnnotation(currentItemId, data);
+      } else {
+        localStorage.setItem('pdf-annotation-' + currentItemId, JSON.stringify(data));
+      }
+      set({ dirty: false });
+      return { ok: true };
+    } catch (e) {
+      console.error('Save annotations failed:', e);
+      return { ok: false };
+    }
+  },
+
+  loadAnnotations: async (itemId) => {
+    let data: any = null;
+    try {
+      if (window.electronAPI?.loadPdfAnnotation) {
+        data = await window.electronAPI.loadPdfAnnotation(itemId);
+      } else {
+        const raw = localStorage.getItem('pdf-annotation-' + itemId);
+        if (raw) data = JSON.parse(raw);
+      }
+    } catch (e) {
+      console.error('Load annotations failed:', e);
+      data = null;
+    }
+    if (data?.strokes) {
+      const strokes: Record<number, PdfStroke[]> = {};
+      for (const [k, v] of Object.entries(data.strokes)) {
+        strokes[Number(k)] = v as PdfStroke[];
+      }
+      set({ strokes, dirty: false, renderEpoch: get().renderEpoch + 1 });
+    }
   },
 
   reset: () =>
@@ -413,6 +473,7 @@ export const usePdfStore = create<PdfStore>((set, get) => ({
       currentItemId: null,
       pendingResumeCamera: null,
       strokes: {},
+      dirty: false,
       history: {},
       redoStack: {},
       renderEpoch: 0,

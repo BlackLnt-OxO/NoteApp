@@ -565,6 +565,54 @@ document.addEventListener('keydown',function(e){if(e.key==='Escape')ipcRenderer.
     try { return fs.existsSync(filePath); } catch { return false; }
   });
 
+  // ---- PDF annotation persistence (one folder for all such files) -----------
+
+  function getPdfDataDir() {
+    // Dev: project dir (visible next to the app). Packaged: userData (writable).
+    let base;
+    try {
+      base = app.isPackaged ? app.getPath('userData') : app.getAppPath();
+    } catch {
+      base = app.getPath('userData');
+    }
+    const dir = path.join(base, 'pdf-annotations');
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    return dir;
+  }
+
+  ipcMain.handle('pdf-annotation:save', (event, itemId, data) => {
+    try {
+      const safe = String(itemId).replace(/[^a-zA-Z0-9_-]/g, '_');
+      const filePath = path.join(getPdfDataDir(), `${safe}.json`);
+      fs.writeFileSync(filePath, JSON.stringify(data), 'utf-8');
+      return { ok: true, filePath };
+    } catch (e) {
+      return { ok: false, error: String(e) };
+    }
+  });
+
+  ipcMain.handle('pdf-annotation:load', (event, itemId) => {
+    try {
+      const safe = String(itemId).replace(/[^a-zA-Z0-9_-]/g, '_');
+      const filePath = path.join(getPdfDataDir(), `${safe}.json`);
+      if (!fs.existsSync(filePath)) return null;
+      return JSON.parse(fs.readFileSync(filePath, 'utf-8'));
+    } catch {
+      return null;
+    }
+  });
+
+  ipcMain.handle('pdf-annotation:delete', (event, itemId) => {
+    try {
+      const safe = String(itemId).replace(/[^a-zA-Z0-9_-]/g, '_');
+      const filePath = path.join(getPdfDataDir(), `${safe}.json`);
+      if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
+      return { ok: true };
+    } catch (e) {
+      return { ok: false, error: String(e) };
+    }
+  });
+
   ipcMain.handle('app:getPath', (event, name) => {
     return app.getPath(name);
   });

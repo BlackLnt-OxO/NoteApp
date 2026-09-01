@@ -110,6 +110,7 @@ const LibraryHome: React.FC = () => {
             showDotGrid: item.showDotGrid,
             sidebarOpen: item.sidebarOpen,
           });
+          await usePdfStore.getState().loadAnnotations(item.id);
           usePdfLibrary.getState().touchLastOpened(item.id);
           return;
         }
@@ -136,6 +137,7 @@ const LibraryHome: React.FC = () => {
       showDotGrid: item.showDotGrid,
       sidebarOpen: item.sidebarOpen,
     });
+    await usePdfStore.getState().loadAnnotations(item.id);
     usePdfLibrary.getState().touchLastOpened(item.id);
   };
 
@@ -314,8 +316,9 @@ const LibraryHome: React.FC = () => {
           <MenuItem
             danger
             onClick={() => {
-              if (confirm(`从库中删除「${cardMenu.item.name}」？不会删除磁盘上的文件。`)) {
+              if (confirm(`从库中删除「${cardMenu.item.name}」？批注和磁盘上的 PDF 文件不会被删除。`)) {
                 usePdfLibrary.getState().removeItem(cardMenu.item.id);
+                window.electronAPI?.deletePdfAnnotation(cardMenu.item.id);
               }
               setCardMenu(null);
             }}

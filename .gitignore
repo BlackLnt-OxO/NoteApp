@@ -8,3 +8,6 @@ __pycache__/
 *.pyc
 *.png
 *.jpg
+
+# PDF annotation data (dev: project dir / packaged: userData)
+pdf-annotations/

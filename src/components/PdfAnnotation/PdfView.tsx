@@ -7,7 +7,7 @@
  *   - PDF open                     → NavBar + canvas + dockable toolbar
  */
 
-import React, { useRef, useState, useEffect } from 'react';
+import React, { useRef, useState, useEffect, useCallback } from 'react';
 import { usePdfStore } from './PdfStore';
 import { usePdfLibrary } from './PdfLibrary';
 import { useToolbarStore } from '../InfiniteInkCanvas/useToolbarStore';
@@ -94,14 +94,18 @@ const ImportScreen: React.FC = () => {
 
 // ---- Navigation bar -----------------------------------------------------------
 
-const NavBar: React.FC = () => {
+const NavBar: React.FC<{
+  onSave: () => void;
+  onClose: () => void;
+  savedFlash: boolean;
+  dirty: boolean;
+}> = ({ onSave, onClose, savedFlash, dirty }) => {
   const fileName = usePdfStore((s) => s.fileName);
   const currentPage = usePdfStore((s) => s.currentPage);
   const numPages = usePdfStore((s) => s.numPages);
   const nextPage = usePdfStore((s) => s.nextPage);
   const prevPage = usePdfStore((s) => s.prevPage);
   const setCurrentPage = usePdfStore((s) => s.setCurrentPage);
-  const closePdf = usePdfStore((s) => s.closePdf);
   const [pageInput, setPageInput] = useState(String(currentPage));
 
   useEffect(() => { setPageInput(String(currentPage)); }, [currentPage]);
@@ -157,7 +161,13 @@ const NavBar: React.FC = () => {
       <button onClick={() => importPdf(null)} style={btnStyle} title="导入其它 PDF">
         导入
       </button>
-      <button onClick={() => { if (confirm('关闭当前 PDF？本页批注尚未持久化，关闭后丢失。')) closePdf(); }} style={{ ...btnStyle, color: 'var(--danger, #e74c3c)' }} title="返回 PDF 库">
+      <button onClick={onSave} style={btnStyle} title="保存批注 (Ctrl+S)">
+        保存
+      </button>
+      {savedFlash && (
+        <span style={{ fontSize: '11px', color: '#51cf66', fontWeight: 600 }}>已保存</span>
+      )}
+      <button onClick={onClose} style={{ ...btnStyle, color: dirty ? 'var(--danger, #e74c3c)' : 'var(--text-secondary)' }} title="返回 PDF 库">
         关闭
       </button>
     </div>
@@ -169,6 +179,40 @@ const NavBar: React.FC = () => {
 const PdfView: React.FC = () => {
   const fileName = usePdfStore((s) => s.fileName);
   const libraryItems = usePdfLibrary((s) => s.items);
+  const dirty = usePdfStore((s) => s.dirty);
+
+  // Ensure the library is loaded so resume/annotation state can persist.
+  useEffect(() => { usePdfLibrary.getState().loadState(); }, []);
+
+  // ---- Save / close handlers --------------------------------------------------
+  const [savedFlash, setSavedFlash] = useState(false);
+  const flashTimerRef = useRef<ReturnType<typeof setTimeout>>();
+
+  const doSave = useCallback(async () => {
+    const st = usePdfStore.getState();
+    if (!st.currentItemId) return;
+    const r = await st.saveAnnotations();
+    if (r.ok) {
+      setSavedFlash(true);
+      clearTimeout(flashTimerRef.current);
+      flashTimerRef.current = setTimeout(() => setSavedFlash(false), 1500);
+    }
+  }, []);
+
+  const doClose = useCallback(() => {
+    const st = usePdfStore.getState();
+    // Flush resume state synchronously before closing.
+    if (st.currentItemId) {
+      usePdfLibrary.getState().updateItemResume(st.currentItemId, {
+        lastPage: st.currentPage,
+        camera: st.camera,
+        showDotGrid: st.showDotGrid,
+        sidebarOpen: st.sidebarOpen,
+      });
+    }
+    if (st.dirty && !confirm('有未保存的批注，确定关闭？')) return;
+    st.closePdf();
+  }, []);
 
   // ---- Persist resume state to the open library item (debounced) --------------
   const currentItemId = usePdfStore((s) => s.currentItemId);
@@ -206,13 +250,14 @@ const PdfView: React.FC = () => {
       if (e.ctrlKey && e.key === 'z') { e.preventDefault(); st.undo(); }
       else if (e.ctrlKey && e.key === 'y') { e.preventDefault(); st.redo(); }
       else if (e.ctrlKey && e.key === 'Z') { e.preventDefault(); st.redo(); }
+      else if (e.ctrlKey && e.key === 's') { e.preventDefault(); doSave(); }
       else if ((e.key === 'Delete' || e.key === 'Backspace') && st.selectedIds.length > 0) { e.preventDefault(); st.deleteSelected(); }
       else if (e.key === 'ArrowRight') { e.preventDefault(); st.nextPage(); }
       else if (e.key === 'ArrowLeft') { e.preventDefault(); st.prevPage(); }
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, []);
+  }, [doSave]);
 
   return (
     <div style={{ position: 'absolute', inset: 0, overflow: 'hidden', background: '#1a1a2e' }}>
@@ -220,7 +265,7 @@ const PdfView: React.FC = () => {
         libraryItems.length === 0 ? <ImportScreen /> : <LibraryHome />
       ) : (
         <>
-          <NavBar />
+          <NavBar onSave={doSave} onClose={doClose} savedFlash={savedFlash} dirty={dirty} />
           <div ref={areaRef} style={{ position: 'absolute', top: 44, left: 0, right: 0, bottom: 0, overflow: 'hidden' }}>
             <PdfCanvas />
             <PdfSidebar />

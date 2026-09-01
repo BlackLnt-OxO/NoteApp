@@ -41,6 +41,9 @@ declare global {
       pickPdfFile: () => Promise<{ filePath: string; sizeBytes: number; data: ArrayBuffer; error?: string } | null>;
       readPdfFile: (filePath: string) => Promise<{ ok: boolean; sizeBytes: number; data: ArrayBuffer; error?: string }>;
       pdfFileExists: (filePath: string) => Promise<boolean>;
+      savePdfAnnotation: (itemId: string, data: any) => Promise<{ ok: boolean; filePath?: string; error?: string }>;
+      loadPdfAnnotation: (itemId: string) => Promise<any>;
+      deletePdfAnnotation: (itemId: string) => Promise<{ ok: boolean }>;
       getPath: (name: string) => Promise<string>;
       getDefaultBackground: () => Promise<string | null>;
       saveStore: (data: any) => Promise<boolean>;

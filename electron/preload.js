@@ -78,6 +78,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
   readPdfFile: (filePath) => ipcRenderer.invoke('pdf:readFile', filePath),
   pdfFileExists: (filePath) => ipcRenderer.invoke('pdf:fileExists', filePath),
 
+  // PDF annotation persistence
+  savePdfAnnotation: (itemId, data) => ipcRenderer.invoke('pdf-annotation:save', itemId, data),
+  loadPdfAnnotation: (itemId) => ipcRenderer.invoke('pdf-annotation:load', itemId),
+  deletePdfAnnotation: (itemId) => ipcRenderer.invoke('pdf-annotation:delete', itemId),
+
   // App
   getPath: (name) => ipcRenderer.invoke('app:getPath', name),
   getDefaultBackground: () => ipcRenderer.invoke('app:getDefaultBackground'),
