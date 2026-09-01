@@ -187,8 +187,10 @@ const PdfCanvas: React.FC = () => {
   const rebuildInk = useCallback(() => {
     const st = usePdfStore.getState();
     const size = st.pageSizes[st.currentPage];
+    if (!size) return;
+    // Lazy-create the offscreen ink layer (it holds the rasterized strokes).
+    if (!inkCanvasRef.current) inkCanvasRef.current = document.createElement('canvas');
     const ink = inkCanvasRef.current;
-    if (!size || !ink) return;
     const w = Math.round(size.width * PDF_BAKE_SCALE);
     const h = Math.round(size.height * PDF_BAKE_SCALE);
     if (ink.width !== w || ink.height !== h) {
