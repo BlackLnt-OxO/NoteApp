@@ -397,35 +397,29 @@ const PdfCanvas: React.FC = () => {
     return rect ? { sx: e.clientX - rect.left, sy: e.clientY - rect.top } : { sx: 0, sy: 0 };
   }, []);
 
-  // Sample the composited pixel under the cursor and flip the brush ring's
-  // contrast so it's always visible (light ring on dark bg, dark ring on light).
+  // Brush ring color follows a simple region rule (no pixel sampling): over the
+  // PDF page (light) → dark ring; outside the page (dark UI) → light ring.
   const updateRingColor = useCallback((clientX: number, clientY: number) => {
     const el = ringRef.current;
     const canvas = canvasRef.current;
     if (!el || !canvas) return;
+    const st = usePdfStore.getState();
+    const size = st.pageSizes[st.currentPage];
     const rect = canvas.getBoundingClientRect();
-    const dpr = dprRef.current;
-    const px = Math.round((clientX - rect.left) * dpr);
-    const py = Math.round((clientY - rect.top) * dpr);
-    if (px < 0 || py < 0 || px >= canvas.width || py >= canvas.height) return;
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
-    let data: Uint8ClampedArray;
-    try {
-      data = ctx.getImageData(px, py, 1, 1).data;
-    } catch {
-      return;
-    }
-    const lum = (0.2126 * data[0] + 0.7152 * data[1] + 0.0722 * data[2]) / 255;
-    const isEraser = usePdfStore.getState().activeTool === 'eraser';
-    if (lum < 0.5) {
-      // dark background → light ring (existing style)
-      el.style.borderColor = 'rgba(255,255,255,0.75)';
-      el.style.background = isEraser ? 'rgba(255,255,255,0.12)' : 'rgba(255,255,255,0.06)';
-    } else {
-      // light background → dark gray ring
+    const world = screenToWorld(clientX - rect.left, clientY - rect.top, st.camera);
+    const insidePage =
+      !!size &&
+      world.x >= 0 && world.y >= 0 &&
+      world.x <= size.width && world.y <= size.height;
+    const isEraser = st.activeTool === 'eraser';
+    if (insidePage) {
+      // On the PDF page (light background) → dark ring
       el.style.borderColor = 'rgba(30,30,40,0.85)';
       el.style.background = isEraser ? 'rgba(30,30,40,0.14)' : 'rgba(30,30,40,0.07)';
+    } else {
+      // Outside the page (dark UI) → light ring
+      el.style.borderColor = 'rgba(255,255,255,0.75)';
+      el.style.background = isEraser ? 'rgba(255,255,255,0.12)' : 'rgba(255,255,255,0.06)';
     }
   }, []);
 
