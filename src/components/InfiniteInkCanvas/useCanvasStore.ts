@@ -35,6 +35,8 @@ export interface CanvasStore {
   loaded: boolean;
   /** Canvas whose data is loaded into this store (null = home screen). */
   currentCanvasId: string | null;
+  /** Bumped only by structural ops → canvas rebuilds its ink tiles from source. */
+  renderEpoch: number;
 
   // Actions
   addStroke: (stroke: Stroke) => void;
@@ -58,6 +60,8 @@ export interface CanvasStore {
   redo: () => void;
   clearCanvas: () => void;
   deleteObject: (id: string) => void;
+  /** Batch-replace stroke points (drag-move drop). Structural → rebuilds tiles. */
+  commitStrokesPoints: (entries: { id: string; points: StrokePoint[] }[]) => void;
   saveCanvasData: () => Promise<void>;
   loadCanvasData: (canvasId?: string) => Promise<void>;
   /** Persist the current canvas, then swap in the target canvas's data. */
@@ -87,13 +91,15 @@ export const useCanvasStore = create<CanvasStore>((set, get) => ({
   redoStack: [],
   loaded: false,
   currentCanvasId: null,
+  renderEpoch: 0,
 
   // --- History ---
 
   pushHistory: () => {
     const { objects, history } = get();
-    const snapshot = structuredClone(objects);
-    history.push(snapshot);
+    // Reference sharing (PDF model): objects are treated as immutable, so an
+    // undo snapshot is just the previous array reference — zero memory cost.
+    history.push(objects);
     if (history.length > MAX_HISTORY) history.shift();
     set({ history, redoStack: [] });
   },
@@ -103,7 +109,7 @@ export const useCanvasStore = create<CanvasStore>((set, get) => ({
     if (history.length === 0) return;
     redoStack.push(objects);
     const previous = history.pop()!;
-    set({ objects: previous, history, redoStack });
+    set({ objects: previous, history, redoStack, renderEpoch: get().renderEpoch + 1 });
   },
 
   redo: () => {
@@ -111,14 +117,16 @@ export const useCanvasStore = create<CanvasStore>((set, get) => ({
     if (redoStack.length === 0) return;
     history.push(objects);
     const next = redoStack.pop()!;
-    set({ objects: next, history, redoStack });
+    set({ objects: next, history, redoStack, renderEpoch: get().renderEpoch + 1 });
   },
 
   // --- Objects ---
 
+  // Additive (PDF model): the canvas already rasterized the stroke into tiles,
+  // so this must NOT bump renderEpoch.
   addStroke: (stroke) => {
     get().pushHistory();
-    set((s) => ({ objects: [...s.objects, stroke] }));
+    set((s) => ({ objects: [...s.objects, stroke], redoStack: [] }));
   },
 
   updateStrokePoints: (id, points) => {
@@ -183,12 +191,26 @@ export const useCanvasStore = create<CanvasStore>((set, get) => ({
     set((s) => ({
       objects: s.objects.filter((o) => o.id !== id),
       editingTextId: s.editingTextId === id ? null : s.editingTextId,
+      renderEpoch: get().renderEpoch + 1,
     }));
   },
 
   clearCanvas: () => {
     get().pushHistory();
-    set({ objects: [] });
+    set({ objects: [], renderEpoch: get().renderEpoch + 1 });
+  },
+
+  commitStrokesPoints: (entries) => {
+    if (entries.length === 0) return;
+    const map = new Map(entries.map((e) => [e.id, e.points]));
+    const next = get().objects.map((o) =>
+      o.type === 'stroke' && map.has(o.id) ? { ...o, points: map.get(o.id)! } : o,
+    );
+    set((s) => ({
+      objects: next,
+      redoStack: [],
+      renderEpoch: get().renderEpoch + 1,
+    }));
   },
 
   // --- Simple setters ---
@@ -249,6 +271,7 @@ export const useCanvasStore = create<CanvasStore>((set, get) => ({
         redoStack: [],
         selectedIds: [],
         editingTextId: null,
+        renderEpoch: get().renderEpoch + 1,
       });
     } catch (e) {
       console.error('Failed to load canvas data:', e);

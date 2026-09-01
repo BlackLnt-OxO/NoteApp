@@ -38,7 +38,7 @@ export interface Stroke {
   size: number;
   opacity: number;
   smoothing: number;
-  compositeOperation: GlobalCompositeOperation;
+  compositeOperation: 'source-over' | 'destination-out';
   createdAt: number;
 }
 

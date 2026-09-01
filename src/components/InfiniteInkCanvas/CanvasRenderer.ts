@@ -62,7 +62,7 @@ export function renderAll(params: RenderParams): void {
 
 // ---- Selection rendering -----------------------------------------------------
 
-function drawSelectionHighlight(ctx: CanvasRenderingContext2D, objects: CanvasObject[], selectedIds: string[]): void {
+export function drawSelectionHighlight(ctx: CanvasRenderingContext2D, objects: CanvasObject[], selectedIds: string[]): void {
   ctx.save();
   ctx.strokeStyle = '#6b5ce7';
   ctx.lineWidth = 1.5 / (ctx.getTransform().a || 1);
@@ -76,7 +76,7 @@ function drawSelectionHighlight(ctx: CanvasRenderingContext2D, objects: CanvasOb
   ctx.restore();
 }
 
-function drawSelectionRect(ctx: CanvasRenderingContext2D, r: { x1: number; y1: number; x2: number; y2: number }): void {
+export function drawSelectionRect(ctx: CanvasRenderingContext2D, r: { x1: number; y1: number; x2: number; y2: number }): void {
   ctx.save();
   ctx.strokeStyle = '#6b5ce7';
   ctx.lineWidth = 1 / (ctx.getTransform().a || 1);
@@ -130,7 +130,7 @@ function drawObjects(ctx: CanvasRenderingContext2D, objects: CanvasObject[], edi
 
 // ---- Text on Canvas ----------------------------------------------------------
 
-function drawTextOnCanvas(ctx: CanvasRenderingContext2D, node: TextNodeData): void {
+export function drawTextOnCanvas(ctx: CanvasRenderingContext2D, node: TextNodeData): void {
   if (!node.content) return;
   ctx.save();
   const px = 10, py = 8;

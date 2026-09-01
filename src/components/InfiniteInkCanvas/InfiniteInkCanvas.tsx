@@ -1,8 +1,14 @@
 import React, { useRef, useEffect, useCallback, useState } from 'react';
 import { useCanvasStore } from './useCanvasStore';
-import { renderAll } from './CanvasRenderer';
-import { addRawPoint, getPressure, hitTestStroke, getStrokeBounds, boundsIntersectRect } from './StrokeEngine';
+import { drawTextOnCanvas, drawSelectionHighlight, drawSelectionRect } from './CanvasRenderer';
+import {
+  drawStrokePath, drawDotGrid, getPressure, addRawPoint,
+  hitTestStroke, getStrokeBounds, boundsIntersectRect,
+} from '../PdfAnnotation/PdfEngine';
 import { screenToWorld, clampZoom, zoomAt, ERASER_RADIUS } from './constants';
+import {
+  stampStroke, eraseSegTiles, eraseDotTiles, drawVisibleTiles, rebuildTiles,
+} from './InkTiles';
 import TextNode from './TextNode';
 import Toolbar from './Toolbar';
 import ToolbarShell from './ToolbarShell';
@@ -19,7 +25,8 @@ const InfiniteInkCanvas: React.FC = () => {
   const panAnchorRef = useRef<{ sx: number; sy: number; camX: number; camY: number } | null>(null);
   const selectAnchorRef = useRef<{ x: number; y: number } | null>(null);
   const selectionRectRef = useRef<{ x1: number; y1: number; x2: number; y2: number } | null>(null);
-  const selectDragRef = useRef<{ start: { x: number; y: number }; snapshots: Map<string, StrokePoint[]> } | null>(null);
+  const selectDragRef = useRef<{ start: { x: number; y: number }; ids: string[]; snapshots: Map<string, StrokePoint[]>; dx: number; dy: number } | null>(null);
+  const inkTilesRef = useRef<Map<string, HTMLCanvasElement>>(new Map());
   const [cursorScreen, setCursorScreen] = useState<{ x: number; y: number } | null>(null);
   const rafRef = useRef<number>(0);
   const dprRef = useRef(1);
@@ -40,6 +47,7 @@ const InfiniteInkCanvas: React.FC = () => {
   const tWidth = useToolbarStore((s) => s.width);
   const tSide = useToolbarStore((s) => s.side);
   const theme = useNoteStore((s) => s.settings.theme);
+  const renderEpoch = useCanvasStore((s) => s.renderEpoch);
 
   // ---- Canvas sizing ----------------------------------------------------------
 
@@ -86,19 +94,52 @@ const InfiniteInkCanvas: React.FC = () => {
     const container = containerRef.current;
     if (!container) return;
     const rect = container.getBoundingClientRect();
+    const vw = rect.width, vh = rect.height;
+    const dpr = dprRef.current;
     const colors = themeCanvasColors(useNoteStore.getState().settings.theme);
-    renderAll({
-      ctx, canvasWidth: rect.width, canvasHeight: rect.height,
-      camera: state.camera, objects: state.objects,
-      currentStroke: currentStrokeRef.current,
-      showDotGrid: state.showDotGrid,
-      background: colors.background,
-      dotColor: colors.dotColor,
-      editingTextId: state.editingTextId,
-      selectedIds: state.selectedIds,
-      selectionRect: selectionRectRef.current,
-      dpr: dprRef.current,
-    });
+    const cam = state.camera;
+
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, vw, vh);
+    ctx.fillStyle = colors.background;
+    ctx.fillRect(0, 0, vw, vh);
+
+    if (state.showDotGrid) drawDotGrid(ctx, cam, vw, vh, colors.dotColor);
+
+    ctx.save();
+    ctx.translate(cam.x, cam.y);
+    ctx.scale(cam.zoom, cam.zoom);
+
+    // Rasterized ink tiles (O(1) per frame).
+    drawVisibleTiles(ctx, inkTilesRef.current, cam, vw, vh);
+
+    // Text nodes stay vector — drawn every frame (never rasterized into tiles).
+    for (const obj of state.objects) {
+      if (obj.type === 'text' && obj.id !== state.editingTextId) drawTextOnCanvas(ctx, obj);
+    }
+
+    // Live drag-move of selected strokes (snapshot + delta).
+    if (selectDragRef.current) {
+      const d = selectDragRef.current;
+      const byId = new Map(state.objects.map((o) => [o.id, o]));
+      for (const [id, snap] of d.snapshots) {
+        const orig = byId.get(id);
+        if (!orig || orig.type !== 'stroke') continue;
+        drawStrokePath(ctx, { ...orig, points: snap.map((p) => ({ ...p, x: p.x + d.dx, y: p.y + d.dy })) });
+      }
+    } else if (state.selectedIds.length > 0) {
+      drawSelectionHighlight(ctx, state.objects, state.selectedIds);
+    }
+    if (selectionRectRef.current) drawSelectionRect(ctx, selectionRectRef.current);
+
+    // Live stroke (pen only — free eraser already writes tiles incrementally).
+    if (currentStrokeRef.current
+        && currentStrokeRef.current.compositeOperation !== 'destination-out'
+        && currentStrokeRef.current.points.length > 0) {
+      drawStrokePath(ctx, currentStrokeRef.current);
+    }
+
+    ctx.restore();
     dirtyRef.current = false;
   }, []);
 
@@ -114,6 +155,16 @@ const InfiniteInkCanvas: React.FC = () => {
     dirtyRef.current = true;
     scheduleRender();
   }, [objects, camera, activeTool, brushSettings, showDotGrid, editingTextId, selectedIds, selectionMode, scheduleRender]);
+
+  // Structural ops (undo/redo/delete/move/clear/load) → rebuild ink tiles from
+  // the vector source of truth.
+  useEffect(() => {
+    const state = useCanvasStore.getState();
+    const strokes = state.objects.filter((o): o is Stroke => o.type === 'stroke');
+    inkTilesRef.current = rebuildTiles(strokes);
+    dirtyRef.current = true;
+    scheduleRender();
+  }, [renderEpoch, scheduleRender]);
 
   // Repaint when the theme flips (workbench bg / dot grid / cursor ring).
   useEffect(() => {
@@ -159,7 +210,10 @@ const InfiniteInkCanvas: React.FC = () => {
       if (o.type === 'stroke' && ids.includes(o.id)) snapshots.set(o.id, o.points.map((p) => ({ ...p })));
     }
     state.pushHistory(); // record state before move (for undo)
-    selectDragRef.current = { start: world, snapshots };
+    selectDragRef.current = { start: world, ids, snapshots, dx: 0, dy: 0 };
+    // Remove the selected strokes from the tiles — they're drawn live during drag.
+    const strokes = state.objects.filter((o): o is Stroke => o.type === 'stroke');
+    inkTilesRef.current = rebuildTiles(strokes, new Set(ids));
     dirtyRef.current = true;
     scheduleRender();
   };
@@ -239,6 +293,10 @@ const InfiniteInkCanvas: React.FC = () => {
     };
     addRawPoint(stroke, world.x, world.y, getPressure(e), e.timeStamp);
     currentStrokeRef.current = stroke;
+    if (isEraser) {
+      // Free eraser: erase the initial dot immediately (destination-out into tiles).
+      eraseDotTiles(inkTilesRef.current, world.x, world.y, ERASER_RADIUS);
+    }
 
     dirtyRef.current = true;
     scheduleRender();
@@ -272,17 +330,15 @@ const InfiniteInkCanvas: React.FC = () => {
       return;
     }
 
-    // Move selected strokes
+    // Move selected strokes (snapshot + delta — no per-move store writes).
     if (selectDragRef.current) {
       const d = selectDragRef.current;
       const w = screenToWorld(sx, sy, state.camera);
-      const dx = w.x - d.start.x;
-      const dy = w.y - d.start.y;
-      for (const [id, snap] of d.snapshots) {
-        const moved = snap.map((p) => ({ ...p, x: p.x + dx, y: p.y + dy }));
-        useCanvasStore.getState().updateStrokePoints(id, moved);
-      }
-      return; // store update triggers re-render
+      d.dx = w.x - d.start.x;
+      d.dy = w.y - d.start.y;
+      dirtyRef.current = true;
+      scheduleRender();
+      return;
     }
 
     if (!isDrawingRef.current || !currentStrokeRef.current) return;
@@ -292,11 +348,16 @@ const InfiniteInkCanvas: React.FC = () => {
     const rect = canvasRef.current?.getBoundingClientRect();
     if (!rect) return;
 
+    const isEraser = stroke.compositeOperation === 'destination-out';
     for (const ce of events) {
       const wx = ce.clientX - rect.left;
       const wy = ce.clientY - rect.top;
       const w = screenToWorld(wx, wy, state.camera);
       addRawPoint(stroke, w.x, w.y, getPressure(ce), ce.timeStamp);
+      if (isEraser && stroke.points.length >= 2) {
+        const a = stroke.points[stroke.points.length - 2];
+        eraseSegTiles(inkTilesRef.current, a.x, a.y, w.x, w.y, ERASER_RADIUS);
+      }
     }
 
     dirtyRef.current = true;
@@ -327,15 +388,27 @@ const InfiniteInkCanvas: React.FC = () => {
       return;
     }
 
-    // End select-drag (movement already applied incrementally)
+    // End select-drag: commit final positions (bumps epoch → rebuild tiles).
     if (selectDragRef.current) {
+      const d = selectDragRef.current;
       selectDragRef.current = null;
+      const entries = [...d.snapshots.entries()]
+        .map(([id, snap]) => ({ id, points: snap.map((p) => ({ ...p, x: p.x + d.dx, y: p.y + d.dy })) }));
+      useCanvasStore.getState().commitStrokesPoints(entries);
+      dirtyRef.current = true;
+      scheduleRender();
       return;
     }
 
     if (isDrawingRef.current && currentStrokeRef.current) {
       const stroke = currentStrokeRef.current;
-      if (stroke.points.length > 0) useCanvasStore.getState().addStroke(stroke);
+      if (stroke.points.length > 0) {
+        useCanvasStore.getState().addStroke(stroke);
+        if (stroke.compositeOperation !== 'destination-out') {
+          // Pen: stamp into tiles. Free eraser already erased incrementally.
+          stampStroke(inkTilesRef.current, stroke);
+        }
+      }
       currentStrokeRef.current = null;
       isDrawingRef.current = false;
       dirtyRef.current = true;
