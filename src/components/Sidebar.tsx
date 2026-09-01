@@ -11,6 +11,7 @@ const Sidebar: React.FC<SidebarProps> = ({ onCreateNote }) => {
   const { notes, tags, activeTag, setActiveTag, addTag, deleteTag, updateTag, settings, viewMode, setViewMode } = useNoteStore();
   const fs = settings.fontSize;
   const [editingTag, setEditingTag] = useState<string | null>(null);
+  const [hoverTag, setHoverTag] = useState<string | null>(null);
   const [newTagName, setNewTagName] = useState('');
   const [showAddTag, setShowAddTag] = useState(false);
   const [tagColorIndex, setTagColorIndex] = useState(0);
@@ -142,10 +143,15 @@ const Sidebar: React.FC<SidebarProps> = ({ onCreateNote }) => {
           标签分类
         </div>
 
-        {tags.map((tag) => (
+        {tags.map((tag) => {
+          const isActive = activeTag === tag.id;
+          const isHover = hoverTag === tag.id;
+          return (
           <div
             key={tag.id}
             onClick={() => setActiveTag(tag.id)}
+            onMouseEnter={() => setHoverTag(tag.id)}
+            onMouseLeave={() => setHoverTag(null)}
             onContextMenu={(e) => {
               e.preventDefault();
               if (tag.id !== 'all') {
@@ -164,12 +170,16 @@ const Sidebar: React.FC<SidebarProps> = ({ onCreateNote }) => {
               borderRadius: 'var(--radius-md)',
               cursor: 'pointer',
               transition: 'all var(--transition)',
-              background: activeTag === tag.id
-                ? 'var(--tag-active-bg, var(--glass-bg-hover))'
-                : 'transparent',
-              border: activeTag === tag.id
-                ? '1px solid var(--glass-border-active)'
-                : '1px solid transparent',
+              background: isActive
+                ? 'rgba(107,92,231,0.18)'
+                : isHover
+                  ? 'var(--glass-bg-hover)'
+                  : 'transparent',
+              border: isActive
+                ? '1px solid var(--accent)'
+                : isHover
+                  ? '1px solid var(--glass-border-active)'
+                  : '1px solid transparent',
               position: 'relative',
             }}
           >
@@ -205,10 +215,12 @@ const Sidebar: React.FC<SidebarProps> = ({ onCreateNote }) => {
                 <span style={{
                   flex: 1,
                   fontSize: fs + 'px',
-                  color: activeTag === tag.id
-                    ? 'var(--text-primary)'
-                    : 'var(--text-secondary)',
-                  fontWeight: activeTag === tag.id ? 500 : 400,
+                  color: isActive
+                    ? 'var(--accent)'
+                    : isHover
+                      ? 'var(--text-primary)'
+                      : 'var(--text-secondary)',
+                  fontWeight: isActive ? 600 : 400,
                 }}>
                   {tag.name}
                 </span>
@@ -216,9 +228,12 @@ const Sidebar: React.FC<SidebarProps> = ({ onCreateNote }) => {
                   fontSize: Math.max(9, fs - 4) + 'px',
                   color: 'var(--text-muted)',
                   background: 'var(--glass-bg-light)',
-                  padding: '1px 7px',
+                  padding: '1px 0',
+                  minWidth: '20px',
+                  textAlign: 'center',
                   borderRadius: '8px',
                   fontWeight: 500,
+                  flexShrink: 0,
                 }}>
                   {filteredCounts[tag.id] || 0}
                 </span>
@@ -248,7 +263,8 @@ const Sidebar: React.FC<SidebarProps> = ({ onCreateNote }) => {
               </>
             )}
           </div>
-        ))}
+          );
+        })}
 
         {/* Add tag */}
         {showAddTag ? (
