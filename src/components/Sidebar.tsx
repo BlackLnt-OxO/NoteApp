@@ -8,7 +8,7 @@ interface SidebarProps {
 }
 
 const Sidebar: React.FC<SidebarProps> = ({ onCreateNote }) => {
-  const { notes, tags, activeTag, setActiveTag, addTag, deleteTag, updateTag, settings, viewMode, setViewMode, toggleSidebar } = useNoteStore();
+  const { notes, tags, activeTag, setActiveTag, addTag, deleteTag, updateTag, settings, viewMode, setViewMode } = useNoteStore();
   const fs = settings.fontSize;
   const [editingTag, setEditingTag] = useState<string | null>(null);
   const [hoverTag, setHoverTag] = useState<string | null>(null);
@@ -63,24 +63,6 @@ const Sidebar: React.FC<SidebarProps> = ({ onCreateNote }) => {
       background: 'var(--sidebar-bg, var(--glass-bg))',
       borderRight: '1px solid var(--glass-border)',
     }}>
-      {/* Collapse sidebar button */}
-      <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: '6px' }}>
-        <button
-          onClick={toggleSidebar}
-          title="收起边栏"
-          style={{
-            width: 24, height: 24, border: 'none', borderRadius: '6px',
-            cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center',
-            background: 'var(--glass-bg-light)', color: 'var(--text-muted)',
-            transition: 'all var(--transition)', fontFamily: 'inherit',
-          }}
-        >
-          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M15 18l-6-6 6-6" />
-          </svg>
-        </button>
-      </div>
-
       {/* Create note button */}
       <button
         onClick={onCreateNote}

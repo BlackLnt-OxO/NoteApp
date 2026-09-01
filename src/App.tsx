@@ -213,23 +213,7 @@ const App: React.FC = () => {
       </div>
 
       <div style={{ flex: 1, display: 'flex', overflow: 'hidden' }}>
-        {!sidebarCollapsed ? (
-          <Sidebar onCreateNote={() => setShowCreateDialog(true)} />
-        ) : (
-          <button
-            onClick={toggleSidebar}
-            title="展开边栏"
-            style={{
-              width: 18, flexShrink: 0, border: 0, cursor: 'pointer',
-              background: 'var(--sidebar-bg, var(--glass-bg))', color: 'var(--text-secondary)',
-              borderRight: '1px solid var(--glass-border)',
-              display: 'flex', alignItems: 'center', justifyContent: 'center',
-              fontSize: 11, fontWeight: 700, padding: 0, fontFamily: 'inherit',
-            }}
-          >
-            ▷
-          </button>
-        )}
+        {!sidebarCollapsed && <Sidebar onCreateNote={() => setShowCreateDialog(true)} />}
         <div style={{ flex: 1, position: 'relative', overflow: 'hidden', borderRadius: '0 0 12px 0' }}>
           {viewMode === 'inkcanvas' ? (
             <CanvasView />
@@ -245,6 +229,30 @@ const App: React.FC = () => {
               <NoteGrid />
             </>
           )}
+
+          {/* Sidebar toggle — bottom-left of the content area, stays open-state
+              aware (panel icon points left → collapse, right → expand). */}
+          <button
+            onClick={toggleSidebar}
+            title={sidebarCollapsed ? '展开边栏' : '收起边栏'}
+            style={{
+              position: 'absolute', bottom: '16px', left: '16px',
+              width: '36px', height: '36px', borderRadius: '12px',
+              background: 'var(--glass-bg)', backdropFilter: 'blur(20px)',
+              border: '1px solid var(--glass-border)',
+              color: 'var(--text-secondary)', cursor: 'pointer',
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              zIndex: 120, transition: 'all var(--transition)',
+              boxShadow: 'var(--glass-shadow)',
+            }}
+            onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--glass-bg-hover)'; }}
+            onMouseLeave={(e) => { e.currentTarget.style.background = 'var(--glass-bg)'; }}>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"
+              style={{ transform: sidebarCollapsed ? 'scaleX(-1)' : 'none', transition: 'transform 0.2s' }}>
+              <rect x="3" y="3" width="18" height="18" rx="3" opacity="0.5" />
+              <line x1="9" y1="3" x2="9" y2="21" />
+            </svg>
+          </button>
 
           {/* Global settings entry — bottom-right on all three views. */}
           <button onClick={() => setShowSettings(true)} title="设置" style={{
