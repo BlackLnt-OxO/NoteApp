@@ -81,3 +81,23 @@ export async function cleanupPage(doc: PdfJsDocument, pageNumber: number): Promi
     /* page may already be gone */
   }
 }
+
+/** Render a small thumbnail (fixed target width in CSS px) onto a canvas. */
+export async function renderThumbnail(
+  doc: PdfJsDocument,
+  pageNumber: number,
+  targetWidth: number,
+): Promise<HTMLCanvasElement> {
+  const page = await (doc as any).getPage(pageNumber);
+  const base = page.getViewport({ scale: 1 });
+  const scale = targetWidth / base.width;
+  const vp = page.getViewport({ scale });
+  const canvas = document.createElement('canvas');
+  canvas.width = Math.round(vp.width);
+  canvas.height = Math.round(vp.height);
+  const ctx = canvas.getContext('2d');
+  if (ctx) {
+    await page.render({ canvasContext: ctx, viewport: vp }).promise;
+  }
+  return canvas;
+}

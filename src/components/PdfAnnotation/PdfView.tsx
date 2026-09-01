@@ -13,6 +13,7 @@ import { usePdfLibrary } from './PdfLibrary';
 import { useToolbarStore } from '../InfiniteInkCanvas/useToolbarStore';
 import PdfCanvas from './PdfCanvas';
 import PdfToolbar from './PdfToolbar';
+import PdfSidebar from './PdfSidebar';
 import ToolbarShell from '../InfiniteInkCanvas/ToolbarShell';
 import LibraryHome from './LibraryHome';
 import { pickPdfFile } from './PdfPicker';
@@ -200,6 +201,7 @@ const PdfView: React.FC = () => {
           <NavBar />
           <div ref={areaRef} style={{ position: 'absolute', top: 44, left: 0, right: 0, bottom: 0, overflow: 'hidden' }}>
             <PdfCanvas />
+            <PdfSidebar />
 
             {isDraggingToolbar && (() => {
               const cw = areaRef.current?.clientWidth ?? window.innerWidth;

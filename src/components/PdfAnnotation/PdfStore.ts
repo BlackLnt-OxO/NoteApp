@@ -68,6 +68,9 @@ export interface PdfStore {
   // Camera (per current page)
   camera: PdfCamera;
 
+  // Thumbnail sidebar
+  sidebarOpen: boolean;
+
   // Actions
   /** Load a PDF from raw bytes (from the library / file picker). */
   loadPdfFromBuffer: (buffer: ArrayBuffer, name: string) => Promise<void>;
@@ -78,6 +81,8 @@ export interface PdfStore {
   prevPage: () => void;
   setCamera: (partial: Partial<PdfCamera>) => void;
   resetCamera: (cam: PdfCamera) => void;
+  setSidebarOpen: (open: boolean) => void;
+  toggleSidebar: () => void;
 
   setActiveTool: (t: PdfTool) => void;
   setBrush: (partial: Partial<PdfBrush>) => void;
@@ -149,6 +154,8 @@ export const usePdfStore = create<PdfStore>((set, get) => ({
 
   camera: { x: 0, y: 0, zoom: 1 },
 
+  sidebarOpen: true,
+
   // --- document ------------------------------------------------------------
 
   loadPdfFromBuffer: async (buffer: ArrayBuffer, name: string) => {
@@ -214,6 +221,10 @@ export const usePdfStore = create<PdfStore>((set, get) => ({
   setCamera: (partial) => set((s) => ({ camera: { ...s.camera, ...partial } })),
 
   resetCamera: (cam) => set({ camera: cam }),
+
+  setSidebarOpen: (open) => set({ sidebarOpen: open }),
+
+  toggleSidebar: () => set((s) => ({ sidebarOpen: !s.sidebarOpen })),
 
   // --- tool / brush --------------------------------------------------------
 
@@ -391,6 +402,7 @@ export const usePdfStore = create<PdfStore>((set, get) => ({
       selectedIds: [],
       showDotGrid: false,
       camera: { x: 0, y: 0, zoom: 1 },
+      sidebarOpen: true,
       loading: false,
       error: null,
     }),
