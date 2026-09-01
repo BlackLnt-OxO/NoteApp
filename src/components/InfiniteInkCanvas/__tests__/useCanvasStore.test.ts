@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { useCanvasStore } from '../useCanvasStore';
+import { canvasDataKey } from '../constants';
 import type { Stroke, TextNodeData } from '../types';
 
 // Reset store before each test
@@ -187,26 +188,26 @@ describe('useCanvasStore', () => {
   });
 
   describe('persistence', () => {
-    it('saves to localStorage', async () => {
-      useCanvasStore.setState({ loaded: true });
+    it('saves to the active canvas key', async () => {
+      useCanvasStore.setState({ loaded: true, currentCanvasId: 'c1' });
       useCanvasStore.getState().addStroke(makeStroke('s1'));
       await useCanvasStore.getState().saveCanvasData();
 
-      const raw = localStorage.getItem('stickynotes-inkcanvas');
+      const raw = localStorage.getItem(canvasDataKey('c1'));
       expect(raw).toBeTruthy();
       const parsed = JSON.parse(raw!);
       expect(parsed.objects).toHaveLength(1);
     });
 
-    it('loads from localStorage', async () => {
+    it('loads the given canvas from localStorage', async () => {
       const data = {
         objects: [makeStroke('loaded')],
         camera: { x: 5, y: 10, zoom: 2 },
         showDotGrid: false,
       };
-      localStorage.setItem('stickynotes-inkcanvas', JSON.stringify(data));
+      localStorage.setItem(canvasDataKey('c2'), JSON.stringify(data));
 
-      await useCanvasStore.getState().loadCanvasData();
+      await useCanvasStore.getState().loadCanvasData('c2');
       const state = useCanvasStore.getState();
       expect(state.loaded).toBe(true);
       expect(state.objects).toHaveLength(1);

@@ -6,6 +6,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
   maximize: () => ipcRenderer.invoke('window:maximize'),
   close: () => ipcRenderer.invoke('window:close'),
   isMaximized: () => ipcRenderer.invoke('window:isMaximized'),
+  toggleFullScreen: () => ipcRenderer.invoke('window:toggleFullScreen'),
+  isFullScreen: () => ipcRenderer.invoke('window:isFullScreen'),
+  onFullScreenChanged: (callback) => {
+    ipcRenderer.on('fullscreen-changed', (event, fullscreen) => callback(fullscreen));
+  },
 
   // Float note state
   loadFloatState: (noteId) => ipcRenderer.invoke('float:loadState', noteId),

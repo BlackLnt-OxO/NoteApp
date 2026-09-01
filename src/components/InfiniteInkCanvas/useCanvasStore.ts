@@ -12,7 +12,7 @@ import type {
 import {
   DEFAULT_CAMERA,
   DEFAULT_BRUSH,
-  STORAGE_KEY,
+  canvasDataKey,
   TEXT_DEFAULTS,
   MAX_HISTORY,
 } from './constants';
@@ -33,6 +33,8 @@ export interface CanvasStore {
   history: CanvasObject[][];
   redoStack: CanvasObject[][];
   loaded: boolean;
+  /** Canvas whose data is loaded into this store (null = home screen). */
+  currentCanvasId: string | null;
 
   // Actions
   addStroke: (stroke: Stroke) => void;
@@ -57,7 +59,9 @@ export interface CanvasStore {
   clearCanvas: () => void;
   deleteObject: (id: string) => void;
   saveCanvasData: () => Promise<void>;
-  loadCanvasData: () => Promise<void>;
+  loadCanvasData: (canvasId?: string) => Promise<void>;
+  /** Persist the current canvas, then swap in the target canvas's data. */
+  switchCanvas: (canvasId: string) => Promise<void>;
 }
 
 // ---- Helpers -----------------------------------------------------------------
@@ -82,6 +86,7 @@ export const useCanvasStore = create<CanvasStore>((set, get) => ({
   history: [],
   redoStack: [],
   loaded: false,
+  currentCanvasId: null,
 
   // --- History ---
 
@@ -219,41 +224,42 @@ export const useCanvasStore = create<CanvasStore>((set, get) => ({
 
   saveCanvasData: async () => {
     try {
-      const { objects, camera, showDotGrid } = get();
-      const data = { objects, camera, showDotGrid };
-      if (window.electronAPI?.saveCanvasData) {
-        await window.electronAPI.saveCanvasData(data);
-      } else {
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
-      }
+      const { objects, camera, showDotGrid, currentCanvasId } = get();
+      if (!currentCanvasId) return;
+      localStorage.setItem(canvasDataKey(currentCanvasId), JSON.stringify({ objects, camera, showDotGrid }));
     } catch (e) {
       console.error('Failed to save canvas data:', e);
     }
   },
 
-  loadCanvasData: async () => {
+  loadCanvasData: async (canvasId?: string) => {
     try {
+      const id = canvasId ?? get().currentCanvasId;
+      if (!id) { set({ loaded: true }); return; }
       let data = null;
-      if (window.electronAPI?.loadCanvasData) {
-        data = await window.electronAPI.loadCanvasData();
-      } else {
-        const raw = localStorage.getItem(STORAGE_KEY);
-        if (raw) data = JSON.parse(raw);
-      }
-      if (data) {
-        set({
-          loaded: true,
-          objects: data.objects || [],
-          camera: { ...DEFAULT_CAMERA, ...data.camera },
-          showDotGrid: data.showDotGrid ?? true,
-        });
-      } else {
-        set({ loaded: true });
-      }
+      const raw = localStorage.getItem(canvasDataKey(id));
+      if (raw) data = JSON.parse(raw);
+      set({
+        loaded: true,
+        currentCanvasId: id,
+        objects: data?.objects || [],
+        camera: { ...DEFAULT_CAMERA, ...data?.camera },
+        showDotGrid: data?.showDotGrid ?? true,
+        history: [],
+        redoStack: [],
+        selectedIds: [],
+        editingTextId: null,
+      });
     } catch (e) {
       console.error('Failed to load canvas data:', e);
       set({ loaded: true });
     }
+  },
+
+  switchCanvas: async (canvasId: string) => {
+    // Flush the current canvas immediately (don't wait for the 1s debounce).
+    await get().saveCanvasData();
+    await get().loadCanvasData(canvasId);
   },
 }));
 
@@ -264,7 +270,7 @@ useCanvasStore.subscribe(() => {
   clearTimeout(saveTimeout);
   saveTimeout = setTimeout(() => {
     const state = useCanvasStore.getState();
-    if (state.loaded) {
+    if (state.loaded && state.currentCanvasId) {
       state.saveCanvasData();
     }
   }, 1000);

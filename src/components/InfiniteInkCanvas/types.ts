@@ -70,3 +70,12 @@ export interface PersistedCanvasData {
   camera: Camera;
   dotDensity: number;
 }
+
+// ---- Multi-canvas library ----------------------------------------------------
+
+export interface CanvasMeta {
+  id: string;
+  name: string;
+  createdAt: number;
+  updatedAt: number;
+}

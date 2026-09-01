@@ -14,7 +14,10 @@ export const DEFAULT_BRUSH: BrushSettings = {
 export const MIN_ZOOM = 0.1;
 export const MAX_ZOOM = 8;
 
-export const STORAGE_KEY = 'stickynotes-inkcanvas';
+export const STORAGE_KEY = 'stickynotes-inkcanvas'; // legacy single-canvas key (migrated)
+
+export const CANVAS_LIST_KEY = 'stickynotes-inkcanvas-list';
+export const canvasDataKey = (id: string): string => `stickynotes-inkcanvas-${id}`;
 
 export const ERASER_RADIUS = 20; // world units
 

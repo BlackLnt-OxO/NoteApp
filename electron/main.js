@@ -72,6 +72,14 @@ function createMainWindow() {
   mainWindow.on('maximize', () => saveWindowBounds('main', { ...mainWindow.getBounds(), isMaximized: true }));
   mainWindow.on('unmaximize', saveBounds);
 
+  // Forward fullscreen state to the renderer (button + ESC handling).
+  mainWindow.on('enter-full-screen', () => {
+    if (!mainWindow.isDestroyed()) mainWindow.webContents.send('fullscreen-changed', true);
+  });
+  mainWindow.on('leave-full-screen', () => {
+    if (!mainWindow.isDestroyed()) mainWindow.webContents.send('fullscreen-changed', false);
+  });
+
   if (isDev) {
     mainWindow.loadURL('http://localhost:5173');
     mainWindow.webContents.openDevTools({ mode: 'detach' });
@@ -269,6 +277,15 @@ function setupIPC() {
   });
   ipcMain.handle('window:isMaximized', (event) => {
     return BrowserWindow.fromWebContents(event.sender)?.isMaximized() || false;
+  });
+  ipcMain.handle('window:toggleFullScreen', (event) => {
+    const win = BrowserWindow.fromWebContents(event.sender);
+    if (!win) return false;
+    win.setFullScreen(!win.isFullScreen());
+    return win.isFullScreen();
+  });
+  ipcMain.handle('window:isFullScreen', (event) => {
+    return BrowserWindow.fromWebContents(event.sender)?.isFullScreen() || false;
   });
 
   // Floating note state (separate from main note)

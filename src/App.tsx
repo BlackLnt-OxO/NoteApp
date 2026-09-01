@@ -6,7 +6,7 @@ import CreateNoteDialog from './components/CreateNoteDialog';
 import SettingsDialog from './components/SettingsDialog';
 import ScreenshotTool from './components/ScreenshotTool';
 import DiagnosticPanel from './components/DiagnosticPanel';
-import InfiniteInkCanvas from './components/InfiniteInkCanvas/InfiniteInkCanvas';
+import CanvasView from './components/InfiniteInkCanvas/CanvasView';
 import { useCanvasStore } from './components/InfiniteInkCanvas/useCanvasStore';
 import PdfView from './components/PdfAnnotation/PdfView';
 import { usePdfStore } from './components/PdfAnnotation/PdfStore';
@@ -161,7 +161,7 @@ const App: React.FC = () => {
         <Sidebar onCreateNote={() => setShowCreateDialog(true)} />
         <div style={{ flex: 1, position: 'relative', overflow: 'hidden', borderRadius: '0 0 12px 0' }}>
           {viewMode === 'inkcanvas' ? (
-            <InfiniteInkCanvas />
+            <CanvasView />
           ) : viewMode === 'pdf' ? (
             <PdfView />
           ) : (

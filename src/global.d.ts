@@ -7,6 +7,9 @@ declare global {
       maximize: () => Promise<boolean>;
       close: () => Promise<void>;
       isMaximized: () => Promise<boolean>;
+      toggleFullScreen: () => Promise<boolean>;
+      isFullScreen: () => Promise<boolean>;
+      onFullScreenChanged: (callback: (fullscreen: boolean) => void) => void;
       createFloatingNote: (noteData: any) => Promise<string>;
       closeFloatingNote: (noteId: string) => Promise<boolean>;
       updateFloatingNote: (noteId: string, noteData: any) => Promise<boolean>;

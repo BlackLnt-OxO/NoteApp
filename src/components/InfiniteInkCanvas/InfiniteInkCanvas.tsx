@@ -67,6 +67,14 @@ const InfiniteInkCanvas: React.FC = () => {
 
   useEffect(() => { useCanvasStore.getState().loadCanvasData(); }, []);
 
+  // Flush the current canvas when the editor unmounts (leaving the view).
+  useEffect(() => {
+    return () => {
+      const st = useCanvasStore.getState();
+      if (st.loaded && st.currentCanvasId) st.saveCanvasData();
+    };
+  }, []);
+
   // ---- Render loop ------------------------------------------------------------
 
   const doRender = useCallback(() => {
