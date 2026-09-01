@@ -226,7 +226,7 @@ export const useNoteStore = create<NoteStore>((set, get) => ({
         const welcomeNotes = [
           {
             id: 'welcome_1',
-            content: '便笺 — 日常记录\n\n双击编辑内容，右键更换颜色，\n可插入图片，拖拽排序。',
+            content: '便笺 — 日常记录\n\n双击编辑内容，右键更换颜色，\n可插入图片，拖拽排序。\n\n快捷键\nCtrl+Shift+X 截图 · Ctrl+P 磁贴穿透\nCtrl+Shift+W 关闭全部磁贴',
             color: DEFAULT_SETTINGS.defaultNoteColor,
             tag: 'general',
             images: [],

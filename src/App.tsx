@@ -66,6 +66,19 @@ const App: React.FC = () => {
     }
   }, [settings.theme, settings.fontFamily, settings.fontSize, settings.backgroundOpacity]);
 
+  // UI font zoom: +1 / -1 steps, with the same toast as Ctrl+Scroll.
+  const applyFontSize = useCallback((delta: number) => {
+    const store = useNoteStore.getState();
+    const newSize = Math.max(11, Math.min(28, store.settings.fontSize + delta));
+    store.updateSettings({ fontSize: newSize });
+    setFontToast({ show: true, size: newSize, fading: false });
+    clearTimeout((window as any).__fontToastTimer);
+    (window as any).__fontToastTimer = setTimeout(() => {
+      setFontToast(prev => ({ ...prev, fading: true }));
+      setTimeout(() => setFontToast(prev2 => prev2.fading ? { show: false, size: prev2.size, fading: false } : prev2), 600);
+    }, 2500);
+  }, []);
+
   // Ctrl+Scroll font zoom (throttled)
   useEffect(() => {
     let lastTime = 0;
@@ -75,21 +88,12 @@ const App: React.FC = () => {
         const now = Date.now();
         if (now - lastTime < 60) return;
         lastTime = now;
-        const store = useNoteStore.getState();
-        const delta = e.deltaY > 0 ? -1 : 1;
-        const newSize = Math.max(11, Math.min(28, store.settings.fontSize + delta));
-        store.updateSettings({ fontSize: newSize });
-        setFontToast({ show: true, size: newSize, fading: false });
-        clearTimeout((window as any).__fontToastTimer);
-        (window as any).__fontToastTimer = setTimeout(() => {
-          setFontToast(prev => ({ ...prev, fading: true }));
-          setTimeout(() => setFontToast(prev2 => prev2.fading ? { show: false, size: prev2.size, fading: false } : prev2), 600);
-        }, 2500);
+        applyFontSize(e.deltaY > 0 ? -1 : 1);
       }
     };
     window.addEventListener('wheel', onWheel, { passive: false });
     return () => window.removeEventListener('wheel', onWheel);
-  }, []);
+  }, [applyFontSize]);
 
   // Ctrl+Shift+X screenshot shortcut (renderer fallback)
   useEffect(() => {
@@ -102,10 +106,19 @@ const App: React.FC = () => {
         e.preventDefault();
         setShowDiagnostic(v => !v);
       }
+      // Ctrl+Shift+= / Ctrl+Shift+- → UI font zoom (same as Ctrl+Scroll).
+      if (e.ctrlKey && e.shiftKey && (e.key === '=' || e.key === '+')) {
+        e.preventDefault();
+        applyFontSize(1);
+      }
+      if (e.ctrlKey && e.shiftKey && (e.key === '-' || e.key === '_')) {
+        e.preventDefault();
+        applyFontSize(-1);
+      }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, []);
+  }, [applyFontSize]);
 
 
   useEffect(() => {
