@@ -151,6 +151,17 @@ const PdfSidebar: React.FC = () => {
     usePdfStore.getState().setSidebarScrollTarget(null);
   }, [sidebarScrollTarget, numPages, itemH]);
 
+  // On document open (incl. resume), position the rail at the current page
+  // instead of starting from page 1. One-shot per open — later page changes are
+  // driven by clicks / the anchor button, not by this effect.
+  useEffect(() => {
+    if (!pdfDoc) return;
+    const el = scrollRef.current;
+    if (!el) return;
+    const idx = Math.max(0, Math.min(numPages - 1, usePdfStore.getState().currentPage - 1));
+    el.scrollTop = Math.max(0, idx * itemH - 10);
+  }, [pdfDoc, itemH, numPages]);
+
   if (!pdfDoc) return null;
 
   return (

@@ -110,6 +110,7 @@ const NavBar: React.FC<{
   const setAnchorPage = usePdfStore((s) => s.setAnchorPage);
   const setSidebarScrollTarget = usePdfStore((s) => s.setSidebarScrollTarget);
   const [pageInput, setPageInput] = useState(String(currentPage));
+  const [anchorHover, setAnchorHover] = useState(false);
 
   useEffect(() => { setPageInput(String(currentPage)); }, [currentPage]);
 
@@ -154,40 +155,57 @@ const NavBar: React.FC<{
         下一页 ›
       </button>
 
-      {(() => {
-        const isAnchored = anchorPage != null && anchorPage === currentPage;
-        const label = anchorPage == null
-          ? '标记当前页'
-          : isAnchored
-            ? `已标记 · 第 ${anchorPage} 页`
-            : `回到第 ${anchorPage} 页`;
-        const title = anchorPage == null
-          ? '把当前页标记为回跳目标（保留该页渲染缓存，回来不用等待）'
-          : isAnchored
-            ? `当前就在标记的第 ${anchorPage} 页`
-            : `回到标记的第 ${anchorPage} 页（渲染已缓存，秒回）`;
-        return (
-          <button
-            onClick={() => {
-              if (anchorPage != null && anchorPage !== currentPage) {
-                setCurrentPage(anchorPage);
-                setSidebarScrollTarget(anchorPage);
-              } else {
-                setAnchorPage(currentPage);
-              }
-            }}
-            title={title}
+      <button
+        onClick={() => setAnchorPage(currentPage)}
+        title="把当前页添加为标记（回跳目标，保留该页渲染缓存）"
+        style={{
+          width: 28, padding: 0, lineHeight: '24px', textAlign: 'center',
+          borderRadius: '6px', cursor: 'pointer', fontFamily: 'inherit',
+          fontSize: '16px', fontWeight: 600,
+          border: '1px solid var(--glass-border)',
+          background: 'var(--glass-bg-light)', color: 'var(--text-secondary)',
+          transition: 'all var(--transition)',
+        }}
+      >
+        +
+      </button>
+
+      {anchorPage != null && (
+        <div
+          onClick={() => { if (anchorPage !== currentPage) { setCurrentPage(anchorPage); setSidebarScrollTarget(anchorPage); } }}
+          title={anchorPage === currentPage ? `当前就在标记的第 ${anchorPage} 页` : `回到标记的第 ${anchorPage} 页（渲染已缓存，秒回）`}
+          onMouseEnter={() => setAnchorHover(true)}
+          onMouseLeave={() => setAnchorHover(false)}
+          style={{
+            position: 'relative',
+            display: 'flex', alignItems: 'center', gap: 5,
+            padding: '5px 10px', borderRadius: '6px',
+            cursor: anchorPage !== currentPage ? 'pointer' : 'default',
+            border: '1px solid var(--accent)',
+            background: anchorHover ? 'rgba(107,92,231,0.22)' : 'rgba(107,92,231,0.12)',
+            color: 'var(--accent)', fontSize: '12px', fontWeight: 600,
+            userSelect: 'none', transition: 'background 0.12s',
+          }}
+        >
+          <span>📌 第 {anchorPage} 页</span>
+          <span
+            onClick={(e) => { e.stopPropagation(); setAnchorPage(null); }}
+            title="删除标记"
             style={{
-              ...btnStyle,
-              borderColor: isAnchored ? 'var(--accent)' : undefined,
-              color: isAnchored ? 'var(--accent)' : 'var(--text-secondary)',
-              fontWeight: isAnchored ? 600 : undefined,
+              position: 'absolute', top: -6, right: -6,
+              width: 15, height: 15, borderRadius: '50%',
+              background: '#444', color: '#eee',
+              border: '1px solid var(--glass-border)',
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              fontSize: '10px', cursor: 'pointer', lineHeight: 1,
+              opacity: anchorHover ? 1 : 0, pointerEvents: anchorHover ? 'auto' : 'none',
+              transition: 'opacity 0.12s',
             }}
           >
-            {label}
-          </button>
-        );
-      })()}
+            ×
+          </span>
+        </div>
+      )}
 
       <span style={{
         marginLeft: 'auto', fontSize: '12px', color: 'var(--text-muted)',
