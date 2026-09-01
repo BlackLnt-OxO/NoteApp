@@ -1,6 +1,7 @@
 const { app, BrowserWindow, ipcMain, screen, desktopCapturer, globalShortcut, nativeImage, clipboard } = require('electron');
 const path = require('path');
 const fs = require('fs');
+const { spawn } = require('child_process');
 const floatingManager = require('./floatingManager');
 const diagnostic = require('./diagnostic');
 
@@ -40,8 +41,14 @@ function saveDataDirConfig(cfg) {
 let relaunching = false;
 function relaunch() {
   relaunching = true;
-  app.relaunch();
-  app.quit();
+  // app.relaunch() is unreliable under portable builds (the app exits without
+  // relaunching), so spawn a fresh instance explicitly, then quit this one.
+  try {
+    spawn(process.execPath, process.argv.slice(1), { detached: true, stdio: 'ignore' }).unref();
+  } catch (e) {
+    console.error('Failed to relaunch app:', e);
+  }
+  app.exit(0);
 }
 
 // Apply a configured data directory before ready — every getPath('userData')
