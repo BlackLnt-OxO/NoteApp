@@ -34,6 +34,7 @@
   --ring-on-dark: rgba(255, 255, 255, 0.45);   /* solid/dark buttons → light ring */
   --ring-on-light: rgba(255, 255, 255, 0.45);  /* light/glass buttons → light ring on a dark app */
   --glow-soft: 0 4px 14px rgba(0, 0, 0, 0.28); /* drop shadow for glass hover */
+  --glow-on-color: 0 0 12px rgba(255, 255, 255, 0.18); /* halo for solid/color buttons (dark app) */
   --btn-scale: 1.03;
 }
 
@@ -55,9 +56,12 @@
   --chrome-bg: rgba(238, 235, 230, 0.92);
   --page-bg: #e7e4df;
   --app-overlay: 231,228,223;
-  /* On a light app background, glass buttons read better with a dark ring. */
+  /* On a light app background, glass and solid/color buttons read better with a
+     dark ring, so the hover halo stays visible on (and against) light surfaces. */
   --ring-on-light: rgba(0, 0, 0, 0.28);
+  --ring-on-dark: rgba(0, 0, 0, 0.32);
   --glow-soft: 0 4px 14px rgba(0, 0, 0, 0.22);
+  --glow-on-color: 0 0 12px rgba(0, 0, 0, 0.18);
 }
 
 /* Light-theme adjustments for widgets that were tuned for a dark app. */
@@ -152,7 +156,7 @@ body {
 }
 .btn-accent:hover:not(:disabled) {
   border-color: rgba(255, 255, 255, 0.35);
-  box-shadow: 0 0 0 1px var(--ring-on-dark), 0 0 12px rgba(255, 255, 255, 0.18) !important;
+  box-shadow: 0 0 0 1px var(--ring-on-dark), var(--glow-on-color) !important;
   transform: scale(var(--btn-scale));
 }
 .btn-accent:active { transform: scale(0.97); }
@@ -165,7 +169,7 @@ body {
 }
 .btn-danger:hover:not(:disabled) {
   border-color: rgba(255, 255, 255, 0.35);
-  box-shadow: 0 0 0 1px var(--ring-on-dark), 0 0 12px rgba(255, 255, 255, 0.18) !important;
+  box-shadow: 0 0 0 1px var(--ring-on-dark), var(--glow-on-color) !important;
   transform: scale(var(--btn-scale));
 }
 .btn-danger:active { transform: scale(0.97); }
@@ -186,7 +190,7 @@ body {
   transition: all var(--transition);
 }
 .hover-ring-dark:hover:not(:disabled) {
-  box-shadow: 0 0 0 1px var(--ring-on-dark), 0 0 12px rgba(255, 255, 255, 0.18) !important;
+  box-shadow: 0 0 0 1px var(--ring-on-dark), var(--glow-on-color) !important;
   transform: scale(var(--btn-scale));
 }
 .hover-ring-dark:active { transform: scale(0.97); }
