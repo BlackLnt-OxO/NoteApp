@@ -339,73 +339,72 @@ const Sidebar: React.FC<SidebarProps> = ({ onCreateNote }) => {
         )}
       </div>
 
-      {/* Screenshot button */}
-      <button
-        onClick={() => {
-          window.electronAPI?.startScreenshot();
-        }}
-        style={{
-          width: '100%',
-          padding: '9px',
-          background: 'var(--glass-bg-light)',
-          border: '1px solid var(--glass-border)',
-          borderRadius: 'var(--radius-md)',
-          color: 'var(--text-secondary)',
-          fontSize: Math.max(10, fs - 2) + 'px',
-          cursor: 'pointer',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          gap: '5px',
-          transition: 'all var(--transition)',
-          fontFamily: 'inherit',
-          marginTop: '8px',
-        }}
-        onMouseEnter={(e) => {
-          e.currentTarget.style.background = 'var(--glass-bg-hover)';
-          e.currentTarget.style.color = 'var(--text-primary)';
-        }}
-        onMouseLeave={(e) => {
-          e.currentTarget.style.background = 'var(--glass-bg-light)';
-          e.currentTarget.style.color = 'var(--text-secondary)';
-        }}
-      >
-        截图
-      </button>
+      {/* Screenshot buttons — pinned to the bottom of the sidebar */}
+      <div style={{ marginTop: 'auto', display: 'flex', flexDirection: 'column', gap: '5px' }}>
+        <button
+          onClick={() => {
+            window.electronAPI?.startScreenshot();
+          }}
+          style={{
+            width: '100%',
+            padding: '9px',
+            background: 'var(--glass-bg-light)',
+            border: '1px solid var(--glass-border)',
+            borderRadius: 'var(--radius-md)',
+            color: 'var(--text-secondary)',
+            fontSize: Math.max(10, fs - 2) + 'px',
+            cursor: 'pointer',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            gap: '5px',
+            transition: 'all var(--transition)',
+            fontFamily: 'inherit',
+          }}
+          onMouseEnter={(e) => {
+            e.currentTarget.style.background = 'var(--glass-bg-hover)';
+            e.currentTarget.style.color = 'var(--text-primary)';
+          }}
+          onMouseLeave={(e) => {
+            e.currentTarget.style.background = 'var(--glass-bg-light)';
+            e.currentTarget.style.color = 'var(--text-secondary)';
+          }}
+        >
+          截图
+        </button>
 
-      {/* Long screenshot button */}
-      <button
-        onClick={() => {
-          window.electronAPI?.startLongScreenshot();
-        }}
-        style={{
-          width: '100%',
-          padding: '9px',
-          background: 'var(--glass-bg-light)',
-          border: '1px solid var(--glass-border)',
-          borderRadius: 'var(--radius-md)',
-          color: 'var(--text-secondary)',
-          fontSize: Math.max(10, fs - 2) + 'px',
-          cursor: 'pointer',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          gap: '5px',
-          transition: 'all var(--transition)',
-          fontFamily: 'inherit',
-          marginTop: '5px',
-        }}
-        onMouseEnter={(e) => {
-          e.currentTarget.style.background = 'var(--glass-bg-hover)';
-          e.currentTarget.style.color = 'var(--text-primary)';
-        }}
-        onMouseLeave={(e) => {
-          e.currentTarget.style.background = 'var(--glass-bg-light)';
-          e.currentTarget.style.color = 'var(--text-secondary)';
-        }}
-      >
-        长截图
-      </button>
+        <button
+          onClick={() => {
+            window.electronAPI?.startLongScreenshot();
+          }}
+          style={{
+            width: '100%',
+            padding: '9px',
+            background: 'var(--glass-bg-light)',
+            border: '1px solid var(--glass-border)',
+            borderRadius: 'var(--radius-md)',
+            color: 'var(--text-secondary)',
+            fontSize: Math.max(10, fs - 2) + 'px',
+            cursor: 'pointer',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            gap: '5px',
+            transition: 'all var(--transition)',
+            fontFamily: 'inherit',
+          }}
+          onMouseEnter={(e) => {
+            e.currentTarget.style.background = 'var(--glass-bg-hover)';
+            e.currentTarget.style.color = 'var(--text-primary)';
+          }}
+          onMouseLeave={(e) => {
+            e.currentTarget.style.background = 'var(--glass-bg-light)';
+            e.currentTarget.style.color = 'var(--text-secondary)';
+          }}
+        >
+          长截图
+        </button>
+      </div>
     </div>
   );
 };

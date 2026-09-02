@@ -20,6 +20,8 @@
   /* PDF chrome (nav bar / thumbnail rail) and page-level backgrounds */
   --chrome-bg: rgba(30, 30, 48, 0.92);
   --page-bg: #1a1a2e;
+  /* Tinted overlay clipped over the background image; flips with the theme. */
+  --app-overlay: 26,26,46;
   --radius-sm: 8px;
   --radius-md: 12px;
   --radius-lg: 16px;
@@ -45,6 +47,7 @@
   --dropdown-bg: rgba(240, 237, 232, 0.98);
   --chrome-bg: rgba(238, 235, 230, 0.92);
   --page-bg: #e7e4df;
+  --app-overlay: 231,228,223;
 }
 
 /* Light-theme adjustments for widgets that were tuned for a dark app. */

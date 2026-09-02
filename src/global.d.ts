@@ -28,7 +28,7 @@ declare global {
       startLongScreenshot: () => Promise<boolean>;
       cancelScreenshot: () => Promise<boolean>;
       showToast: (msg: string) => Promise<boolean>;
-      onScreenshotCompleted: (callback: (result: any) => void) => void;
+      onScreenshotCompleted: (callback: (result: any) => void) => () => void;
       diagSetConfig: (config: DiagConfig) => Promise<DiagConfig>;
       diagGetConfig: () => Promise<DiagConfig>;
       diagGetStats: () => Promise<any>;

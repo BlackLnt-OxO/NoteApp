@@ -191,10 +191,10 @@ const App: React.FC = () => {
       transformOrigin: 'top left',
       display: 'flex', flexDirection: 'column',
       backgroundImage: settings.backgroundImage
-        ? `linear-gradient(rgba(26,26,46,${(1 - settings.backgroundOpacity).toFixed(2)}), rgba(26,26,46,${(1 - settings.backgroundOpacity).toFixed(2)})), url(${settings.backgroundImage})`
+        ? `linear-gradient(rgba(var(--app-overlay),${(1 - settings.backgroundOpacity).toFixed(2)}), rgba(var(--app-overlay),${(1 - settings.backgroundOpacity).toFixed(2)})), url(${settings.backgroundImage})`
         : 'none',
       backgroundSize: 'cover', backgroundPosition: 'center',
-      backgroundColor: '#1a1a2e',
+      backgroundColor: 'var(--page-bg)',
       borderRadius: '12px', overflow: 'hidden',
     }}>
 

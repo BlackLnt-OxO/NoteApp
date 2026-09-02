@@ -16,13 +16,11 @@ const ScreenshotTool: React.FC = () => {
   const tags = useNoteStore(s => s.tags);
   const [isStitching, setIsStitching] = useState(false);
   const stitchingCanvasRef = useRef<HTMLCanvasElement>(null);
-  const registered = useRef(false);
 
   useEffect(() => {
-    if (!window.electronAPI || registered.current) return;
-    registered.current = true;
+    if (!window.electronAPI) return;
 
-    window.electronAPI.onScreenshotCompleted(async (result: ScreenshotResult) => {
+    const unsubscribe = window.electronAPI.onScreenshotCompleted(async (result: ScreenshotResult) => {
       if (!result) return;
 
       let finalDataUrl: string | null = null;
@@ -102,6 +100,8 @@ const ScreenshotTool: React.FC = () => {
         window.electronAPI?.showToast('截图已保存');
       }
     });
+
+    return () => { unsubscribe?.(); };
   }, []);
 
   return (

@@ -51,7 +51,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   showToast: (msg) => ipcRenderer.invoke('show-toast', msg),
   cancelScreenshot: () => ipcRenderer.invoke('screenshot:cancel'),
   onScreenshotCompleted: (callback) => {
-    ipcRenderer.on('screenshot:completed', (event, result) => callback(result));
+    const listener = (event, result) => callback(result);
+    ipcRenderer.on('screenshot:completed', listener);
+    return () => ipcRenderer.removeListener('screenshot:completed', listener);
   },
 
   // Diagnostic
