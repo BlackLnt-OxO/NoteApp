@@ -87,6 +87,37 @@ const CanvasHome: React.FC<{ onOpen: (id: string) => void; onNew: () => void }> 
     setNewCatName('');
   };
 
+  // No canvases at all → a first-time guide (mirrors the PDF ImportScreen):
+  // icon + heading + blurb + button, and NO category bar until there's a canvas.
+  if (canvases.length === 0) {
+    return (
+      <div style={{
+        position: 'absolute', inset: 0,
+        display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
+        gap: 16, background: 'var(--page-bg)', color: 'var(--text-secondary)',
+      }}>
+        <div style={{ color: 'var(--accent)' }}>
+          <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" opacity="0.8">
+            <rect x="3" y="3" width="18" height="18" rx="2" opacity="0.5" />
+            <path d="M7 16c1.5-4 3-6 4.5-6s2.5 2.5 4.5 2.5c2 0 3.5-1 5.5-1.5" />
+          </svg>
+        </div>
+        <div style={{ fontSize: fs(15, gfs), fontWeight: 600, color: 'var(--text-primary)' }}>
+          创建画布进行书写
+        </div>
+        <div style={{ fontSize: fs(11, gfs), color: 'var(--text-muted)', textAlign: 'center', lineHeight: '1.7' }}>
+          无限画布 · 自由书写 · 支持文本与图片<br />新建后出现在左侧画布库中
+        </div>
+        <button onClick={onNew} className="btn-accent" style={{
+          marginTop: 8, padding: '10px 22px', borderRadius: '8px',
+          color: '#fff', fontSize: fs(13, gfs), fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit',
+        }}>
+          新建画布
+        </button>
+      </div>
+    );
+  }
+
   return (
     <div style={{
       position: 'absolute', inset: 0, overflowY: 'auto', padding: '28px 32px',
