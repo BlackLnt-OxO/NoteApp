@@ -405,7 +405,11 @@ const InfiniteInkCanvas: React.FC = () => {
   const handlePointerUp = useCallback((e: React.PointerEvent<HTMLCanvasElement>) => {
     const canvas = canvasRef.current;
     if (!canvas) return;
-    canvas.releasePointerCapture(e.pointerId);
+    // The pointer may not actually be captured (e.g. a one-shot click that never
+    // called setPointerCapture), or capture may already have been lost. Releasing
+    // unconditionally throws here, which used to abort the cleanup below and leave
+    // isDrawing/pan/select state stuck — the cause of unclickable toolbar/sidebar.
+    try { canvas.releasePointerCapture(e.pointerId); } catch { /* already released */ }
 
     if (panAnchorRef.current) { panAnchorRef.current = null; return; }
 
@@ -538,7 +542,7 @@ const InfiniteInkCanvas: React.FC = () => {
       ))}
       <canvas ref={canvasRef} style={{ position: 'absolute', inset: 0, touchAction: 'none', userSelect: 'none', cursor: cursorStyle }}
         onPointerDown={handlePointerDown} onPointerMove={handlePointerMove} onPointerUp={handlePointerUp}
-        onPointerCancel={handlePointerUp} onLostPointerCapture={handlePointerUp} onWheel={handleWheel} />
+        onPointerCancel={handlePointerUp} onWheel={handleWheel} />
 
       {showCursor && cursorScreen && (
         <div style={{ position: 'absolute', left: cursorScreen.x, top: cursorScreen.y, width: cs, height: cs,

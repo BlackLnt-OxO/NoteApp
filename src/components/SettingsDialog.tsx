@@ -143,7 +143,7 @@ const SettingsDialog: React.FC<SettingsDialogProps> = ({ onClose }) => {
                 setLocalSettings(prev => ({ ...prev, theme: t }));
                 updateSettings({ theme: t });
                 saveData();
-              }} style={{
+              }} className={localSettings.theme === t ? 'hover-ring-dark' : 'hover-ring-light'} style={{
                 flex: 1, padding: `${fs(9, gfs)} ${fs(14, gfs)}`, border: '1px solid',
                 borderRadius: 'var(--radius-md)', cursor: 'pointer', fontSize: fs(13, gfs), fontFamily: 'inherit',
                 transition: 'all var(--transition)',
@@ -172,7 +172,7 @@ const SettingsDialog: React.FC<SettingsDialogProps> = ({ onClose }) => {
         <div style={sectionStyle} ref={fontDropdownRef}>
           <label style={labelStyle(gfs)}>字体</label>
           <div style={{ position: 'relative' }}>
-            <button onClick={() => setFontOpen(!fontOpen)} style={{
+            <button onClick={() => setFontOpen(!fontOpen)} className="hover-ring-light" style={{
               width: '100%', padding: `${fs(10, gfs)} ${fs(14, gfs)}`,
               background: 'var(--glass-bg-light)', backdropFilter: 'blur(10px)',
               border: '1px solid var(--glass-border)', borderRadius: 'var(--radius-md)',
@@ -190,7 +190,7 @@ const SettingsDialog: React.FC<SettingsDialogProps> = ({ onClose }) => {
                 boxShadow: '0 12px 40px rgba(0,0,0,0.35)', overflow: 'hidden', animation: 'scaleIn 0.15s ease-out',
               }}>
                 {FONT_LIST.map((f) => (
-                  <button key={f.family} onClick={() => { handleChange('fontFamily', f.family); setFontOpen(false); }} style={{
+                  <button key={f.family} onClick={() => { handleChange('fontFamily', f.family); setFontOpen(false); }} className="hover-ring-light" style={{
                     width: '100%', padding: `${fs(9, gfs)} ${fs(14, gfs)}`,
                     background: localSettings.fontFamily === f.family ? 'var(--glass-bg-hover)' : 'transparent',
                     border: 'none', color: localSettings.fontFamily === f.family ? 'var(--text-primary)' : 'var(--text-secondary)',
