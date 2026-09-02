@@ -132,7 +132,7 @@ body {
    light/glass → dark glow; solid/dark → light glow. Disabled buttons never glow. */
 .glass-btn:hover:not(:disabled) {
   border-color: var(--glass-border-active);
-  box-shadow: 0 0 0 1px var(--ring-on-light), 0 4px 14px rgba(0, 0, 0, 0.22);
+  box-shadow: 0 0 0 1px var(--ring-on-light), 0 4px 14px rgba(0, 0, 0, 0.22) !important;
   transform: scale(var(--btn-scale));
 }
 
@@ -146,7 +146,7 @@ body {
 }
 .btn-accent:hover:not(:disabled) {
   border-color: rgba(255, 255, 255, 0.35);
-  box-shadow: 0 0 0 1px var(--ring-on-dark), 0 0 12px rgba(255, 255, 255, 0.18);
+  box-shadow: 0 0 0 1px var(--ring-on-dark), 0 0 12px rgba(255, 255, 255, 0.18) !important;
   transform: scale(var(--btn-scale));
 }
 .btn-accent:active { transform: scale(0.97); }
@@ -159,7 +159,7 @@ body {
 }
 .btn-danger:hover:not(:disabled) {
   border-color: rgba(255, 255, 255, 0.35);
-  box-shadow: 0 0 0 1px var(--ring-on-dark), 0 0 12px rgba(255, 255, 255, 0.18);
+  box-shadow: 0 0 0 1px var(--ring-on-dark), 0 0 12px rgba(255, 255, 255, 0.18) !important;
   transform: scale(var(--btn-scale));
 }
 .btn-danger:active { transform: scale(0.97); }
@@ -171,7 +171,7 @@ body {
   transition: all var(--transition);
 }
 .hover-ring-light:hover:not(:disabled) {
-  box-shadow: 0 0 0 1px var(--ring-on-light), 0 4px 14px rgba(0, 0, 0, 0.22);
+  box-shadow: 0 0 0 1px var(--ring-on-light), 0 4px 14px rgba(0, 0, 0, 0.22) !important;
   transform: scale(var(--btn-scale));
 }
 .hover-ring-light:active { transform: scale(0.97); }
@@ -180,7 +180,7 @@ body {
   transition: all var(--transition);
 }
 .hover-ring-dark:hover:not(:disabled) {
-  box-shadow: 0 0 0 1px var(--ring-on-dark), 0 0 12px rgba(255, 255, 255, 0.18);
+  box-shadow: 0 0 0 1px var(--ring-on-dark), 0 0 12px rgba(255, 255, 255, 0.18) !important;
   transform: scale(var(--btn-scale));
 }
 .hover-ring-dark:active { transform: scale(0.97); }
