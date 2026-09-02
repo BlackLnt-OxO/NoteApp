@@ -279,14 +279,15 @@ const App: React.FC = () => {
           </div>
 
           {/* Bottom-left cluster: while the sidebar is collapsed it stacks the
-              two round screenshot buttons above the sidebar toggle; as soon as
-              the sidebar opens those disappear (the sidebar's own bottom buttons
-              take over), so there is never a duplicate entry. */}
+              two round screenshot buttons (canvas/notes only — never on PDF)
+              above the sidebar toggle; as soon as the sidebar opens those
+              disappear (the sidebar's own bottom buttons take over), so there
+              is never a duplicate entry. */}
           <div style={{
             position: 'absolute', bottom: '16px', left: '16px', zIndex: 120,
             display: 'flex', flexDirection: 'column', gap: '8px', alignItems: 'center',
           }}>
-            {sidebarCollapsed && (<>
+            {sidebarCollapsed && viewMode !== 'pdf' && (<>
               <button onClick={() => window.electronAPI?.startScreenshot()} title="截图" className="hover-ring-light" style={shotBtnStyle}>
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                   <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z" />

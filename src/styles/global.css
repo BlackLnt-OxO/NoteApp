@@ -17,7 +17,7 @@
   --sidebar-bg: rgba(20, 20, 40, 0.5);
   --tag-active-bg: rgba(255, 255, 255, 0.1);
   --dropdown-bg: rgba(30, 30, 50, 0.95);
-  --dialog-bg: rgba(30, 30, 50, 0.9);
+  --dialog-bg: rgba(30, 30, 50, 0.98);
   /* PDF chrome (nav bar / thumbnail rail) and page-level backgrounds */
   --chrome-bg: rgba(30, 30, 48, 0.92);
   --page-bg: #1a1a2e;
@@ -54,7 +54,7 @@
   --sidebar-bg: rgba(232, 228, 222, 0.7);
   --tag-active-bg: rgba(0, 0, 0, 0.04);
   --dropdown-bg: rgba(240, 237, 232, 0.98);
-  --dialog-bg: rgba(240, 237, 232, 0.94);
+  --dialog-bg: rgba(240, 237, 232, 0.98);
   --chrome-bg: rgba(238, 235, 230, 0.92);
   --page-bg: #e7e4df;
   --app-overlay: 231,228,223;
@@ -437,8 +437,6 @@ body {
 
 .dialog {
   background: var(--dialog-bg);
-  backdrop-filter: blur(8px);
-  -webkit-backdrop-filter: blur(8px);
   border: 1px solid var(--glass-border);
   border-radius: var(--radius-xl);
   box-shadow: 0 16px 64px rgba(0, 0, 0, 0.3);

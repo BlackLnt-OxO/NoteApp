@@ -73,9 +73,25 @@ interface ExpandableToolButtonProps {
 const ExpandableToolButton: React.FC<ExpandableToolButtonProps> = ({ label, Icon, active, onMain, options }) => {
   const gfs = useNoteStore((s) => s.settings.fontSize);
   const [open, setOpen] = useState(false);
+  // Hovering the small triangle shouldn't ring the triangle itself, but the
+  // whole button should light up — so the main button mirrors the container's
+  // hover state (the main button's own CSS :hover keeps working too).
+  const [hover, setHover] = useState(false);
+
+  const mainHover = hover
+    ? { boxShadow: `0 0 0 1px ${active ? 'var(--ring-on-dark)' : 'var(--ring-on-light)'}, ${active ? 'var(--glow-on-color)' : 'var(--glow-soft)'}` }
+    : {};
 
   return (
-    <div style={{ position: 'relative', flex: '1 1 auto', minWidth: 32, display: 'flex' }}>
+    <div
+      style={{ position: 'relative', flex: '1 1 auto', minWidth: 32, display: 'flex' }}
+      onMouseEnter={() => setHover(true)}
+      onMouseLeave={(e) => {
+        setHover(false);
+        // Close the dropdown once the pointer leaves the whole control.
+        if (!e.currentTarget.contains(e.relatedTarget as Node)) setOpen(false);
+      }}
+    >
       <button
         onClick={onMain}
         title={label}
@@ -87,6 +103,7 @@ const ExpandableToolButton: React.FC<ExpandableToolButtonProps> = ({ label, Icon
           borderRadius: '6px', color: active ? '#fff' : 'var(--text-secondary)',
           cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center',
           gap: '3px', fontFamily: 'inherit', fontSize: fs(10, gfs),
+          ...mainHover,
         }}
       >
         <Icon /><span style={{ whiteSpace: 'nowrap' }}>{label}</span>
@@ -94,7 +111,6 @@ const ExpandableToolButton: React.FC<ExpandableToolButtonProps> = ({ label, Icon
       <button
         onClick={() => setOpen(v => !v)}
         title="更多选项"
-        className="hover-ring-light"
         style={{
           position: 'absolute', right: 2, bottom: 2, width: 12, height: 10,
           padding: 0, border: 0, background: 'transparent', cursor: 'pointer',
@@ -106,8 +122,8 @@ const ExpandableToolButton: React.FC<ExpandableToolButtonProps> = ({ label, Icon
       </button>
       {open && (
         <div style={{
-          position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 200,
-          marginTop: 4, background: 'var(--dropdown-bg, rgba(30,30,50,0.98))',
+          position: 'absolute', top: 'calc(100% - 2px)', left: 0, right: 0, zIndex: 200,
+          background: 'var(--dropdown-bg, rgba(30,30,50,0.98))',
           border: '1px solid var(--glass-border)', borderRadius: '8px',
           padding: 4, boxShadow: 'var(--glass-shadow)', display: 'flex', flexDirection: 'column', gap: 2,
         }}>

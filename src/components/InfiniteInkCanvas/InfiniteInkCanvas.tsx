@@ -468,36 +468,43 @@ const InfiniteInkCanvas: React.FC = () => {
     }
   }, [getCanvasPos]);
 
-  // Insert → image: read the picked file, downscale, and place it at the click.
+  // Insert → image: read the picked file(s), downscale each, and place them at
+  // the click point. Multiple picks cascade (each offset down-right) so they
+  // never stack on top of one another; after inserting we revert to the brush.
   const onPickImage = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
+    const files = Array.from(e.target.files || []);
     e.target.value = '';
     const target = insertWorldRef.current;
-    if (!file || !target) return;
-    const reader = new FileReader();
-    reader.onload = () => {
-      const src = String(reader.result || '');
-      const img = new Image();
-      img.onload = () => {
-        const maxW = 1280;
-        const scale = Math.min(1, maxW / img.naturalWidth);
-        const w = Math.round(img.naturalWidth * scale);
-        const h = Math.round(img.naturalHeight * scale);
-        const c = document.createElement('canvas');
-        c.width = w; c.height = h;
-        const ctx = c.getContext('2d');
-        if (ctx) ctx.drawImage(img, 0, 0, w, h);
-        useCanvasStore.getState().addImageObject({
-          dataUrl: c.toDataURL('image/png'),
-          x: target.x - w / 2,
-          y: target.y - h / 2,
-          width: w,
-          height: h,
-        });
+    if (!files.length || !target) return;
+    files.forEach((file, i) => {
+      const reader = new FileReader();
+      reader.onload = () => {
+        const src = String(reader.result || '');
+        const img = new Image();
+        img.onload = () => {
+          const maxW = 1280;
+          const scale = Math.min(1, maxW / img.naturalWidth);
+          const w = Math.round(img.naturalWidth * scale);
+          const h = Math.round(img.naturalHeight * scale);
+          const c = document.createElement('canvas');
+          c.width = w; c.height = h;
+          const ctx = c.getContext('2d');
+          if (ctx) ctx.drawImage(img, 0, 0, w, h);
+          const off = i * 48;
+          useCanvasStore.getState().addImageObject({
+            dataUrl: c.toDataURL('image/png'),
+            x: target.x + off - w / 2,
+            y: target.y + off - h / 2,
+            width: w,
+            height: h,
+          });
+        };
+        img.src = src;
       };
-      img.src = src;
-    };
-    reader.readAsDataURL(file);
+      reader.readAsDataURL(file);
+    });
+    // Back to pen so the next click draws instead of re-opening the picker.
+    useCanvasStore.getState().setActiveTool('pen');
   }, []);
 
   // ---- Cursor -----------------------------------------------------------------
@@ -524,7 +531,7 @@ const InfiniteInkCanvas: React.FC = () => {
 
   return (
     <div ref={containerRef} style={{ position: 'absolute', inset: 0, overflow: 'hidden', background: 'var(--page-bg)', borderRadius: '0 0 12px 0' }}>
-      <input ref={fileInputRef} type="file" accept="image/*" style={{ display: 'none' }} onChange={onPickImage} />
+      <input ref={fileInputRef} type="file" accept="image/*" multiple style={{ display: 'none' }} onChange={onPickImage} />
       {/* Image objects render BEFORE the canvas → they sit below the ink layer. */}
       {objects.filter((o): o is ImageObjectType => o.type === 'image').map((o) => (
         <ImageObject key={o.id} obj={o} camera={camera} />
