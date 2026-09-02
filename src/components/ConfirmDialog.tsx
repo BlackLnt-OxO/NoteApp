@@ -79,10 +79,10 @@ export const ConfirmHost: React.FC = () => {
           )}
           <button
             onClick={confirm}
+            className={req.danger !== false ? 'btn-danger' : 'btn-accent'}
             style={{
-              padding: '8px 18px', borderRadius: '8px', border: 'none', cursor: 'pointer',
+              padding: '8px 18px', borderRadius: '8px', cursor: 'pointer',
               fontSize: 13, fontWeight: 600, fontFamily: 'inherit',
-              background: req.danger !== false ? 'var(--danger)' : 'var(--accent)',
               color: '#fff',
             }}
           >

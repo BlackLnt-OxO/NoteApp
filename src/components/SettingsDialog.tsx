@@ -338,8 +338,8 @@ const SettingsDialog: React.FC<SettingsDialogProps> = ({ onClose }) => {
 
         <div className="dialog-actions">
           <button className="glass-btn" onClick={onClose} style={{ fontSize: fs(13, gfs), padding: `${fs(8, gfs)} ${fs(16, gfs)}` }}>取消</button>
-          <button onClick={handleSave} style={{
-            padding: `${fs(9, gfs)} ${fs(22, gfs)}`, background: 'var(--accent)', border: 'none',
+          <button onClick={handleSave} className="btn-accent" style={{
+            padding: `${fs(9, gfs)} ${fs(22, gfs)}`,
             borderRadius: 'var(--radius-sm)', color: '#fff', fontSize: fs(13, gfs),
             fontWeight: 500, cursor: 'pointer', fontFamily: 'inherit',
           }}>保存设置</button>

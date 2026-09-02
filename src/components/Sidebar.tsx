@@ -66,13 +66,11 @@ const Sidebar: React.FC<SidebarProps> = ({ onCreateNote }) => {
       {/* Create note button */}
       <button
         onClick={onCreateNote}
+        className="btn-accent"
         style={{
           width: '100%',
           padding: '11px',
-          background: 'var(--accent)',
-          border: 'none',
           borderRadius: 'var(--radius-md)',
-          color: '#fff',
           fontSize: fs + 'px',
           fontWeight: 600,
           cursor: 'pointer',
@@ -80,16 +78,9 @@ const Sidebar: React.FC<SidebarProps> = ({ onCreateNote }) => {
           alignItems: 'center',
           justifyContent: 'center',
           gap: '6px',
-          transition: 'all var(--transition)',
           fontFamily: 'inherit',
           marginBottom: '8px',
           letterSpacing: '0.3px',
-        }}
-        onMouseEnter={(e) => {
-          e.currentTarget.style.background = 'var(--accent-hover)';
-        }}
-        onMouseLeave={(e) => {
-          e.currentTarget.style.background = 'var(--accent)';
         }}
       >
         + 新建便笺
@@ -105,6 +96,8 @@ const Sidebar: React.FC<SidebarProps> = ({ onCreateNote }) => {
           <button
             key={m.id}
             onClick={() => setViewMode(m.id)}
+            onMouseEnter={(e) => { if (viewMode !== m.id) e.currentTarget.style.background = 'rgba(107,92,231,0.18)'; }}
+            onMouseLeave={(e) => { if (viewMode !== m.id) e.currentTarget.style.background = 'var(--glass-bg-light)'; }}
             style={{
               flex: 1,
               padding: '5px 6px',

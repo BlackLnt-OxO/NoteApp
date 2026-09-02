@@ -47,8 +47,8 @@ const DataDirectoryPrompt: React.FC<{ onDone: () => void }> = ({ onDone }) => {
         更改数据目录后应用会自动重启，旧数据会暂时保留，退出前可在设置中回退。
       </div>
       <div style={{ display: 'flex', gap: 12, marginTop: 8 }}>
-        <button onClick={chooseFolder} style={{
-          padding: '10px 22px', borderRadius: '8px', background: 'var(--accent)', border: 'none',
+        <button onClick={chooseFolder} className="btn-accent" style={{
+          padding: '10px 22px', borderRadius: '8px',
           color: '#fff', fontSize: '13px', fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit',
         }}>选择文件夹</button>
         <button onClick={useDefault} style={{

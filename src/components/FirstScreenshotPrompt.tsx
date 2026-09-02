@@ -17,9 +17,8 @@ const FirstScreenshotPrompt: React.FC<{ onClose: (accepted: boolean) => void }> 
         </p>
         <div className="dialog-actions">
           <button className="glass-btn" onClick={() => onClose(false)} style={{ fontSize: 13 }}>不了</button>
-          <button onClick={() => onClose(true)} style={{
-            padding: '9px 22px', background: 'var(--accent)', border: 'none',
-            borderRadius: 8, color: '#fff', fontSize: 13, cursor: 'pointer',
+          <button onClick={() => onClose(true)} className="btn-accent" style={{
+            padding: '9px 22px', borderRadius: 8, color: '#fff', fontSize: 13, cursor: 'pointer',
           }}>是，帮我设置</button>
         </div>
       </div>
