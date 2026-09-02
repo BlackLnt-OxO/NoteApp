@@ -165,7 +165,11 @@ const PdfSidebar: React.FC = () => {
     const el = scrollRef.current;
     if (!el) return;
     const idx = Math.max(0, Math.min(numPages - 1, usePdfStore.getState().currentPage - 1));
-    el.scrollTop = Math.max(0, idx * itemH - 10);
+    const target = Math.max(0, idx * itemH - 10);
+    el.scrollTop = target;
+    // Sync the rail's remembered scroll too, so the "reopen restores scroll"
+    // effect below doesn't overwrite this with a stale value from a prior doc.
+    usePdfStore.getState().setRailScrollTop(target);
   }, [pdfDoc, itemH, numPages]);
 
   // When the rail is re-opened (collapse → expand), restore the previous scroll
@@ -215,6 +219,7 @@ const PdfSidebar: React.FC = () => {
           padding: '8px 6px 8px 10px', fontSize: fs(11, gfs), color: 'var(--text-secondary)',
           borderBottom: '1px solid var(--glass-border)', flexShrink: 0,
           opacity: sidebarOpen ? 1 : 0, pointerEvents: sidebarOpen ? 'auto' : 'none',
+          transition: 'opacity var(--transition-slow)',
         }}>
           <span>页面</span>
           <button onClick={toggleSidebar} title="收起" className="hover-ring-light"
@@ -230,6 +235,7 @@ const PdfSidebar: React.FC = () => {
             flex: 1, overflowY: 'auto', overflowX: 'hidden',
             padding: '10px 10px', display: 'flex', flexDirection: 'column', gap: THUMB_GAP,
             opacity: sidebarOpen ? 1 : 0, pointerEvents: sidebarOpen ? 'auto' : 'none',
+            transition: 'opacity var(--transition-slow)',
           }}
         >
           {/* Spacer above the virtualized range */}

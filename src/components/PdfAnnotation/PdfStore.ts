@@ -219,7 +219,9 @@ export const usePdfStore = create<PdfStore>((set, get) => ({
         renderEpoch: 0,
         selectedIds: [],
         showDotGrid: resume?.showDotGrid ?? false,
-        sidebarOpen: resume?.sidebarOpen ?? true,
+        // The thumbnail rail ALWAYS opens when a PDF opens (user preference) —
+        // it is not restored from the remembered sidebar state.
+        sidebarOpen: true,
         camera: resume?.camera ?? { x: 0, y: 0, zoom: 1 },
         // Anchors are user-added only — the resume page is remembered in the
         // background (lastPage above) but never auto-marked as an anchor.
