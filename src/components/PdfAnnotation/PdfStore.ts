@@ -49,6 +49,8 @@ export interface PdfStore {
   pendingResumeCamera: PdfCamera | null;
   /** Set while a PDF is being parsed / rendered. */
   loading: boolean;
+  /** Coarse phase label for the open/loading overlay ("解析" | "渲染页面 N"). */
+  loadingPhase: string | null;
   /** Human-readable import error, shown on the import screen. */
   error: string | null;
 
@@ -79,6 +81,8 @@ export interface PdfStore {
 
   // Thumbnail sidebar
   sidebarOpen: boolean;
+  /** Rail scroll position, preserved across collapse/expand (and saved). */
+  railScrollTop: number;
   /** Anchored pages for the back-jump buttons; their bg renders stay cached. */
   anchorPages: number[];
   /** One-shot: scroll the thumbnail rail to this page (set by the anchor buttons). */
@@ -102,6 +106,7 @@ export interface PdfStore {
   resetCamera: (cam: PdfCamera) => void;
   setSidebarOpen: (open: boolean) => void;
   toggleSidebar: () => void;
+  setRailScrollTop: (top: number) => void;
   /** Add the current page to the anchors (no-op if already present or at cap). */
   addAnchorPage: (page: number) => void;
   removeAnchorPage: (page: number) => void;
@@ -167,6 +172,7 @@ export const usePdfStore = create<PdfStore>((set, get) => ({
   currentItemId: null,
   pendingResumeCamera: null,
   loading: false,
+  loadingPhase: null,
   error: null,
 
   strokes: {},
@@ -186,6 +192,7 @@ export const usePdfStore = create<PdfStore>((set, get) => ({
   camera: { x: 0, y: 0, zoom: 1 },
 
   sidebarOpen: true,
+  railScrollTop: 0,
   anchorPages: [],
   sidebarScrollTarget: null,
 
@@ -193,8 +200,9 @@ export const usePdfStore = create<PdfStore>((set, get) => ({
 
   loadPdfFromBuffer: async (buffer: ArrayBuffer, name: string, resume) => {
     try {
-      set({ loading: true, error: null });
+      set({ loading: true, loadingPhase: '解析', error: null });
       const { doc, numPages, firstPage } = await loadPdfDocument(buffer);
+      set({ loading: true, loadingPhase: '渲染页面 1', error: null });
       const lastPage = Math.min(numPages, Math.max(1, resume?.lastPage ?? 1));
       set({
         fileName: name,
@@ -218,10 +226,11 @@ export const usePdfStore = create<PdfStore>((set, get) => ({
         anchorPages: [],
         sidebarScrollTarget: null,
         loading: false,
+        loadingPhase: null,
       });
     } catch (e) {
       console.error('PDF import failed:', e);
-      set({ loading: false, error: e instanceof Error ? e.message : String(e) });
+      set({ loading: false, loadingPhase: null, error: e instanceof Error ? e.message : String(e) });
     }
   },
 
@@ -244,6 +253,8 @@ export const usePdfStore = create<PdfStore>((set, get) => ({
       anchorPages: [],
       sidebarScrollTarget: null,
       loading: false,
+      loadingPhase: null,
+      railScrollTop: 0,
       error: null,
     });
   },
@@ -274,6 +285,8 @@ export const usePdfStore = create<PdfStore>((set, get) => ({
   resetCamera: (cam) => set({ camera: cam }),
 
   setSidebarOpen: (open) => set({ sidebarOpen: open }),
+
+  setRailScrollTop: (top) => set({ railScrollTop: top }),
 
   toggleSidebar: () => set((s) => ({ sidebarOpen: !s.sidebarOpen })),
 
@@ -517,9 +530,11 @@ export const usePdfStore = create<PdfStore>((set, get) => ({
       showDotGrid: false,
       camera: { x: 0, y: 0, zoom: 1 },
       sidebarOpen: true,
+      railScrollTop: 0,
       anchorPages: [],
       sidebarScrollTarget: null,
       loading: false,
+      loadingPhase: null,
       error: null,
     }),
 }));

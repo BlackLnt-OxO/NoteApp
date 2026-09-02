@@ -132,9 +132,11 @@ const PdfSidebar: React.FC = () => {
   for (let i = firstIndex; i <= lastIndex; i++) pages.push(i + 1);
 
   // Wheel scroll only scrolls the rail — page changes come exclusively from
-  // clicking a thumbnail (or the page input / anchor button).
+  // clicking a thumbnail (or the page input / anchor button). Persist the scroll
+  // position so it survives collapse/expand (and reopening).
   const onScroll = useCallback((e: React.UIEvent<HTMLDivElement>) => {
     setScrollTop(e.currentTarget.scrollTop);
+    usePdfStore.getState().setRailScrollTop(e.currentTarget.scrollTop);
   }, []);
 
   useEffect(() => {
@@ -166,64 +168,79 @@ const PdfSidebar: React.FC = () => {
     el.scrollTop = Math.max(0, idx * itemH - 10);
   }, [pdfDoc, itemH, numPages]);
 
+  // When the rail is re-opened (collapse → expand), restore the previous scroll
+  // position instead of jumping to page 1 / showing a blank rail.
+  useEffect(() => {
+    if (!sidebarOpen) return;
+    const el = scrollRef.current;
+    if (!el) return;
+    el.scrollTop = Math.max(0, usePdfStore.getState().railScrollTop);
+  }, [sidebarOpen, itemH]);
+
   if (!pdfDoc) return null;
+
+  const RAIL_W = THUMB_W + 28;
+  const railBtn: React.CSSProperties = {
+    position: 'absolute', top: 12, left: 6, zIndex: 94,
+    width: 32, height: 32, borderRadius: '50%',
+    border: '1px solid var(--glass-border)', cursor: 'pointer',
+    background: 'var(--chrome-bg)', color: 'var(--text-secondary)',
+    display: 'flex', alignItems: 'center', justifyContent: 'center',
+    fontSize: fs(12, gfs), fontWeight: 700,
+    boxShadow: 'var(--glass-shadow)',
+  };
 
   return (
     <>
       {!sidebarOpen && (
-        <button
-          onClick={toggleSidebar}
-          title="展开页面预览"
-          style={{
-            position: 'absolute', top: 12, left: 0, zIndex: 94,
-            width: 16, height: 48, border: 0, cursor: 'pointer',
-            background: 'var(--chrome-bg)', color: 'var(--text-secondary)',
-            borderRadius: '0 6px 6px 0', fontSize: fs(11, gfs), fontWeight: 700, padding: 0,
-            boxShadow: '0 2px 10px rgba(0,0,0,0.3)',
-            borderRight: '1px solid rgba(255,255,255,0.08)',
-          }}
-        >
+        <button onClick={toggleSidebar} title="展开页面预览"
+          className="hover-ring-light" style={railBtn}>
           ▷
         </button>
       )}
 
-      {sidebarOpen && (
+      {/* Rail stays mounted (so scroll position survives) with a width transition,
+          mirroring the left sidebar's collapse animation. */}
+      <div style={{
+        position: 'absolute', top: 0, left: 0, bottom: 0, zIndex: 93,
+        width: sidebarOpen ? RAIL_W : 0,
+        overflow: 'hidden',
+        transition: 'width var(--transition-slow)',
+        display: 'flex', flexDirection: 'column',
+        background: 'var(--chrome-bg)', borderRight: sidebarOpen ? '1px solid var(--glass-border)' : 'none',
+        backdropFilter: 'blur(10px)', WebkitBackdropFilter: 'blur(10px)',
+      }}>
         <div style={{
-          position: 'absolute', top: 0, left: 0, bottom: 0, width: THUMB_W + 28, zIndex: 93,
-          display: 'flex', flexDirection: 'column',
-          background: 'var(--chrome-bg)', borderRight: '1px solid var(--glass-border)',
-          backdropFilter: 'blur(10px)', WebkitBackdropFilter: 'blur(10px)',
+          display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+          padding: '8px 6px 8px 10px', fontSize: fs(11, gfs), color: 'var(--text-secondary)',
+          borderBottom: '1px solid var(--glass-border)', flexShrink: 0,
+          opacity: sidebarOpen ? 1 : 0, pointerEvents: sidebarOpen ? 'auto' : 'none',
         }}>
-          <div style={{
-            display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-            padding: '8px 6px 8px 10px', fontSize: fs(11, gfs), color: 'var(--text-secondary)',
-            borderBottom: '1px solid var(--glass-border)', flexShrink: 0,
-          }}>
-            <span>页面</span>
-            <button onClick={toggleSidebar} title="收起"
-              style={{ border: 0, background: 'transparent', color: 'var(--text-muted)', cursor: 'pointer', fontSize: fs(12, gfs), padding: '2px 6px' }}>
-              ◁
-            </button>
-          </div>
-
-          <div
-            ref={scrollRef}
-            onScroll={onScroll}
-            style={{
-              flex: 1, overflowY: 'auto', overflowX: 'hidden',
-              padding: '10px 10px', display: 'flex', flexDirection: 'column', gap: THUMB_GAP,
-            }}
-          >
-            {/* Spacer above the virtualized range */}
-            <div style={{ height: firstIndex * itemH, flexShrink: 0 }} />
-            {pages.map((p) => (
-              <Thumb key={p} page={p} height={thumbH} current={p === currentPage} onSelect={setCurrentPage} />
-            ))}
-            {/* Spacer below */}
-            <div style={{ height: Math.max(0, (numPages - 1 - lastIndex) * itemH), flexShrink: 0 }} />
-          </div>
+          <span>页面</span>
+          <button onClick={toggleSidebar} title="收起" className="hover-ring-light"
+            style={{ width: 26, height: 26, borderRadius: '50%', border: 0, background: 'transparent', color: 'var(--text-muted)', cursor: 'pointer', fontSize: fs(12, gfs), display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+            ◁
+          </button>
         </div>
-      )}
+
+        <div
+          ref={scrollRef}
+          onScroll={onScroll}
+          style={{
+            flex: 1, overflowY: 'auto', overflowX: 'hidden',
+            padding: '10px 10px', display: 'flex', flexDirection: 'column', gap: THUMB_GAP,
+            opacity: sidebarOpen ? 1 : 0, pointerEvents: sidebarOpen ? 'auto' : 'none',
+          }}
+        >
+          {/* Spacer above the virtualized range */}
+          <div style={{ height: firstIndex * itemH, flexShrink: 0 }} />
+          {pages.map((p) => (
+            <Thumb key={p} page={p} height={thumbH} current={p === currentPage} onSelect={setCurrentPage} />
+          ))}
+          {/* Spacer below */}
+          <div style={{ height: Math.max(0, (numPages - 1 - lastIndex) * itemH), flexShrink: 0 }} />
+        </div>
+      </div>
     </>
   );
 };

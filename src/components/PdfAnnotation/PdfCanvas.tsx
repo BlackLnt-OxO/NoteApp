@@ -370,6 +370,8 @@ const PdfCanvas: React.FC = () => {
       rebuildInk();
       dirtyRef.current = true;
       scheduleRender();
+      // Background is ready — drop the open/rendering overlay.
+      usePdfStore.setState({ loading: false, loadingPhase: null });
       if (prevPageRef.current && prevPageRef.current !== pageNum) {
         cleanupPage(pdfDoc, prevPageRef.current);
       }
@@ -377,9 +379,17 @@ const PdfCanvas: React.FC = () => {
     };
 
     (async () => {
-      const size = await getPageSize(pdfDoc, pageNum);
-      if (token !== pageLoadTokenRef.current) return;
-      usePdfStore.getState().setPageSize(pageNum, size);
+      // Reuse the stored page size when available (loadPdfDocument already
+      // measured page 1) to avoid a redundant getPage during first open.
+      let size = usePdfStore.getState().pageSizes[pageNum];
+      if (!size) {
+        size = await getPageSize(pdfDoc, pageNum);
+        if (token !== pageLoadTokenRef.current) return;
+        usePdfStore.getState().setPageSize(pageNum, size);
+      }
+
+      // Show a brief "rendering page N" note while the bg bakes.
+      usePdfStore.setState({ loading: true, loadingPhase: `渲染页面 ${pageNum}` });
 
       // Cache hit (anchor page / recently visited) → instant switch, no wait.
       const cached = bgCacheRef.current.get(pageNum);

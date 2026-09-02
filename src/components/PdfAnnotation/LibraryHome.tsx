@@ -9,7 +9,7 @@
  *   UI shows a re-select dialog and updates the stored path.
  */
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useNoteStore } from '../../store';
 import { fs } from '../../utils';
 import { usePdfStore } from './PdfStore';
@@ -54,6 +54,9 @@ const LibraryHome: React.FC = () => {
   const gfs = useNoteStore((s) => s.settings.fontSize);
   const items = usePdfLibrary((s) => s.items);
   const categories = usePdfLibrary((s) => s.categories);
+  const loading = usePdfStore((s) => s.loading);
+  const loadingPhase = usePdfStore((s) => s.loadingPhase);
+  const openingRef = useRef(false);
   const [selectedCategory, setSelectedCategory] = useState<string | null>(null); // null = all
   const [cardMenu, setCardMenu] = useState<(MenuState & { item: PdfLibraryItem }) | null>(null);
   const [categoryMenu, setCategoryMenu] = useState<(MenuState & { category: PdfCategory }) | null>(null);
@@ -103,6 +106,8 @@ const LibraryHome: React.FC = () => {
   // ---- open (with missing-file re-select) ------------------------------------
 
   const doOpen = async (item: PdfLibraryItem) => {
+    if (openingRef.current) return;
+    openingRef.current = true;
     const api = window.electronAPI;
     if (api?.pdfFileExists) {
       const exists = await api.pdfFileExists(item.path);
@@ -118,15 +123,18 @@ const LibraryHome: React.FC = () => {
           });
           await usePdfStore.getState().loadAnnotations(item.id);
           usePdfLibrary.getState().touchLastOpened(item.id);
+          openingRef.current = false;
           return;
         }
       }
       setMissingItem(item);
+      openingRef.current = false;
       return;
     }
     // No IPC (browser) — just try the picker
     const picked = await pickPdfFile();
     if (picked) await usePdfStore.getState().loadPdfFromBuffer(picked.buffer, picked.name);
+    openingRef.current = false;
   };
 
   const doReselect = async () => {
@@ -465,6 +473,23 @@ const LibraryHome: React.FC = () => {
                 重新选择文件
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {loading && (
+        <div style={{
+          position: 'fixed', inset: 0, zIndex: 3000,
+          display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 14,
+          background: 'rgba(0,0,0,0.45)', backdropFilter: 'blur(4px)', WebkitBackdropFilter: 'blur(4px)',
+        }}>
+          <div style={{
+            width: 40, height: 40, borderRadius: '50%',
+            border: '3px solid rgba(255,255,255,0.25)', borderTopColor: 'var(--accent)',
+            animation: 'spin 0.8s linear infinite',
+          }} />
+          <div style={{ fontSize: 13, color: '#fff', fontWeight: 600 }}>
+            {loadingPhase ? `正在打开 PDF · ${loadingPhase}…` : '正在打开 PDF…'}
           </div>
         </div>
       )}
