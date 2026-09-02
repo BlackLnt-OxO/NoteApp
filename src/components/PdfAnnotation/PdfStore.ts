@@ -213,7 +213,9 @@ export const usePdfStore = create<PdfStore>((set, get) => ({
         showDotGrid: resume?.showDotGrid ?? false,
         sidebarOpen: resume?.sidebarOpen ?? true,
         camera: resume?.camera ?? { x: 0, y: 0, zoom: 1 },
-        anchorPages: [lastPage],
+        // Anchors are user-added only — the resume page is remembered in the
+        // background (lastPage above) but never auto-marked as an anchor.
+        anchorPages: [],
         sidebarScrollTarget: null,
         loading: false,
       });
