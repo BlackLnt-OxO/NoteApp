@@ -90,12 +90,13 @@ const ImageObject: React.FC<Props> = ({ obj, camera }) => {
           alt=""
           draggable={false}
           onClick={(e) => { e.stopPropagation(); setLightbox(true); }}
-          style={{ width: '100%', height: '100%', objectFit: 'fill', display: 'block', borderRadius: 6, pointerEvents: 'none' }}
+          style={{ width: '100%', height: '100%', objectFit: 'fill', display: 'block', borderRadius: 6, pointerEvents: 'none', boxShadow: '0 4px 14px rgba(0,0,0,0.3)' }}
         />
         {hover && (
           <>
             <button
               title="删除"
+              onPointerDown={(e) => e.stopPropagation()}
               onClick={(e) => { e.stopPropagation(); deleteObject(obj.id); }}
               style={{
                 position: 'absolute', top: 4, right: 4, width: 20, height: 20, borderRadius: '50%',

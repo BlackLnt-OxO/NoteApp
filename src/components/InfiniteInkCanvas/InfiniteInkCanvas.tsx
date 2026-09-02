@@ -248,7 +248,7 @@ const InfiniteInkCanvas: React.FC = () => {
     if (!canvas) return;
     const state = useCanvasStore.getState();
     const { sx, sy } = getCanvasPos(e);
-    setCursorScreen({ x: e.clientX, y: e.clientY });
+    setCursorScreen({ x: sx, y: sy });
 
     if (e.button === 1 || (e.button === 0 && spaceDownRef.current)) {
       canvas.setPointerCapture(e.pointerId);
@@ -332,7 +332,7 @@ const InfiniteInkCanvas: React.FC = () => {
     if (!canvas) return;
     const { sx, sy } = getCanvasPos(e);
     const state = useCanvasStore.getState();
-    setCursorScreen({ x: e.clientX, y: e.clientY });
+    setCursorScreen({ x: sx, y: sy });
 
     if (panAnchorRef.current) {
       state.setCamera({
@@ -487,7 +487,7 @@ const InfiniteInkCanvas: React.FC = () => {
         onPointerCancel={handlePointerUp} onLostPointerCapture={handlePointerUp} onWheel={handleWheel} />
 
       {showCursor && cursorScreen && (
-        <div style={{ position: 'fixed', left: cursorScreen.x, top: cursorScreen.y, width: cs, height: cs,
+        <div style={{ position: 'absolute', left: cursorScreen.x, top: cursorScreen.y, width: cs, height: cs,
           borderRadius: '50%', border: `1.5px solid ${ringBorder}`,
           background: ringBg,
           pointerEvents: 'none', zIndex: 9999, transform: 'translate(-50%, -50%)' }} />
