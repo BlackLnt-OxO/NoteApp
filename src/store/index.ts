@@ -191,6 +191,7 @@ export const useNoteStore = create<NoteStore>((set, get) => ({
         tags: state.tags,
         settings: state.settings,
         mindMap: state.mindMap,
+        viewMode: state.viewMode,
         sidebarCollapsed: state.sidebarCollapsed,
       };
       if (window.electronAPI) {
@@ -229,7 +230,10 @@ export const useNoteStore = create<NoteStore>((set, get) => ({
             offsetX: 0, offsetY: 0, scale: 1,
             backgroundImage: null, showDots: true,
           },
-          sidebarCollapsed: data.sidebarCollapsed ?? false,
+          // Restore the last-used view. Notes keeps the sidebar open; canvas/PDF
+          // start collapsed (their default), so the user lands where they left off.
+          viewMode: (['notes', 'inkcanvas', 'pdf'] as const).includes(data.viewMode) ? data.viewMode : 'notes',
+          sidebarCollapsed: data.viewMode === 'notes' ? false : true,
         });
       } else {
         // First run - add welcome notes introducing the three sections.

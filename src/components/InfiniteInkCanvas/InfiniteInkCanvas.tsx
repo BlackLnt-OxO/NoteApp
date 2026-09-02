@@ -480,6 +480,9 @@ const InfiniteInkCanvas: React.FC = () => {
     e.target.value = '';
     const target = insertWorldRef.current;
     if (!files.length || !target) return;
+    // One snapshot for the whole batch → a single undo removes every image.
+    const st = useCanvasStore.getState();
+    st.pushHistory();
     files.forEach((file, i) => {
       const reader = new FileReader();
       reader.onload = () => {
@@ -501,14 +504,14 @@ const InfiniteInkCanvas: React.FC = () => {
             y: target.y + off - h / 2,
             width: w,
             height: h,
-          });
+          }, false);
         };
         img.src = src;
       };
       reader.readAsDataURL(file);
     });
     // Back to pen so the next click draws instead of re-opening the picker.
-    useCanvasStore.getState().setActiveTool('pen');
+    st.setActiveTool('pen');
   }, []);
 
   // ---- Cursor -----------------------------------------------------------------
@@ -542,7 +545,9 @@ const InfiniteInkCanvas: React.FC = () => {
       ))}
       <canvas ref={canvasRef} style={{ position: 'absolute', inset: 0, touchAction: 'none', userSelect: 'none', cursor: cursorStyle }}
         onPointerDown={handlePointerDown} onPointerMove={handlePointerMove} onPointerUp={handlePointerUp}
-        onPointerCancel={handlePointerUp} onWheel={handleWheel} />
+        onPointerCancel={handlePointerUp}
+        onPointerLeave={() => setCursorScreen(null)}
+        onWheel={handleWheel} />
 
       {showCursor && cursorScreen && (
         <div style={{ position: 'absolute', left: cursorScreen.x, top: cursorScreen.y, width: cs, height: cs,

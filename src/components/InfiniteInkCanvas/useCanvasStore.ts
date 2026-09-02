@@ -52,8 +52,10 @@ export interface CanvasStore {
   moveTextNode: (id: string, x: number, y: number) => void;
   /** Queue a screenshot (compressed) to insert at the viewport center. */
   queueImageInsert: (dataUrl: string, width: number, height: number) => void;
-  /** Add a baked image object at the given world position (w/h = world units). */
-  addImageObject: (data: { dataUrl: string; x: number; y: number; width: number; height: number }) => void;
+  /** Add a baked image object at the given world position (w/h = world units).
+   *  `recordHistory=false` batches the insert into one surrounding history push
+   *  (used by multi-image import so a single import = a single undo). */
+  addImageObject: (data: { dataUrl: string; x: number; y: number; width: number; height: number }, recordHistory?: boolean) => void;
   updateImageObject: (id: string, patch: Partial<Pick<ImageObject, 'x' | 'y' | 'width' | 'height'>>) => void;
   setCamera: (partial: Partial<Camera>) => void;
   setActiveTool: (tool: ToolType) => void;
@@ -174,7 +176,7 @@ export const useCanvasStore = create<CanvasStore>((set, get) => ({
   queueImageInsert: (dataUrl, width, height) =>
     set({ pendingImageInsert: { dataUrl, width, height } }),
 
-  addImageObject: (data) => {
+  addImageObject: (data, recordHistory = true) => {
     const id = makeId('img');
     const obj: ImageObject = {
       id,
@@ -186,7 +188,7 @@ export const useCanvasStore = create<CanvasStore>((set, get) => ({
       dataUrl: data.dataUrl,
       createdAt: Date.now(),
     };
-    get().pushHistory();
+    if (recordHistory) get().pushHistory();
     set((s) => ({ objects: [...s.objects, obj], pendingImageInsert: null }));
   },
 
