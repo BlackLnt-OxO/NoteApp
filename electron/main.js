@@ -47,8 +47,12 @@ function relaunch() {
   // the original exe — launch that with a clean argv + cwd, matching a manual
   // double-click.
   const exe = process.env.PORTABLE_EXECUTABLE_FILE || process.execPath;
+  // Dev: process.execPath is bare electron.exe — launching it with no args shows
+  // the default Electron window. Pass the app path (the project dir w/
+  // package.json main) so it loads THIS app. Portable: launch the original exe.
+  const args = process.env.PORTABLE_EXECUTABLE_FILE ? [] : [app.getAppPath()];
   try {
-    spawn(exe, [], { cwd: path.dirname(exe), detached: true, stdio: 'ignore' }).unref();
+    spawn(exe, args, { cwd: app.getAppPath() || path.dirname(exe), detached: true, stdio: 'ignore' }).unref();
   } catch (e) {
     console.error('Failed to relaunch app:', e);
   }
@@ -160,7 +164,6 @@ function createMainWindow() {
 
   if (isDev) {
     mainWindow.loadURL('http://localhost:5173');
-    mainWindow.webContents.openDevTools({ mode: 'detach' });
   } else {
     mainWindow.loadFile(path.join(__dirname, '..', 'dist', 'index.html'));
   }
@@ -397,12 +400,21 @@ function setupIPC() {
 
   ipcMain.handle('app:setDataDirectory', async (event, dir) => {
     const oldDir = app.getPath('userData');
-    const newDir = dir ? path.resolve(String(dir)) : DEFAULT_USER_DATA;
     const cfg = getDataDirConfig();
 
+    // First-run "使用默认位置" (null): choosing the DEFAULT does NOT migrate or
+    // relaunch — it only marks the app configured and continues.
+    if (dir === null) {
+      saveDataDirConfig({ dir: null, prevDir: cfg.prevDir ?? oldDir });
+      return { changed: false };
+    }
+
+    // '' or a real path = changing the location (incl. Settings' "恢复默认位置"),
+    // which migrates and relaunches once.
+    const newDir = dir ? path.resolve(String(dir)) : DEFAULT_USER_DATA;
+
     if (newDir === oldDir) {
-      // Same location (incl. "use default" when already default) — just mark
-      // configured so the first-run prompt doesn't reappear.
+      // Same location — just mark configured so the first-run prompt doesn't reappear.
       saveDataDirConfig({ dir: cfg.dir ?? null, prevDir: cfg.prevDir });
       return { changed: false };
     }

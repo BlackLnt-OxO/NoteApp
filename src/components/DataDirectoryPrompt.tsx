@@ -51,9 +51,8 @@ const DataDirectoryPrompt: React.FC<{ onDone: () => void }> = ({ onDone }) => {
           padding: '10px 22px', borderRadius: '8px',
           color: '#fff', fontSize: '13px', fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit',
         }}>选择文件夹</button>
-        <button onClick={useDefault} style={{
-          padding: '10px 22px', borderRadius: '8px', background: 'var(--glass-bg-light)', border: '1px solid var(--glass-border)',
-          color: 'var(--text-secondary)', fontSize: '13px', cursor: 'pointer', fontFamily: 'inherit',
+        <button onClick={useDefault} className="glass-btn" style={{
+          padding: '10px 22px', borderRadius: '8px', fontSize: '13px', fontFamily: 'inherit',
         }}>使用默认位置</button>
       </div>
     </div>

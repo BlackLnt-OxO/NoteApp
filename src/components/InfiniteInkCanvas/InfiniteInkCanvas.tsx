@@ -51,6 +51,7 @@ const InfiniteInkCanvas: React.FC = () => {
   const tWidth = useCanvasToolbarStore((s) => s.width);
   const tSide = useCanvasToolbarStore((s) => s.side);
   const theme = useNoteStore((s) => s.settings.theme);
+  const uiScale = useNoteStore((s) => s.uiScale);
   const renderEpoch = useCanvasStore((s) => s.renderEpoch);
   const pendingImageInsert = useCanvasStore((s) => s.pendingImageInsert);
 
@@ -62,14 +63,21 @@ const InfiniteInkCanvas: React.FC = () => {
     if (!canvas || !container) return;
     const dpr = window.devicePixelRatio || 1;
     dprRef.current = dpr;
-    const rect = container.getBoundingClientRect();
-    canvas.width = rect.width * dpr;
-    canvas.height = rect.height * dpr;
-    canvas.style.width = rect.width + 'px';
-    canvas.style.height = rect.height + 'px';
+    // Layout (untransformed) size — unaffected by CSS scale, so the canvas fills
+    // its container at EVERY zoom. (getBoundingClientRect returns the scaled
+    // visual size; setting the element CSS size from it made the canvas spill
+    // past or empty at the right/bottom.)
+    const lw = container.offsetWidth;
+    const lh = container.offsetHeight;
+    // Backing store sized for the VISUAL size (layout × scale) × dpr → stays sharp.
+    canvas.width = Math.max(1, Math.round(lw * uiScale * dpr));
+    canvas.height = Math.max(1, Math.round(lh * uiScale * dpr));
+    // Element CSS size = layout px; the CSS scale renders it at the visual size.
+    canvas.style.width = lw + 'px';
+    canvas.style.height = lh + 'px';
     dirtyRef.current = true;
     scheduleRender();
-  }, []);
+  }, [uiScale]);
 
   useEffect(() => {
     resizeCanvas();
@@ -77,6 +85,13 @@ const InfiniteInkCanvas: React.FC = () => {
     if (containerRef.current) ro.observe(containerRef.current);
     return () => ro.disconnect();
   }, [resizeCanvas]);
+
+  // `transform: scale` changes the canvas's VISUAL size without changing its
+  // layout box, so ResizeObserver won't fire — on a zoom change we must re-size
+  // the backing store manually or ink is drawn/hit at the wrong spot.
+  useEffect(() => {
+    resizeCanvas();
+  }, [uiScale, resizeCanvas]);
 
   useEffect(() => { useCanvasStore.getState().loadCanvasData(); }, []);
 
@@ -550,7 +565,7 @@ const InfiniteInkCanvas: React.FC = () => {
         onWheel={handleWheel} />
 
       {showCursor && cursorScreen && (
-        <div style={{ position: 'absolute', left: cursorScreen.x, top: cursorScreen.y, width: cs, height: cs,
+        <div style={{ position: 'absolute', left: cursorScreen.x / uiScale, top: cursorScreen.y / uiScale, width: cs / uiScale, height: cs / uiScale,
           borderRadius: '50%', border: `1.5px solid ${ringBorder}`,
           background: ringBg,
           pointerEvents: 'none', zIndex: 9999, transform: 'translate(-50%, -50%)' }} />

@@ -125,7 +125,7 @@ export const DEFAULT_TAGS: Tag[] = [
 
 export const DEFAULT_SETTINGS: AppSettings = {
   theme: 'dark',
-  fontSize: 14,
+  fontSize: 15,
   fontFamily: 'Georgia, "Times New Roman", serif',
   backgroundImage: null,
   backgroundOpacity: 0.3,

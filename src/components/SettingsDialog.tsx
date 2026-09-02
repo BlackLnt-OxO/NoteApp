@@ -158,14 +158,19 @@ const SettingsDialog: React.FC<SettingsDialogProps> = ({ onClose }) => {
         <div style={sectionStyle}>
           <label style={labelStyle(gfs)}>数据目录</label>
           <div style={{ fontSize: fs(11, gfs), color: 'var(--text-muted)', marginBottom: fs(8, gfs), wordBreak: 'break-all' }}>{dataDirPath || '…'}</div>
-          <div style={{ display: 'flex', gap: fs(6, gfs), alignItems: 'center' }}>
+          <div style={{ display: 'flex', gap: fs(6, gfs), alignItems: 'center', flexWrap: 'wrap' }}>
             <button className="glass-btn" onClick={changeDataDir} style={{ fontSize: fs(12, gfs), padding: `${fs(6, gfs)} ${fs(12, gfs)}` }}>更改目录</button>
             {prevDir && (
               <button className="glass-btn" onClick={revertDataDir} style={{ fontSize: fs(12, gfs), padding: `${fs(6, gfs)} ${fs(12, gfs)}` }}>回退到旧目录</button>
             )}
+            <button
+              className="glass-btn"
+              onClick={() => window.electronAPI?.setDataDirectory('')}
+              style={{ fontSize: fs(12, gfs), padding: `${fs(6, gfs)} ${fs(12, gfs)}` }}
+            >恢复默认位置</button>
           </div>
           <div style={{ fontSize: fs(10, gfs), color: 'var(--text-muted)', marginTop: fs(6, gfs), lineHeight: 1.6 }}>
-            更改后自动重启；旧数据保留到退出，退出前可回退。
+            更改后自动重启；旧数据保留到退出，退出前可回退。「恢复默认位置」将数据目录改回系统默认。
           </div>
         </div>
 

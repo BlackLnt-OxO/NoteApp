@@ -20,6 +20,10 @@ interface NoteStore {
   viewMode: ViewMode;
   /** Whether the left sidebar is collapsed. */
   sidebarCollapsed: boolean;
+  /** Viewport-style UI zoom (0.7–1.6). Lifted to a global store so the canvas
+   *  and cursor ring can correct their coordinates against it (fixes "click
+   *  selects/inserts/erases at the wrong spot when zoom isn't 100%"). */
+  uiScale: number;
 
   // Mind map (global)
   mindMap: MindMapState;
@@ -50,6 +54,7 @@ interface NoteStore {
   setViewMode: (mode: ViewMode) => void;
   toggleSidebar: () => void;
   setSidebarCollapsed: (collapsed: boolean) => void;
+  setUiScale: (s: number) => void;
 
   // Actions - Mind Map
   updateMindMap: (data: Partial<MindMapState>) => void;
@@ -63,6 +68,15 @@ function generateId(): string {
   return 'note_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
 }
 
+/** Read the persisted UI zoom (defaults to 1 if invalid/missing). */
+function readUiScale(): number {
+  // Default UI zoom is 110%. This hits the title-bar readout as "100%" (the
+  // readout subtracts a 0.1 offset), so 110% is treated as the standard 100%.
+  // Clear any stale persisted zoom so a leftover percentage can't stick.
+  localStorage.removeItem('sticky-notes-ui-zoom');
+  return 1.1;
+}
+
 export const useNoteStore = create<NoteStore>((set, get) => ({
   loaded: false,
   notes: [],
@@ -72,6 +86,7 @@ export const useNoteStore = create<NoteStore>((set, get) => ({
   settings: DEFAULT_SETTINGS,
   viewMode: 'notes',
   sidebarCollapsed: false,
+  uiScale: readUiScale(),
   mindMap: {
     offsetX: 0,
     offsetY: 0,
@@ -178,6 +193,7 @@ export const useNoteStore = create<NoteStore>((set, get) => ({
 
   toggleSidebar: () => set((s) => ({ sidebarCollapsed: !s.sidebarCollapsed })),
   setSidebarCollapsed: (collapsed) => set({ sidebarCollapsed: collapsed }),
+  setUiScale: (s) => set({ uiScale: s }),
 
   updateMindMap: (data) => {
     set((state) => ({ mindMap: { ...state.mindMap, ...data } }));
@@ -214,7 +230,7 @@ export const useNoteStore = create<NoteStore>((set, get) => ({
         if (raw) data = JSON.parse(raw);
       }
 
-      if (data) {
+      if (data && Array.isArray(data.notes) && data.notes.length) {
         // Clear isFloating on all notes (float windows don't persist across restarts)
         const notes = (data.notes || []).map((n: Note) => ({ ...n, isFloating: false, floatWindowId: undefined }));
         set({

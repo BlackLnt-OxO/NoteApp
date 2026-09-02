@@ -27,7 +27,9 @@ const shotBtnStyle: React.CSSProperties = {
 };
 
 const App: React.FC = () => {
-  const { settings, loadData, saveData, setNoteFloating, viewMode, setViewMode, sidebarCollapsed, setSidebarCollapsed, toggleSidebar } = useNoteStore();
+  const { settings, loadData, saveData, setNoteFloating, viewMode, setViewMode, sidebarCollapsed, setSidebarCollapsed, toggleSidebar, setUiScale } = useNoteStore();
+  // Subscribe via selector so the title-bar zoom readout re-renders on change.
+  const uiScale = useNoteStore((s) => s.uiScale);
   const gfs = settings.fontSize;
   const titleBarH = gfs >= 18 ? fsn(38, gfs) : 38;
   const [showCreateDialog, setShowCreateDialog] = useState(false);
@@ -36,12 +38,6 @@ const App: React.FC = () => {
   const [dataDirState, setDataDirState] = useState<'checking' | 'ready' | 'prompt'>('checking');
   const [isMaximized, setIsMaximized] = useState(false);
   const [fontToast, setFontToast] = useState({ show: false, size: 14, fading: false });
-  // Viewport-style UI zoom: the window stays fixed and the scaled content always
-  // fills it (no black bars, nothing clipped). Default = current viewport (1.0).
-  const [uiScale, setUiScale] = useState(() => {
-    const v = parseFloat(localStorage.getItem('sticky-notes-ui-zoom') || '');
-    return Number.isFinite(v) && v >= 0.7 && v <= 1.6 ? v : 1;
-  });
   const [uiZoomToast, setUiZoomToast] = useState({ show: false, value: 0, fading: false });
 
   useEffect(() => { loadData(); }, []);
@@ -110,19 +106,18 @@ const App: React.FC = () => {
   }, []);
 
   const zoomStep = useCallback((delta: number) => {
-    setUiScale((prev) => {
-      const n = Math.min(1.6, Math.max(0.7, Math.round((prev + delta) * 10) / 10));
-      localStorage.setItem('sticky-notes-ui-zoom', String(n));
-      // Toast: show immediately, fade out after a beat (mirrors fontToast).
-      setUiZoomToast({ show: true, value: n, fading: false });
-      clearTimeout((window as any).__uiZoomTimer);
-      (window as any).__uiZoomTimer = setTimeout(() => {
-        setUiZoomToast((prev) => ({ ...prev, fading: true }));
-        setTimeout(() => setUiZoomToast((p) => ({ show: false, value: p.value, fading: false })), 600);
-      }, 1500);
-      return n;
-    });
-  }, []);
+    const prev = useNoteStore.getState().uiScale;
+    const n = Math.min(1.6, Math.max(0.7, Math.round((prev + delta) * 10) / 10));
+    localStorage.setItem('sticky-notes-ui-zoom', String(n));
+    setUiScale(n);
+    // Toast: show immediately, fade out after a beat (mirrors fontToast).
+    setUiZoomToast({ show: true, value: n, fading: false });
+    clearTimeout((window as any).__uiZoomTimer);
+    (window as any).__uiZoomTimer = setTimeout(() => {
+      setUiZoomToast((prev) => ({ ...prev, fading: true }));
+      setTimeout(() => setUiZoomToast((p) => ({ show: false, value: p.value, fading: false })), 600);
+    }, 1500);
+  }, [setUiScale]);
 
   // Ctrl+Shift+X screenshot shortcut (renderer fallback)
   useEffect(() => {
@@ -135,12 +130,14 @@ const App: React.FC = () => {
         e.preventDefault();
         setShowDiagnostic(v => !v);
       }
-      // Ctrl+Shift+= / Ctrl+Shift+- → viewport UI zoom (fills the fixed window).
-      if (e.ctrlKey && e.shiftKey && (e.key === '=' || e.key === '+')) {
+      // Ctrl + +/- (with or without Shift) → UI zoom. preventDefault also stops
+      // Chromium's own page-zoom from firing, which would otherwise scale the page
+      // without the app knowing and desync the readout (the "stuck at 150%" bug).
+      if (e.ctrlKey && (e.key === '=' || e.key === '+')) {
         e.preventDefault();
         zoomStep(0.1);
       }
-      if (e.ctrlKey && e.shiftKey && (e.key === '-' || e.key === '_')) {
+      if (e.ctrlKey && (e.key === '-' || e.key === '_')) {
         e.preventDefault();
         zoomStep(-0.1);
       }
@@ -219,6 +216,12 @@ const App: React.FC = () => {
           </span>
         </div>
         <div className="title-bar-right">
+          <span
+            title="界面缩放：Ctrl+Shift 加/减 (60%–150%)"
+            style={{ fontSize: fs(11, gfs), color: 'var(--text-muted)', marginRight: fs(8, gfs), userSelect: 'none', minWidth: fsn(38, gfs), textAlign: 'right' }}
+          >
+            {Math.round((uiScale - 0.1) * 100)}%
+          </span>
           <button className="title-btn" onClick={handleMinimize} title="最小化" style={{ fontSize: fs(13, gfs), width: fsn(32, gfs), height: fsn(28, gfs) }}>_</button>
           <button className="title-btn" onClick={handleMaximize} title={isMaximized ? '还原' : '最大化'} style={{ fontSize: fs(13, gfs), width: fsn(32, gfs), height: fsn(28, gfs) }}>
             {isMaximized ? '[]' : 'o'}
@@ -378,7 +381,7 @@ const App: React.FC = () => {
           boxShadow: 'var(--glass-shadow)',
           opacity: uiZoomToast.fading ? 0 : 1,
           transition: 'opacity 0.5s ease',
-        }}>{Math.round(uiZoomToast.value * 100)}%</div>
+        }}>{Math.round((uiZoomToast.value - 0.1) * 100)}%</div>
       )}
       {showCreateDialog && <CreateNoteDialog onClose={() => setShowCreateDialog(false)} />}
       {showSettings && <SettingsDialog onClose={() => setShowSettings(false)} />}
