@@ -43,7 +43,7 @@ const NavBar: React.FC<{
       background: 'var(--chrome-bg)', borderBottom: '1px solid var(--glass-border)',
       backdropFilter: 'blur(10px)', WebkitBackdropFilter: 'blur(10px)',
     }}>
-      <button onClick={onHome} style={btnStyle(gfs)} title="返回画布列表">‹ 返回列表</button>
+      <button className="glass-btn" onClick={onHome} style={btnStyle(gfs)} title="返回画布列表">‹ 返回列表</button>
       {editing ? (
         <input
           autoFocus
@@ -61,7 +61,7 @@ const NavBar: React.FC<{
           }}
         />
       ) : (
-        <button onClick={() => setEditing(true)} title="点击重命名" style={{ ...btnStyle(gfs), fontWeight: 600, color: 'var(--text-primary)' }}>
+        <button className="glass-btn" onClick={() => setEditing(true)} title="点击重命名" style={{ ...btnStyle(gfs), fontWeight: 600, color: 'var(--text-primary)' }}>
           {name}
         </button>
       )}
@@ -88,6 +88,7 @@ const FullscreenButton: React.FC = () => {
     <button
       onClick={toggle}
       title={fullscreen ? '退出全屏 (Esc)' : '全屏'}
+      className="hover-ring-light"
       style={{
         position: 'absolute', bottom: '60px', right: '16px',
         width: '36px', height: '36px', borderRadius: '50%',
@@ -95,7 +96,7 @@ const FullscreenButton: React.FC = () => {
         border: '1px solid var(--glass-border)',
         color: 'var(--text-secondary)', cursor: 'pointer',
         display: 'flex', alignItems: 'center', justifyContent: 'center',
-        zIndex: 120, transition: 'all var(--transition)',
+        zIndex: 120,
         boxShadow: 'var(--glass-shadow)',
       }}
     >

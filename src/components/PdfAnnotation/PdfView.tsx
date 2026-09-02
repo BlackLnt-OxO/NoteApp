@@ -184,7 +184,7 @@ const NavBar: React.FC<{
       background: 'var(--chrome-bg)', borderBottom: '1px solid var(--glass-border)',
       backdropFilter: 'blur(10px)', WebkitBackdropFilter: 'blur(10px)',
     }}>
-      <button onClick={prevPage} disabled={currentPage <= 1} style={{ ...btnStyle, opacity: currentPage <= 1 ? 0.35 : 1 }}>
+      <button className="glass-btn" onClick={prevPage} disabled={currentPage <= 1} style={{ ...btnStyle, opacity: currentPage <= 1 ? 0.35 : 1 }}>
         ‹ 上一页
       </button>
       <div style={{ display: 'flex', alignItems: 'center', gap: 6, color: 'var(--text-secondary)', fontSize: fs(12, gfs) }}>
@@ -201,7 +201,7 @@ const NavBar: React.FC<{
         />
         <span>/ {numPages}</span>
       </div>
-      <button onClick={nextPage} disabled={currentPage >= numPages} style={{ ...btnStyle, opacity: currentPage >= numPages ? 0.35 : 1 }}>
+      <button className="glass-btn" onClick={nextPage} disabled={currentPage >= numPages} style={{ ...btnStyle, opacity: currentPage >= numPages ? 0.35 : 1 }}>
         下一页 ›
       </button>
 
@@ -244,16 +244,16 @@ const NavBar: React.FC<{
         {fileName}
       </span>
 
-      <button onClick={() => importPdf(null)} style={btnStyle} title="导入其它 PDF">
+      <button className="glass-btn" onClick={() => importPdf(null)} style={btnStyle} title="导入其它 PDF">
         导入
       </button>
-      <button onClick={onSave} style={btnStyle} title="保存批注 (Ctrl+S)">
+      <button className="glass-btn" onClick={onSave} style={btnStyle} title="保存批注 (Ctrl+S)">
         保存
       </button>
       {savedFlash && (
         <span style={{ fontSize: fs(11, gfs), color: '#51cf66', fontWeight: 600 }}>已保存</span>
       )}
-      <button onClick={onClose} style={{ ...btnStyle, color: dirty ? 'var(--danger, #e74c3c)' : 'var(--text-secondary)' }} title="返回 PDF 库">
+      <button className="glass-btn" onClick={onClose} style={{ ...btnStyle, color: dirty ? 'var(--danger, #e74c3c)' : 'var(--text-secondary)' }} title="返回 PDF 库">
         关闭
       </button>
     </div>

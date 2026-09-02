@@ -67,6 +67,7 @@ export const ConfirmHost: React.FC = () => {
           {req.secondaryLabel && (
             <button
               onClick={() => { close(); req.onSecondary?.(); }}
+              className="hover-ring-dark"
               style={{
                 padding: '8px 18px', borderRadius: '8px', cursor: 'pointer',
                 fontSize: 13, fontWeight: 600, fontFamily: 'inherit',
