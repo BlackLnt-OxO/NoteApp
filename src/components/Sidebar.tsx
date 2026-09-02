@@ -119,6 +119,7 @@ const Sidebar: React.FC<SidebarProps> = ({ onCreateNote }) => {
       <div style={{
         flex: 1,
         overflowY: 'auto',
+        overflowX: 'hidden',
         display: 'flex',
         flexDirection: 'column',
         gap: '2px',
@@ -309,6 +310,8 @@ const Sidebar: React.FC<SidebarProps> = ({ onCreateNote }) => {
               alignItems: 'center',
               gap: '4px',
               padding: '7px 12px',
+              width: '100%',
+              boxSizing: 'border-box',
               background: 'none',
               border: '1px dashed var(--glass-border)',
               borderRadius: 'var(--radius-md)',

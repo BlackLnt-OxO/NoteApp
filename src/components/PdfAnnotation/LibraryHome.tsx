@@ -187,12 +187,16 @@ const LibraryHome: React.FC = () => {
 
       {/* Category chips */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', marginBottom: 18 }}>
-        <button style={chipStyle(selectedCategory === null)} onClick={() => setSelectedCategory(null)}>
+        <button
+          className={selectedCategory === null ? 'hover-ring-dark' : 'hover-ring-light'}
+          style={chipStyle(selectedCategory === null)}
+          onClick={() => setSelectedCategory(null)}>
           全部 <span style={{ opacity: 0.7 }}>({items.length})</span>
         </button>
         {categories.map((c) => (
           <button
             key={c.id}
+            className={selectedCategory === c.id ? 'hover-ring-dark' : 'hover-ring-light'}
             style={chipStyle(selectedCategory === c.id)}
             onClick={() => setSelectedCategory(c.id === selectedCategory ? null : c.id)}
             onContextMenu={(e) => {
@@ -218,7 +222,7 @@ const LibraryHome: React.FC = () => {
             <button onClick={createCategory} className="btn-accent" style={{ padding: '5px 10px', borderRadius: '6px', color: '#fff', cursor: 'pointer', fontSize: fs(12, gfs), fontFamily: 'inherit' }}>添加</button>
           </div>
         ) : (
-          <button onClick={() => setCreatingCategory(true)} title="新建分类"
+          <button onClick={() => setCreatingCategory(true)} title="新建分类" className="hover-ring-light"
             style={{
               width: 26, height: 26, borderRadius: '50%', cursor: 'pointer', fontSize: fs(14, gfs),
               border: '1px dashed var(--glass-border)', background: 'transparent', color: 'var(--text-muted)',
@@ -253,12 +257,12 @@ const LibraryHome: React.FC = () => {
                 e.stopPropagation();
                 setCardMenu({ x: e.clientX, y: e.clientY, item });
               }}
+              className="hover-ring-light"
               style={{
                 width: '100%', height: '100%', boxSizing: 'border-box',
                 padding: '16px', borderRadius: '12px', cursor: 'pointer',
                 background: hovered ? 'var(--glass-bg-hover)' : 'var(--glass-bg-light)',
                 border: hovered ? '1px solid var(--glass-border-active)' : '1px solid var(--glass-border)',
-                transition: 'all var(--transition)',
                 display: 'flex', flexDirection: 'column', gap: 10,
                 position: 'relative', userSelect: 'none',
               }}
