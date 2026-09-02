@@ -174,9 +174,10 @@ const LibraryHome: React.FC = () => {
         <span style={{ fontSize: fs(18, gfs), fontWeight: 600 }}>PDF 批注库</span>
         <button
           onClick={doImport} disabled={importing}
+          className="btn-accent"
           style={{
             marginLeft: 'auto', padding: '8px 18px', borderRadius: '8px',
-            background: 'var(--accent)', border: 'none', color: '#fff', cursor: 'pointer',
+            color: '#fff', cursor: 'pointer',
             fontSize: fs(13, gfs), fontWeight: 600, fontFamily: 'inherit',
           }}
         >
@@ -214,7 +215,7 @@ const LibraryHome: React.FC = () => {
               placeholder="分类名称"
               style={{ padding: '5px 10px', borderRadius: '6px', border: '1px solid var(--glass-border)', background: 'var(--glass-bg-light)', color: 'var(--text-primary)', fontSize: fs(12, gfs), fontFamily: 'inherit', outline: 'none', width: 120 }}
             />
-            <button onClick={createCategory} style={{ padding: '5px 10px', borderRadius: '6px', border: 'none', background: 'var(--accent)', color: '#fff', cursor: 'pointer', fontSize: fs(12, gfs), fontFamily: 'inherit' }}>添加</button>
+            <button onClick={createCategory} className="btn-accent" style={{ padding: '5px 10px', borderRadius: '6px', color: '#fff', cursor: 'pointer', fontSize: fs(12, gfs), fontFamily: 'inherit' }}>添加</button>
           </div>
         ) : (
           <button onClick={() => setCreatingCategory(true)} title="新建分类"
@@ -425,7 +426,8 @@ const LibraryHome: React.FC = () => {
             style={{ padding: '5px 8px', borderRadius: '6px', border: '1px solid var(--glass-border)', background: 'var(--glass-bg-light)', color: 'var(--text-primary)', fontSize: fs(12, gfs), fontFamily: 'inherit', outline: 'none', width: 130 }}
           />
           <button onClick={() => { if (renameVal.trim()) usePdfLibrary.getState().renameCategory(renamingCat.id, renameVal.trim()); setRenamingCat(null); }}
-            style={{ padding: '5px 10px', borderRadius: '6px', border: 'none', background: 'var(--accent)', color: '#fff', cursor: 'pointer', fontSize: fs(12, gfs), fontFamily: 'inherit' }}>
+            className="btn-accent"
+            style={{ padding: '5px 10px', borderRadius: '6px', color: '#fff', cursor: 'pointer', fontSize: fs(12, gfs), fontFamily: 'inherit' }}>
             确定
           </button>
         </div>
@@ -454,7 +456,8 @@ const LibraryHome: React.FC = () => {
                 取消
               </button>
               <button onClick={doReselect}
-                style={{ padding: '7px 14px', borderRadius: '6px', cursor: 'pointer', fontFamily: 'inherit', fontSize: fs(12, gfs), border: 'none', background: 'var(--accent)', color: '#fff' }}>
+                className="btn-accent"
+                style={{ padding: '7px 14px', borderRadius: '6px', cursor: 'pointer', fontFamily: 'inherit', fontSize: fs(12, gfs), color: '#fff' }}>
                 重新选择文件
               </button>
             </div>

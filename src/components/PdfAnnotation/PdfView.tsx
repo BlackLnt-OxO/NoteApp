@@ -69,14 +69,11 @@ const ImportScreen: React.FC = () => {
       ) : (
         <button
           onClick={() => importPdf(null)}
+          className="btn-accent"
           style={{
-            marginTop: 8, padding: '10px 22px',
-            background: 'var(--accent)', border: 'none', borderRadius: '8px',
+            marginTop: 8, padding: '10px 22px', borderRadius: '8px',
             color: '#fff', fontSize: fs(13, gfs), fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit',
-            transition: 'all var(--transition)',
           }}
-          onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--accent-hover)'; }}
-          onMouseLeave={(e) => { e.currentTarget.style.background = 'var(--accent)'; }}
         >
           选择 PDF 文件
         </button>

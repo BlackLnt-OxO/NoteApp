@@ -95,9 +95,9 @@ const CanvasHome: React.FC<{ onOpen: (id: string) => void; onNew: () => void }> 
       {/* Header */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 20 }}>
         <span style={{ fontSize: fs(18, gfs), fontWeight: 600 }}>画布</span>
-        <button onClick={onNew} style={{
+        <button onClick={onNew} className="btn-accent" style={{
           marginLeft: 'auto', padding: '8px 18px', borderRadius: '8px',
-          background: 'var(--accent)', border: 'none', color: '#fff', cursor: 'pointer',
+          color: '#fff', cursor: 'pointer',
           fontSize: fs(13, gfs), fontWeight: 600, fontFamily: 'inherit',
         }}>+ 新建画布</button>
       </div>
@@ -131,7 +131,7 @@ const CanvasHome: React.FC<{ onOpen: (id: string) => void; onNew: () => void }> 
               placeholder="分类名称"
               style={{ padding: '5px 10px', borderRadius: '6px', border: '1px solid var(--glass-border)', background: 'var(--glass-bg-light)', color: 'var(--text-primary)', fontSize: fs(12, gfs), fontFamily: 'inherit', outline: 'none', width: 120 }}
             />
-            <button onClick={createCategory} style={{ padding: '5px 10px', borderRadius: '6px', border: 'none', background: 'var(--accent)', color: '#fff', cursor: 'pointer', fontSize: fs(12, gfs), fontFamily: 'inherit' }}>添加</button>
+            <button onClick={createCategory} className="btn-accent" style={{ padding: '5px 10px', borderRadius: '6px', color: '#fff', cursor: 'pointer', fontSize: fs(12, gfs), fontFamily: 'inherit' }}>添加</button>
           </div>
         ) : (
           <button onClick={() => setCreatingCat(true)} title="新建分类"

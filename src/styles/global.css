@@ -132,25 +132,33 @@ body {
   transform: scale(0.97);
 }
 
-/* Button hover language — highlight follows the button's own color.
-   Accent: brighten toward --accent-hover. Danger: brighten toward --danger-hover.
-   Ghost/glass buttons use .glass-btn (already handled above). */
+/* Button hover language — highlight follows the button's own color, echoing the
+   sidebar tag rows: a background + border glow (keeps white/on-color text legible
+   and contrast strong). Ghost/glass buttons use .glass-btn (already handled). */
 .btn-accent {
   background: var(--accent);
   color: #fff;
-  border: none;
+  border: 1px solid transparent;
   transition: all var(--transition);
 }
-.btn-accent:hover { background: var(--accent-hover); }
+.btn-accent:hover {
+  background: var(--accent-hover);
+  border-color: rgba(255, 255, 255, 0.28);
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.12);
+}
 .btn-accent:active { transform: scale(0.97); }
 
 .btn-danger {
   background: var(--danger);
   color: #fff;
-  border: none;
+  border: 1px solid transparent;
   transition: all var(--transition);
 }
-.btn-danger:hover { background: var(--danger-hover); }
+.btn-danger:hover {
+  background: var(--danger-hover);
+  border-color: rgba(255, 255, 255, 0.28);
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.12);
+}
 .btn-danger:active { transform: scale(0.97); }
 
 .glass-input {
