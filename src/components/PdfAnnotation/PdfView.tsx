@@ -302,10 +302,15 @@ const PdfView: React.FC = () => {
     if (st.dirty) {
       askConfirm({
         title: '关闭 PDF',
-        message: '有未保存的批注，确定关闭？',
-        confirmLabel: '关闭',
+        message: '有未保存的批注。',
+        confirmLabel: '保存并关闭',
+        secondaryLabel: '不保存关闭',
         danger: false,
-        onConfirm: () => usePdfStore.getState().closePdf(),
+        onSecondary: () => usePdfStore.getState().closePdf(),
+        onConfirm: async () => {
+          await usePdfStore.getState().saveAnnotations();
+          usePdfStore.getState().closePdf();
+        },
       });
       return;
     }

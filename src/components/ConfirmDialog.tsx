@@ -15,6 +15,9 @@ export interface ConfirmOptions {
   cancelLabel?: string;
   /** true (default) → red confirm button labelled "删除"; false → accent "确定". */
   danger?: boolean;
+  /** Optional middle button (e.g. "保存并关闭") between cancel and confirm. */
+  secondaryLabel?: string;
+  onSecondary?: () => void;
   onConfirm: () => void;
 }
 
@@ -61,6 +64,19 @@ export const ConfirmHost: React.FC = () => {
           <button className="glass-btn" onClick={close} style={{ fontSize: 13 }}>
             {req.cancelLabel ?? '取消'}
           </button>
+          {req.secondaryLabel && (
+            <button
+              onClick={() => { close(); req.onSecondary?.(); }}
+              style={{
+                padding: '8px 18px', borderRadius: '8px', cursor: 'pointer',
+                fontSize: 13, fontWeight: 600, fontFamily: 'inherit',
+                background: 'transparent', color: 'var(--accent)',
+                border: '1px solid var(--accent)',
+              }}
+            >
+              {req.secondaryLabel}
+            </button>
+          )}
           <button
             onClick={confirm}
             style={{
