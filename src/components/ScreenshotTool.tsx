@@ -1,5 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { useNoteStore } from '../store';
+import { useCanvasStore } from './InfiniteInkCanvas/useCanvasStore';
+import { useCanvasLibrary } from './InfiniteInkCanvas/useCanvasLibrary';
 
 interface ScreenshotResult {
   dataUrl?: string;
@@ -9,6 +11,25 @@ interface ScreenshotResult {
   frames?: { dataUrl: string; width: number; height: number }[];
   totalWidth?: number;
   totalHeight?: number;
+}
+
+/** Downscale a dataUrl to maxWidth (default 1280) and re-encode as PNG. */
+function downscaleDataUrl(dataUrl: string, maxWidth = 1280): Promise<{ dataUrl: string; width: number; height: number }> {
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.onload = () => {
+      const scale = Math.min(1, maxWidth / img.naturalWidth);
+      const w = Math.round(img.naturalWidth * scale);
+      const h = Math.round(img.naturalHeight * scale);
+      const c = document.createElement('canvas');
+      c.width = w; c.height = h;
+      const ctx = c.getContext('2d');
+      if (ctx) ctx.drawImage(img, 0, 0, w, h);
+      resolve({ dataUrl: c.toDataURL('image/png'), width: w, height: h });
+    };
+    img.onerror = () => resolve({ dataUrl, width: img.naturalWidth, height: img.naturalHeight });
+    img.src = dataUrl;
+  });
 }
 
 const ScreenshotTool: React.FC = () => {
@@ -68,6 +89,18 @@ const ScreenshotTool: React.FC = () => {
       }
 
       if (finalDataUrl) {
+        // In the canvas view a screenshot drops onto the current canvas center
+        // (downscaled so it fits localStorage), otherwise it becomes a note.
+        const vm = useNoteStore.getState().viewMode;
+        const lib = useCanvasLibrary.getState();
+        const isCanvasView = vm === 'inkcanvas' && !!lib.currentCanvasId;
+        if (isCanvasView) {
+          const down = await downscaleDataUrl(finalDataUrl);
+          useCanvasStore.getState().queueImageInsert(down.dataUrl, down.width, down.height);
+          window.electronAPI?.showToast('截图已存入画布');
+          return;
+        }
+
         const state = useNoteStore.getState();
         const defaultColor = state.settings.defaultNoteColor;
         const tagId = state.tags.find(t => t.name === '截图' || t.id === 'screenshot')?.id || 'screenshot';

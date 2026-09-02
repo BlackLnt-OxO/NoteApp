@@ -5,6 +5,7 @@ import type {
   Stroke,
   StrokePoint,
   TextNodeData,
+  ImageObject,
   CanvasObject,
   ToolType,
   SelectionMode,
@@ -37,6 +38,8 @@ export interface CanvasStore {
   currentCanvasId: string | null;
   /** Bumped only by structural ops → canvas rebuilds its ink tiles from source. */
   renderEpoch: number;
+  /** One-shot: a screenshot is waiting to be dropped at the viewport center. */
+  pendingImageInsert: { dataUrl: string; width: number; height: number } | null;
 
   // Actions
   addStroke: (stroke: Stroke) => void;
@@ -45,6 +48,11 @@ export interface CanvasStore {
   updateTextNode: (id: string, data: Partial<TextNodeData>) => void;
   deleteTextNode: (id: string) => void;
   moveTextNode: (id: string, x: number, y: number) => void;
+  /** Queue a screenshot (compressed) to insert at the viewport center. */
+  queueImageInsert: (dataUrl: string, width: number, height: number) => void;
+  /** Add a baked image object at the given world position (w/h = world units). */
+  addImageObject: (data: { dataUrl: string; x: number; y: number; width: number; height: number }) => void;
+  updateImageObject: (id: string, patch: Partial<Pick<ImageObject, 'x' | 'y' | 'width' | 'height'>>) => void;
   setCamera: (partial: Partial<Camera>) => void;
   setActiveTool: (tool: ToolType) => void;
   setBrushSettings: (partial: Partial<BrushSettings>) => void;
@@ -92,6 +100,7 @@ export const useCanvasStore = create<CanvasStore>((set, get) => ({
   loaded: false,
   currentCanvasId: null,
   renderEpoch: 0,
+  pendingImageInsert: null,
 
   // --- History ---
 
@@ -157,6 +166,32 @@ export const useCanvasStore = create<CanvasStore>((set, get) => ({
     set((s) => ({ objects: [...s.objects, node], editingTextId: id }));
     return id;
   },
+
+  queueImageInsert: (dataUrl, width, height) =>
+    set({ pendingImageInsert: { dataUrl, width, height } }),
+
+  addImageObject: (data) => {
+    const id = makeId('img');
+    const obj: ImageObject = {
+      id,
+      type: 'image',
+      x: data.x,
+      y: data.y,
+      width: data.width,
+      height: data.height,
+      dataUrl: data.dataUrl,
+      createdAt: Date.now(),
+    };
+    get().pushHistory();
+    set((s) => ({ objects: [...s.objects, obj], pendingImageInsert: null }));
+  },
+
+  updateImageObject: (id, patch) =>
+    set((s) => ({
+      objects: s.objects.map((o) =>
+        o.type === 'image' && o.id === id ? { ...o, ...patch } : o,
+      ),
+    })),
 
   updateTextNode: (id, data) => {
     set((s) => ({

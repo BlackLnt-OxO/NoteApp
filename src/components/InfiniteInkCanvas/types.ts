@@ -59,9 +59,21 @@ export interface TextNodeData {
   updatedAt: number;
 }
 
+export interface ImageObject {
+  id: string;
+  type: 'image';
+  x: number;
+  y: number;
+  /** World-space width/height (pre-zoom). */
+  width: number;
+  height: number;
+  dataUrl: string;
+  createdAt: number;
+}
+
 // ---- Unified Object Type -----------------------------------------------------
 
-export type CanvasObject = Stroke | TextNodeData;
+export type CanvasObject = Stroke | TextNodeData | ImageObject;
 
 // ---- Persisted Canvas Data ---------------------------------------------------
 

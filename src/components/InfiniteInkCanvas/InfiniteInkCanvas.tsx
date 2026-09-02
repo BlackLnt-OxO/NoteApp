@@ -10,12 +10,13 @@ import {
   stampStroke, eraseSegTiles, eraseDotTiles, drawVisibleTiles, rebuildTiles,
 } from './InkTiles';
 import TextNode from './TextNode';
+import ImageObject from './ImageObject';
 import Toolbar from './Toolbar';
 import ToolbarShell from './ToolbarShell';
 import { useCanvasToolbarStore } from './useToolbarStore';
 import { useNoteStore } from '../../store';
 import { themeCanvasColors } from '../../themeColors';
-import type { Stroke, StrokePoint, TextNodeData } from './types';
+import type { Stroke, StrokePoint, TextNodeData, ImageObject as ImageObjectType } from './types';
 
 const InfiniteInkCanvas: React.FC = () => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -48,6 +49,7 @@ const InfiniteInkCanvas: React.FC = () => {
   const tSide = useCanvasToolbarStore((s) => s.side);
   const theme = useNoteStore((s) => s.settings.theme);
   const renderEpoch = useCanvasStore((s) => s.renderEpoch);
+  const pendingImageInsert = useCanvasStore((s) => s.pendingImageInsert);
 
   // ---- Canvas sizing ----------------------------------------------------------
 
@@ -165,6 +167,27 @@ const InfiniteInkCanvas: React.FC = () => {
     dirtyRef.current = true;
     scheduleRender();
   }, [renderEpoch, scheduleRender]);
+
+  // Drop a queued screenshot at the current viewport center (world coords).
+  // The image object stays a DOM layer BELOW the canvas so ink overdraws it.
+  useEffect(() => {
+    if (!pendingImageInsert) return;
+    const container = containerRef.current;
+    const vw = container?.clientWidth ?? window.innerWidth;
+    const vh = container?.clientHeight ?? window.innerHeight;
+    const st = useCanvasStore.getState();
+    const c = screenToWorld(vw / 2, vh / 2, st.camera);
+    // World-space size scaled ~1.2 so a full screenshot is comfortably large.
+    const worldW = pendingImageInsert.width;
+    const worldH = pendingImageInsert.height;
+    st.addImageObject({
+      dataUrl: pendingImageInsert.dataUrl,
+      x: c.x - worldW / 2,
+      y: c.y - worldH / 2,
+      width: worldW,
+      height: worldH,
+    });
+  }, [pendingImageInsert]);
 
   // Repaint when the theme flips (workbench bg / dot grid / cursor ring).
   useEffect(() => {
@@ -455,6 +478,10 @@ const InfiniteInkCanvas: React.FC = () => {
 
   return (
     <div ref={containerRef} style={{ position: 'absolute', inset: 0, overflow: 'hidden', background: 'var(--page-bg)', borderRadius: '0 0 12px 0' }}>
+      {/* Image objects render BEFORE the canvas → they sit below the ink layer. */}
+      {objects.filter((o): o is ImageObjectType => o.type === 'image').map((o) => (
+        <ImageObject key={o.id} obj={o} camera={camera} />
+      ))}
       <canvas ref={canvasRef} style={{ position: 'absolute', inset: 0, touchAction: 'none', userSelect: 'none', cursor: cursorStyle }}
         onPointerDown={handlePointerDown} onPointerMove={handlePointerMove} onPointerUp={handlePointerUp}
         onPointerCancel={handlePointerUp} onLostPointerCapture={handlePointerUp} onWheel={handleWheel} />
