@@ -34,7 +34,7 @@
   --ring-on-dark: rgba(255, 255, 255, 0.45);   /* solid/dark buttons → light ring */
   --ring-on-light: rgba(255, 255, 255, 0.45);  /* light/glass buttons → light ring on a dark app */
   --glow-soft: 0 4px 14px rgba(0, 0, 0, 0.28); /* drop shadow for glass hover */
-  --glow-on-color: 0 0 12px rgba(255, 255, 255, 0.18); /* halo for solid/color buttons (dark app) */
+  --glow-on-color: 0 3px 12px rgba(255, 255, 255, 0.3); /* drop shadow for solid/color buttons (dark app) */
   --btn-scale: 1.03;
 }
 
@@ -61,7 +61,7 @@
   --ring-on-light: rgba(0, 0, 0, 0.28);
   --ring-on-dark: rgba(0, 0, 0, 0.32);
   --glow-soft: 0 4px 14px rgba(0, 0, 0, 0.22);
-  --glow-on-color: 0 0 12px rgba(0, 0, 0, 0.18);
+  --glow-on-color: 0 3px 12px rgba(0, 0, 0, 0.28);
 }
 
 /* Light-theme adjustments for widgets that were tuned for a dark app. */
