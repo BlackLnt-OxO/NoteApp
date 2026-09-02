@@ -33,7 +33,7 @@
      buttons get a ring that contrasts with the app background. */
   --ring-on-dark: rgba(255, 255, 255, 0.45);   /* solid/dark buttons → light ring */
   --ring-on-light: rgba(255, 255, 255, 0.45);  /* light/glass buttons → light ring on a dark app */
-  --glow-soft: 0 4px 14px rgba(0, 0, 0, 0.28); /* drop shadow for glass hover */
+  --glow-soft: 0 4px 14px rgba(255, 255, 255, 0.3); /* drop shadow for glass hover (dark app → light) */
   --glow-on-color: 0 3px 12px rgba(255, 255, 255, 0.3); /* drop shadow for solid/color buttons (dark app) */
   --btn-scale: 1.03;
 }
