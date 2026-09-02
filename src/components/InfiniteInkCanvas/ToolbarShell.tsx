@@ -12,6 +12,8 @@
  */
 
 import React, { useRef, useEffect, useLayoutEffect, useCallback, useState } from 'react';
+import { useNoteStore } from "../../store";
+import { fs } from "../../utils";
 import { useCanvasToolbarStore } from './useToolbarStore';
 import {
   MIN_TOOLBAR_WIDTH,
@@ -43,6 +45,7 @@ interface Props {
 // ---- Component -------------------------------------------------------------
 
 const ToolbarShell: React.FC<Props> = ({ children, useStore }) => {
+  const gfs = useNoteStore((s) => s.settings.fontSize);
   const store = useStore();
   const {
     expanded, width, top, offset, side,
@@ -301,7 +304,7 @@ const ToolbarShell: React.FC<Props> = ({ children, useStore }) => {
             color: 'var(--text-secondary)',
             cursor: 'pointer',
             display: 'flex', alignItems: 'center', justifyContent: 'center',
-            fontSize: '11px', fontWeight: 700, padding: 0,
+            fontSize: fs(11, gfs), fontWeight: 700, padding: 0,
             boxShadow: 'var(--glass-shadow)',
             borderTop: '1px solid var(--glass-border)',
             borderBottom: '1px solid var(--glass-border)',
@@ -389,7 +392,7 @@ const ToolbarShell: React.FC<Props> = ({ children, useStore }) => {
             onMouseLeave={(e) => { if (!isDragging) (e.currentTarget as HTMLElement).style.background = 'transparent'; }}
           >
             <span style={{
-              fontSize: '12px', fontWeight: 600,
+              fontSize: fs(12, gfs), fontWeight: 600,
               color: 'var(--text-secondary)',
               pointerEvents: 'none',
               userSelect: 'none',

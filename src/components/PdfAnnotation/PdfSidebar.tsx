@@ -14,6 +14,8 @@
  */
 
 import React, { useRef, useEffect, useState, useCallback } from 'react';
+import { useNoteStore } from "../../store";
+import { fs } from "../../utils";
 import { usePdfStore } from './PdfStore';
 import { renderThumbnail } from './PdfLoader';
 
@@ -49,6 +51,7 @@ function cacheSet(page: number, dataUrl: string): void {
 
 const Thumb: React.FC<{ page: number; height: number; current: boolean; onSelect: (p: number) => void }> = React.memo(
   ({ page, height, current, onSelect }) => {
+    const gfs = useNoteStore((s) => s.settings.fontSize);
     const [src, setSrc] = useState<string | null>(() => cacheGet(page) ?? null);
     const [err, setErr] = useState(false);
     const doc = usePdfStore((s) => s.pdfDoc);
@@ -83,10 +86,10 @@ const Thumb: React.FC<{ page: number; height: number; current: boolean; onSelect
         {src ? (
           <img src={src} alt="" style={{ width: '100%', height: '100%', objectFit: 'contain', display: 'block' }} draggable={false} />
         ) : (
-          <span style={{ fontSize: '11px', color: '#999' }}>{err ? '—' : `${page}`}</span>
+          <span style={{ fontSize: fs(11, gfs), color: '#999' }}>{err ? '—' : `${page}`}</span>
         )}
         <span style={{
-          position: 'absolute', bottom: 2, right: 4, fontSize: '10px', fontWeight: 700,
+          position: 'absolute', bottom: 2, right: 4, fontSize: fs(10, gfs), fontWeight: 700,
           color: '#fff', background: 'rgba(0,0,0,0.55)', borderRadius: '4px', padding: '0 4px',
         }}>
           {page}
@@ -99,6 +102,7 @@ const Thumb: React.FC<{ page: number; height: number; current: boolean; onSelect
 // ---- Sidebar ------------------------------------------------------------------
 
 const PdfSidebar: React.FC = () => {
+  const gfs = useNoteStore((s) => s.settings.fontSize);
   const pdfDoc = usePdfStore((s) => s.pdfDoc);
   const numPages = usePdfStore((s) => s.numPages);
   const currentPage = usePdfStore((s) => s.currentPage);
@@ -174,7 +178,7 @@ const PdfSidebar: React.FC = () => {
             position: 'absolute', top: 12, left: 0, zIndex: 94,
             width: 16, height: 48, border: 0, cursor: 'pointer',
             background: 'var(--chrome-bg)', color: 'var(--text-secondary)',
-            borderRadius: '0 6px 6px 0', fontSize: '11px', fontWeight: 700, padding: 0,
+            borderRadius: '0 6px 6px 0', fontSize: fs(11, gfs), fontWeight: 700, padding: 0,
             boxShadow: '0 2px 10px rgba(0,0,0,0.3)',
             borderRight: '1px solid rgba(255,255,255,0.08)',
           }}
@@ -192,12 +196,12 @@ const PdfSidebar: React.FC = () => {
         }}>
           <div style={{
             display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-            padding: '8px 6px 8px 10px', fontSize: '11px', color: 'var(--text-secondary)',
+            padding: '8px 6px 8px 10px', fontSize: fs(11, gfs), color: 'var(--text-secondary)',
             borderBottom: '1px solid var(--glass-border)', flexShrink: 0,
           }}>
             <span>页面</span>
             <button onClick={toggleSidebar} title="收起"
-              style={{ border: 0, background: 'transparent', color: 'var(--text-muted)', cursor: 'pointer', fontSize: '12px', padding: '2px 6px' }}>
+              style={{ border: 0, background: 'transparent', color: 'var(--text-muted)', cursor: 'pointer', fontSize: fs(12, gfs), padding: '2px 6px' }}>
               ◁
             </button>
           </div>

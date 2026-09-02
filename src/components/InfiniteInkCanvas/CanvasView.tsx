@@ -10,17 +10,19 @@
  */
 
 import React, { useEffect, useState, useCallback } from 'react';
+import { useNoteStore } from "../../store";
+import { fs } from "../../utils";
 import { useCanvasLibrary } from './useCanvasLibrary';
 import { useCanvasStore } from './useCanvasStore';
 import InfiniteInkCanvas from './InfiniteInkCanvas';
 import CanvasHome from './CanvasHome';
 
-const btnStyle: React.CSSProperties = {
+const btnStyle = (gfs: number): React.CSSProperties => ({
   padding: '5px 12px', borderRadius: '6px', cursor: 'pointer', fontFamily: 'inherit',
-  fontSize: '12px', border: '1px solid var(--glass-border)',
+  fontSize: fs(12, gfs), border: '1px solid var(--glass-border)',
   background: 'var(--glass-bg-light)', color: 'var(--text-secondary)',
   transition: 'all var(--transition)',
-};
+});
 
 // ---- Nav bar (editor top bar) ------------------------------------------------
 
@@ -29,6 +31,7 @@ const NavBar: React.FC<{
   onHome: () => void;
   onRename: (name: string) => void;
 }> = ({ name, onHome, onRename }) => {
+  const gfs = useNoteStore((s) => s.settings.fontSize);
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(name);
   useEffect(() => setDraft(name), [name]);
@@ -40,7 +43,7 @@ const NavBar: React.FC<{
       background: 'var(--chrome-bg)', borderBottom: '1px solid var(--glass-border)',
       backdropFilter: 'blur(10px)', WebkitBackdropFilter: 'blur(10px)',
     }}>
-      <button onClick={onHome} style={btnStyle} title="返回画布列表">‹ 返回列表</button>
+      <button onClick={onHome} style={btnStyle(gfs)} title="返回画布列表">‹ 返回列表</button>
       {editing ? (
         <input
           autoFocus
@@ -52,13 +55,13 @@ const NavBar: React.FC<{
           }}
           onBlur={() => setEditing(false)}
           style={{
-            width: 200, padding: '4px 8px', fontFamily: 'inherit', fontSize: '13px',
+            width: 200, padding: '4px 8px', fontFamily: 'inherit', fontSize: fs(13, gfs),
             background: 'var(--glass-bg-light)', color: 'var(--text-primary)',
             border: '1px solid var(--accent)', borderRadius: '6px', outline: 'none',
           }}
         />
       ) : (
-        <button onClick={() => setEditing(true)} title="点击重命名" style={{ ...btnStyle, fontWeight: 600, color: 'var(--text-primary)' }}>
+        <button onClick={() => setEditing(true)} title="点击重命名" style={{ ...btnStyle(gfs), fontWeight: 600, color: 'var(--text-primary)' }}>
           {name}
         </button>
       )}

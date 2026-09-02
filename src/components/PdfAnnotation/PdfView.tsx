@@ -8,8 +8,10 @@
  */
 
 import React, { useRef, useState, useEffect, useCallback } from 'react';
+import { useNoteStore } from '../../store';
 import { usePdfStore, MAX_ANCHOR_PAGES } from './PdfStore';
 import { usePdfLibrary } from './PdfLibrary';
+import { fs } from '../../utils';
 import { usePdfToolbarStore } from '../InfiniteInkCanvas/useToolbarStore';
 import { askConfirm } from '../ConfirmDialog';
 import PdfCanvas from './PdfCanvas';
@@ -40,6 +42,7 @@ async function importPdf(categoryId: string | null): Promise<void> {
 // ---- Import screen (first-time) -----------------------------------------------
 
 const ImportScreen: React.FC = () => {
+  const gfs = useNoteStore((s) => s.settings.fontSize);
   const loading = usePdfStore((s) => s.loading);
   const error = usePdfStore((s) => s.error);
   return (
@@ -53,14 +56,14 @@ const ImportScreen: React.FC = () => {
         <polyline points="14 2 14 8 20 8" />
         <line x1="8" x2="16" y1="13" y2="13" /><line x1="8" x2="16" y1="17" y2="17" /><line x1="8" x2="12" y1="9" y2="9" />
       </svg>
-      <div style={{ fontSize: '15px', fontWeight: 600, color: 'var(--text-primary)' }}>
+      <div style={{ fontSize: fs(15, gfs), fontWeight: 600, color: 'var(--text-primary)' }}>
         导入 PDF 进行批注
       </div>
-      <div style={{ fontSize: '11px', color: 'var(--text-muted)', textAlign: 'center', lineHeight: '1.7' }}>
+      <div style={{ fontSize: fs(11, gfs), color: 'var(--text-muted)', textAlign: 'center', lineHeight: '1.7' }}>
         单页书本式浏览 · 每页独立笔迹 · 支持大型文档<br />导入后出现在左侧 PDF 库中
       </div>
       {loading ? (
-        <div style={{ marginTop: 8, padding: '10px 22px', fontSize: '13px', color: 'var(--text-secondary)' }}>
+        <div style={{ marginTop: 8, padding: '10px 22px', fontSize: fs(13, gfs), color: 'var(--text-secondary)' }}>
           正在加载 PDF…
         </div>
       ) : (
@@ -69,7 +72,7 @@ const ImportScreen: React.FC = () => {
           style={{
             marginTop: 8, padding: '10px 22px',
             background: 'var(--accent)', border: 'none', borderRadius: '8px',
-            color: '#fff', fontSize: '13px', fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit',
+            color: '#fff', fontSize: fs(13, gfs), fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit',
             transition: 'all var(--transition)',
           }}
           onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--accent-hover)'; }}
@@ -81,7 +84,7 @@ const ImportScreen: React.FC = () => {
       {error && (
         <div style={{
           marginTop: 12, maxWidth: 480, padding: '10px 14px',
-          fontSize: '11px', lineHeight: '1.6',
+          fontSize: fs(11, gfs), lineHeight: '1.6',
           color: '#ff8a8a', background: 'rgba(231,76,60,0.12)',
           border: '1px solid rgba(231,76,60,0.3)', borderRadius: '8px',
           fontFamily: 'monospace', whiteSpace: 'pre-wrap', wordBreak: 'break-all',
@@ -101,6 +104,7 @@ const AnchorBadge: React.FC<{
   onJump: () => void;
   onRemove: () => void;
 }> = ({ page, current, onJump, onRemove }) => {
+  const gfs = useNoteStore((s) => s.settings.fontSize);
   const [hover, setHover] = useState(false);
   return (
     <div
@@ -115,7 +119,7 @@ const AnchorBadge: React.FC<{
         cursor: current ? 'default' : 'pointer',
         border: '1px solid var(--accent)',
         background: hover ? 'rgba(107,92,231,0.22)' : 'rgba(107,92,231,0.12)',
-        color: 'var(--accent)', fontSize: '12px', fontWeight: 600,
+        color: 'var(--accent)', fontSize: fs(12, gfs), fontWeight: 600,
         userSelect: 'none', transition: 'background 0.12s',
       }}
     >
@@ -129,7 +133,7 @@ const AnchorBadge: React.FC<{
           background: '#444', color: '#eee',
           border: '1px solid var(--glass-border)',
           display: 'flex', alignItems: 'center', justifyContent: 'center',
-          fontSize: '10px', cursor: 'pointer', lineHeight: 1,
+          fontSize: fs(10, gfs), cursor: 'pointer', lineHeight: 1,
           opacity: hover ? 1 : 0, pointerEvents: hover ? 'auto' : 'none',
           transition: 'opacity 0.12s',
         }}
@@ -148,6 +152,7 @@ const NavBar: React.FC<{
   savedFlash: boolean;
   dirty: boolean;
 }> = ({ onSave, onClose, savedFlash, dirty }) => {
+  const gfs = useNoteStore((s) => s.settings.fontSize);
   const fileName = usePdfStore((s) => s.fileName);
   const currentPage = usePdfStore((s) => s.currentPage);
   const numPages = usePdfStore((s) => s.numPages);
@@ -170,7 +175,7 @@ const NavBar: React.FC<{
 
   const btnStyle: React.CSSProperties = {
     padding: '5px 12px', borderRadius: '6px', cursor: 'pointer', fontFamily: 'inherit',
-    fontSize: '12px', border: '1px solid var(--glass-border)',
+    fontSize: fs(12, gfs), border: '1px solid var(--glass-border)',
     background: 'var(--glass-bg-light)', color: 'var(--text-secondary)',
     transition: 'all var(--transition)',
   };
@@ -185,14 +190,14 @@ const NavBar: React.FC<{
       <button onClick={prevPage} disabled={currentPage <= 1} style={{ ...btnStyle, opacity: currentPage <= 1 ? 0.35 : 1 }}>
         ‹ 上一页
       </button>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 6, color: 'var(--text-secondary)', fontSize: '12px' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6, color: 'var(--text-secondary)', fontSize: fs(12, gfs) }}>
         <input
           value={pageInput}
           onChange={(e) => setPageInput(e.target.value.replace(/\D/g, ''))}
           onBlur={commitPage}
           onKeyDown={(e) => { if (e.key === 'Enter') commitPage(); }}
           style={{
-            width: 48, padding: '4px 6px', textAlign: 'center', fontFamily: 'inherit', fontSize: '12px',
+            width: 48, padding: '4px 6px', textAlign: 'center', fontFamily: 'inherit', fontSize: fs(12, gfs),
             background: 'var(--glass-bg-light)', color: 'var(--text-primary)',
             border: '1px solid var(--glass-border)', borderRadius: '6px', outline: 'none',
           }}
@@ -224,7 +229,7 @@ const NavBar: React.FC<{
             style={{
               width: 28, padding: 0, lineHeight: '24px', textAlign: 'center',
               borderRadius: '6px', cursor: (already || atCap) ? 'default' : 'pointer',
-              fontFamily: 'inherit', fontSize: '16px', fontWeight: 600,
+              fontFamily: 'inherit', fontSize: fs(16, gfs), fontWeight: 600,
               border: '1px solid var(--glass-border)',
               background: 'var(--glass-bg-light)', color: 'var(--text-secondary)',
               opacity: (already || atCap) ? 0.35 : 1,
@@ -236,7 +241,7 @@ const NavBar: React.FC<{
       })()}
 
       <span style={{
-        marginLeft: 'auto', fontSize: '12px', color: 'var(--text-muted)',
+        marginLeft: 'auto', fontSize: fs(12, gfs), color: 'var(--text-muted)',
         overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '280px',
       }}>
         {fileName}
@@ -249,7 +254,7 @@ const NavBar: React.FC<{
         保存
       </button>
       {savedFlash && (
-        <span style={{ fontSize: '11px', color: '#51cf66', fontWeight: 600 }}>已保存</span>
+        <span style={{ fontSize: fs(11, gfs), color: '#51cf66', fontWeight: 600 }}>已保存</span>
       )}
       <button onClick={onClose} style={{ ...btnStyle, color: dirty ? 'var(--danger, #e74c3c)' : 'var(--text-secondary)' }} title="返回 PDF 库">
         关闭

@@ -10,6 +10,8 @@
  */
 
 import React, { useState, useEffect } from 'react';
+import { useNoteStore } from '../../store';
+import { fs } from '../../utils';
 import { usePdfStore } from './PdfStore';
 import { usePdfLibrary, type PdfCategory, type PdfLibraryItem } from './PdfLibrary';
 import { pickPdfFile } from './PdfPicker';
@@ -49,6 +51,7 @@ const PdfCardIcon: React.FC = () => (
 interface MenuState { x: number; y: number; }
 
 const LibraryHome: React.FC = () => {
+  const gfs = useNoteStore((s) => s.settings.fontSize);
   const items = usePdfLibrary((s) => s.items);
   const categories = usePdfLibrary((s) => s.categories);
   const [selectedCategory, setSelectedCategory] = useState<string | null>(null); // null = all
@@ -154,7 +157,7 @@ const LibraryHome: React.FC = () => {
   };
 
   const chipStyle = (active: boolean): React.CSSProperties => ({
-    padding: '5px 12px', borderRadius: '14px', cursor: 'pointer', fontSize: '12px',
+    padding: '5px 12px', borderRadius: '14px', cursor: 'pointer', fontSize: fs(12, gfs),
     fontFamily: 'inherit', border: active ? 'none' : '1px solid var(--glass-border)',
     background: active ? 'var(--accent)' : 'var(--glass-bg-light)',
     color: active ? '#fff' : 'var(--text-secondary)',
@@ -168,13 +171,13 @@ const LibraryHome: React.FC = () => {
     }}>
       {/* Header */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 20 }}>
-        <span style={{ fontSize: '18px', fontWeight: 600 }}>PDF 批注库</span>
+        <span style={{ fontSize: fs(18, gfs), fontWeight: 600 }}>PDF 批注库</span>
         <button
           onClick={doImport} disabled={importing}
           style={{
             marginLeft: 'auto', padding: '8px 18px', borderRadius: '8px',
             background: 'var(--accent)', border: 'none', color: '#fff', cursor: 'pointer',
-            fontSize: '13px', fontWeight: 600, fontFamily: 'inherit',
+            fontSize: fs(13, gfs), fontWeight: 600, fontFamily: 'inherit',
           }}
         >
           {importing ? '正在导入…' : '导入 PDF'}
@@ -209,14 +212,14 @@ const LibraryHome: React.FC = () => {
               onChange={(e) => setNewCatName(e.target.value)}
               onKeyDown={(e) => { if (e.key === 'Enter') createCategory(); if (e.key === 'Escape') setCreatingCategory(false); }}
               placeholder="分类名称"
-              style={{ padding: '5px 10px', borderRadius: '6px', border: '1px solid var(--glass-border)', background: 'var(--glass-bg-light)', color: 'var(--text-primary)', fontSize: '12px', fontFamily: 'inherit', outline: 'none', width: 120 }}
+              style={{ padding: '5px 10px', borderRadius: '6px', border: '1px solid var(--glass-border)', background: 'var(--glass-bg-light)', color: 'var(--text-primary)', fontSize: fs(12, gfs), fontFamily: 'inherit', outline: 'none', width: 120 }}
             />
-            <button onClick={createCategory} style={{ padding: '5px 10px', borderRadius: '6px', border: 'none', background: 'var(--accent)', color: '#fff', cursor: 'pointer', fontSize: '12px', fontFamily: 'inherit' }}>添加</button>
+            <button onClick={createCategory} style={{ padding: '5px 10px', borderRadius: '6px', border: 'none', background: 'var(--accent)', color: '#fff', cursor: 'pointer', fontSize: fs(12, gfs), fontFamily: 'inherit' }}>添加</button>
           </div>
         ) : (
           <button onClick={() => setCreatingCategory(true)} title="新建分类"
             style={{
-              width: 26, height: 26, borderRadius: '50%', cursor: 'pointer', fontSize: '14px',
+              width: 26, height: 26, borderRadius: '50%', cursor: 'pointer', fontSize: fs(14, gfs),
               border: '1px dashed var(--glass-border)', background: 'transparent', color: 'var(--text-muted)',
               display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: 'inherit',
             }}>
@@ -227,7 +230,7 @@ const LibraryHome: React.FC = () => {
 
       {/* Empty state */}
       {sorted.length === 0 && (
-        <div style={{ padding: '60px 0', textAlign: 'center', color: 'var(--text-muted)', fontSize: '13px' }}>
+        <div style={{ padding: '60px 0', textAlign: 'center', color: 'var(--text-muted)', fontSize: fs(13, gfs) }}>
           {items.length === 0 ? '还没有导入过 PDF，点击右上角「导入 PDF」开始。' : '这个分类下还没有 PDF。'}
         </div>
       )}
@@ -276,7 +279,7 @@ const LibraryHome: React.FC = () => {
                   style={{
                     position: 'absolute', top: 8, right: 8,
                     width: 22, height: 22, borderRadius: '50%', border: 'none', cursor: 'pointer',
-                    background: 'rgba(231,76,60,0.8)', color: '#fff', fontSize: '12px', lineHeight: 1,
+                    background: 'rgba(231,76,60,0.8)', color: '#fff', fontSize: fs(12, gfs), lineHeight: 1,
                     display: 'flex', alignItems: 'center', justifyContent: 'center',
                   }}
                 >
@@ -286,11 +289,11 @@ const LibraryHome: React.FC = () => {
               <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
                 <div style={{ color: 'var(--accent)' }}><PdfCardIcon /></div>
                 <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ fontSize: '13px', fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{item.name}</div>
-                  <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: 2 }}>{item.pageCount} 页 · {formatBytes(item.sizeBytes)}</div>
+                  <div style={{ fontSize: fs(13, gfs), fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{item.name}</div>
+                  <div style={{ fontSize: fs(11, gfs), color: 'var(--text-muted)', marginTop: 2 }}>{item.pageCount} 页 · {formatBytes(item.sizeBytes)}</div>
                 </div>
               </div>
-              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '11px', color: 'var(--text-muted)' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: fs(11, gfs), color: 'var(--text-muted)' }}>
                 <span>{item.categoryId ? (categories.find((c) => c.id === item.categoryId)?.name ?? '') : ''}</span>
                 <span>{relativeTime(item.lastOpened)}</span>
               </div>
@@ -305,7 +308,7 @@ const LibraryHome: React.FC = () => {
           style={{
             position: 'fixed', left: cardMenu.x, top: cardMenu.y, zIndex: 2000, minWidth: 160,
             background: 'var(--dropdown-bg, rgba(30,30,50,0.98))', border: '1px solid var(--glass-border)',
-            borderRadius: '8px', padding: 4, boxShadow: 'var(--glass-shadow)', fontSize: '12px',
+            borderRadius: '8px', padding: 4, boxShadow: 'var(--glass-shadow)', fontSize: fs(12, gfs),
           }}
           onClick={(e) => e.stopPropagation()}
         >
@@ -373,7 +376,7 @@ const LibraryHome: React.FC = () => {
           style={{
             position: 'fixed', left: categoryMenu.x, top: categoryMenu.y, zIndex: 2000, minWidth: 150,
             background: 'var(--dropdown-bg, rgba(30,30,50,0.98))', border: '1px solid var(--glass-border)',
-            borderRadius: '8px', padding: 4, boxShadow: 'var(--glass-shadow)', fontSize: '12px',
+            borderRadius: '8px', padding: 4, boxShadow: 'var(--glass-shadow)', fontSize: fs(12, gfs),
           }}
           onClick={(e) => e.stopPropagation()}
         >
@@ -419,10 +422,10 @@ const LibraryHome: React.FC = () => {
               if (e.key === 'Enter') { if (renameVal.trim()) usePdfLibrary.getState().renameCategory(renamingCat.id, renameVal.trim()); setRenamingCat(null); }
               if (e.key === 'Escape') setRenamingCat(null);
             }}
-            style={{ padding: '5px 8px', borderRadius: '6px', border: '1px solid var(--glass-border)', background: 'var(--glass-bg-light)', color: 'var(--text-primary)', fontSize: '12px', fontFamily: 'inherit', outline: 'none', width: 130 }}
+            style={{ padding: '5px 8px', borderRadius: '6px', border: '1px solid var(--glass-border)', background: 'var(--glass-bg-light)', color: 'var(--text-primary)', fontSize: fs(12, gfs), fontFamily: 'inherit', outline: 'none', width: 130 }}
           />
           <button onClick={() => { if (renameVal.trim()) usePdfLibrary.getState().renameCategory(renamingCat.id, renameVal.trim()); setRenamingCat(null); }}
-            style={{ padding: '5px 10px', borderRadius: '6px', border: 'none', background: 'var(--accent)', color: '#fff', cursor: 'pointer', fontSize: '12px', fontFamily: 'inherit' }}>
+            style={{ padding: '5px 10px', borderRadius: '6px', border: 'none', background: 'var(--accent)', color: '#fff', cursor: 'pointer', fontSize: fs(12, gfs), fontFamily: 'inherit' }}>
             确定
           </button>
         </div>
@@ -438,20 +441,20 @@ const LibraryHome: React.FC = () => {
           <div style={{
             padding: '22px 24px', borderRadius: '12px', maxWidth: 380,
             background: 'var(--glass-bg)', backdropFilter: 'blur(16px)', border: '1px solid var(--glass-border)',
-            boxShadow: 'var(--glass-shadow)', color: 'var(--text-primary)', fontSize: '13px', lineHeight: 1.7,
+            boxShadow: 'var(--glass-shadow)', color: 'var(--text-primary)', fontSize: fs(13, gfs), lineHeight: 1.7,
           }}>
-            <div style={{ fontWeight: 600, marginBottom: 8, fontSize: '14px' }}>找不到 PDF 文件</div>
+            <div style={{ fontWeight: 600, marginBottom: 8, fontSize: fs(14, gfs) }}>找不到 PDF 文件</div>
             <div style={{ color: 'var(--text-secondary)' }}>
               文件可能已被移动或删除：<br />
-              <span style={{ fontFamily: 'monospace', fontSize: '11px', wordBreak: 'break-all' }}>{missingItem.name}</span>
+              <span style={{ fontFamily: 'monospace', fontSize: fs(11, gfs), wordBreak: 'break-all' }}>{missingItem.name}</span>
             </div>
             <div style={{ marginTop: '18px', display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
               <button onClick={() => setMissingItem(null)}
-                style={{ padding: '7px 14px', borderRadius: '6px', cursor: 'pointer', fontFamily: 'inherit', fontSize: '12px', border: '1px solid var(--glass-border)', background: 'var(--glass-bg-light)', color: 'var(--text-secondary)' }}>
+                style={{ padding: '7px 14px', borderRadius: '6px', cursor: 'pointer', fontFamily: 'inherit', fontSize: fs(12, gfs), border: '1px solid var(--glass-border)', background: 'var(--glass-bg-light)', color: 'var(--text-secondary)' }}>
                 取消
               </button>
               <button onClick={doReselect}
-                style={{ padding: '7px 14px', borderRadius: '6px', cursor: 'pointer', fontFamily: 'inherit', fontSize: '12px', border: 'none', background: 'var(--accent)', color: '#fff' }}>
+                style={{ padding: '7px 14px', borderRadius: '6px', cursor: 'pointer', fontFamily: 'inherit', fontSize: fs(12, gfs), border: 'none', background: 'var(--accent)', color: '#fff' }}>
                 重新选择文件
               </button>
             </div>
@@ -463,6 +466,7 @@ const LibraryHome: React.FC = () => {
 };
 
 function MenuItem({ children, onClick, danger }: { children: React.ReactNode; onClick: () => void; danger?: boolean }) {
+  const gfs = useNoteStore((s) => s.settings.fontSize);
   return (
     <button
       onClick={onClick}
@@ -470,7 +474,7 @@ function MenuItem({ children, onClick, danger }: { children: React.ReactNode; on
         display: 'block', width: '100%', textAlign: 'left', padding: '6px 10px',
         borderRadius: '6px', border: 'none', background: 'transparent',
         color: danger ? '#ff8a8a' : 'var(--text-secondary)', cursor: 'pointer',
-        fontSize: '12px', fontFamily: 'inherit', whiteSpace: 'nowrap',
+        fontSize: fs(12, gfs), fontFamily: 'inherit', whiteSpace: 'nowrap',
       }}
       onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--glass-bg-hover)'; }}
       onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}

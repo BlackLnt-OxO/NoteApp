@@ -8,6 +8,8 @@
  */
 
 import React, { useState, useEffect } from 'react';
+import { useNoteStore } from "../../store";
+import { fs } from "../../utils";
 import { useCanvasLibrary } from './useCanvasLibrary';
 import FlowGrid from '../FlowGrid';
 import { askConfirm } from '../ConfirmDialog';
@@ -28,15 +30,19 @@ const fmtTime = (t: number): string => {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
 };
 
-const MenuItem: React.FC<{ onClick: () => void; danger?: boolean; children: React.ReactNode }> = ({ onClick, danger, children }) => (
-  <button onClick={onClick} style={{
-    display: 'block', width: '100%', textAlign: 'left', padding: '8px 12px', borderRadius: '6px',
-    cursor: 'pointer', color: danger ? 'var(--danger)' : 'var(--text-primary)',
-    fontSize: '12px', fontFamily: 'inherit', border: 'none', background: 'transparent',
-  }}>{children}</button>
-);
+const MenuItem: React.FC<{ onClick: () => void; danger?: boolean; children: React.ReactNode }> = ({ onClick, danger, children }) => {
+  const gfs = useNoteStore((s) => s.settings.fontSize);
+  return (
+    <button onClick={onClick} style={{
+      display: 'block', width: '100%', textAlign: 'left', padding: '8px 12px', borderRadius: '6px',
+      cursor: 'pointer', color: danger ? 'var(--danger)' : 'var(--text-primary)',
+      fontSize: fs(12, gfs), fontFamily: 'inherit', border: 'none', background: 'transparent',
+    }}>{children}</button>
+  );
+};
 
 const CanvasHome: React.FC<{ onOpen: (id: string) => void; onNew: () => void }> = ({ onOpen, onNew }) => {
+  const gfs = useNoteStore((s) => s.settings.fontSize);
   const canvases = useCanvasLibrary((s) => s.canvases);
   const categories = useCanvasLibrary((s) => s.categories);
   const renameCanvas = useCanvasLibrary((s) => s.renameCanvas);
@@ -67,7 +73,7 @@ const CanvasHome: React.FC<{ onOpen: (id: string) => void; onNew: () => void }> 
     : canvases;
 
   const chipStyle = (active: boolean): React.CSSProperties => ({
-    padding: '5px 12px', borderRadius: '14px', cursor: 'pointer', fontSize: '12px',
+    padding: '5px 12px', borderRadius: '14px', cursor: 'pointer', fontSize: fs(12, gfs),
     fontFamily: 'inherit', border: active ? 'none' : '1px solid var(--glass-border)',
     background: active ? 'var(--accent)' : 'var(--glass-bg-light)',
     color: active ? '#fff' : 'var(--text-secondary)',
@@ -88,11 +94,11 @@ const CanvasHome: React.FC<{ onOpen: (id: string) => void; onNew: () => void }> 
     }}>
       {/* Header */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 20 }}>
-        <span style={{ fontSize: '18px', fontWeight: 600 }}>画布</span>
+        <span style={{ fontSize: fs(18, gfs), fontWeight: 600 }}>画布</span>
         <button onClick={onNew} style={{
           marginLeft: 'auto', padding: '8px 18px', borderRadius: '8px',
           background: 'var(--accent)', border: 'none', color: '#fff', cursor: 'pointer',
-          fontSize: '13px', fontWeight: 600, fontFamily: 'inherit',
+          fontSize: fs(13, gfs), fontWeight: 600, fontFamily: 'inherit',
         }}>+ 新建画布</button>
       </div>
 
@@ -123,14 +129,14 @@ const CanvasHome: React.FC<{ onOpen: (id: string) => void; onNew: () => void }> 
               onChange={(e) => setNewCatName(e.target.value)}
               onKeyDown={(e) => { if (e.key === 'Enter') createCategory(); if (e.key === 'Escape') setCreatingCat(false); }}
               placeholder="分类名称"
-              style={{ padding: '5px 10px', borderRadius: '6px', border: '1px solid var(--glass-border)', background: 'var(--glass-bg-light)', color: 'var(--text-primary)', fontSize: '12px', fontFamily: 'inherit', outline: 'none', width: 120 }}
+              style={{ padding: '5px 10px', borderRadius: '6px', border: '1px solid var(--glass-border)', background: 'var(--glass-bg-light)', color: 'var(--text-primary)', fontSize: fs(12, gfs), fontFamily: 'inherit', outline: 'none', width: 120 }}
             />
-            <button onClick={createCategory} style={{ padding: '5px 10px', borderRadius: '6px', border: 'none', background: 'var(--accent)', color: '#fff', cursor: 'pointer', fontSize: '12px', fontFamily: 'inherit' }}>添加</button>
+            <button onClick={createCategory} style={{ padding: '5px 10px', borderRadius: '6px', border: 'none', background: 'var(--accent)', color: '#fff', cursor: 'pointer', fontSize: fs(12, gfs), fontFamily: 'inherit' }}>添加</button>
           </div>
         ) : (
           <button onClick={() => setCreatingCat(true)} title="新建分类"
             style={{
-              width: 26, height: 26, borderRadius: '50%', cursor: 'pointer', fontSize: '14px',
+              width: 26, height: 26, borderRadius: '50%', cursor: 'pointer', fontSize: fs(14, gfs),
               border: '1px dashed var(--glass-border)', background: 'transparent', color: 'var(--text-muted)',
               display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: 'inherit',
             }}>
@@ -141,7 +147,7 @@ const CanvasHome: React.FC<{ onOpen: (id: string) => void; onNew: () => void }> 
 
       {/* Empty state */}
       {filtered.length === 0 && (
-        <div style={{ padding: '60px 0', textAlign: 'center', color: 'var(--text-muted)', fontSize: '13px' }}>
+        <div style={{ padding: '60px 0', textAlign: 'center', color: 'var(--text-muted)', fontSize: fs(13, gfs) }}>
           {canvases.length === 0 ? '还没有画布，点击右上角「+ 新建画布」开始。' : '这个分类下还没有画布。'}
         </div>
       )}
@@ -199,7 +205,7 @@ const CanvasHome: React.FC<{ onOpen: (id: string) => void; onNew: () => void }> 
                     }}
                     style={{
                       width: 22, height: 22, borderRadius: '50%', border: 'none', cursor: 'pointer',
-                      background: 'rgba(231,76,60,0.8)', color: '#fff', fontSize: '12px', lineHeight: 1,
+                      background: 'rgba(231,76,60,0.8)', color: '#fff', fontSize: fs(12, gfs), lineHeight: 1,
                       display: 'flex', alignItems: 'center', justifyContent: 'center',
                     }}
                   >
@@ -223,20 +229,20 @@ const CanvasHome: React.FC<{ onOpen: (id: string) => void; onNew: () => void }> 
                       onBlur={() => setRenamingId(null)}
                       onClick={(e) => e.stopPropagation()}
                       style={{
-                        width: '100%', padding: '3px 6px', fontSize: '13px', fontFamily: 'inherit',
+                        width: '100%', padding: '3px 6px', fontSize: fs(13, gfs), fontFamily: 'inherit',
                         background: 'var(--glass-bg-light)', color: 'var(--text-primary)',
                         border: '1px solid var(--accent)', borderRadius: '6px', outline: 'none',
                       }}
                     />
                   ) : (
-                    <div style={{ fontSize: '13px', fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{c.name}</div>
+                    <div style={{ fontSize: fs(13, gfs), fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{c.name}</div>
                   )}
-                  <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: 2 }}>
+                  <div style={{ fontSize: fs(11, gfs), color: 'var(--text-muted)', marginTop: 2 }}>
                     {c.categoryId ? (categories.find((cat) => cat.id === c.categoryId)?.name ?? '') : '未分类'}
                   </div>
                 </div>
               </div>
-              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '11px', color: 'var(--text-muted)' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: fs(11, gfs), color: 'var(--text-muted)' }}>
                 <span>{fmtTime(c.updatedAt)}</span>
               </div>
             </div>
@@ -249,7 +255,7 @@ const CanvasHome: React.FC<{ onOpen: (id: string) => void; onNew: () => void }> 
         <div style={{
           position: 'fixed', left: cardMenu.x, top: cardMenu.y, zIndex: 2000, minWidth: 170,
           background: 'var(--dropdown-bg)', border: '1px solid var(--glass-border)',
-          borderRadius: '8px', padding: 4, boxShadow: 'var(--glass-shadow)', fontSize: '12px',
+          borderRadius: '8px', padding: 4, boxShadow: 'var(--glass-shadow)', fontSize: fs(12, gfs),
         }} onClick={(e) => e.stopPropagation()}>
           <MenuItem onClick={() => { onOpen(cardMenu.id); setCardMenu(null); }}>打开</MenuItem>
           <MenuItem onClick={() => setAddToCatOpen((v) => !v)}>添加到分类 ▸</MenuItem>
@@ -293,7 +299,7 @@ const CanvasHome: React.FC<{ onOpen: (id: string) => void; onNew: () => void }> 
         <div style={{
           position: 'fixed', left: catMenu.x, top: catMenu.y, zIndex: 2000, minWidth: 150,
           background: 'var(--dropdown-bg)', border: '1px solid var(--glass-border)',
-          borderRadius: '8px', padding: 4, boxShadow: 'var(--glass-shadow)', fontSize: '12px',
+          borderRadius: '8px', padding: 4, boxShadow: 'var(--glass-shadow)', fontSize: fs(12, gfs),
         }} onClick={(e) => e.stopPropagation()}>
           <MenuItem onClick={() => {
             const name = prompt('重命名分类', catMenu.name);

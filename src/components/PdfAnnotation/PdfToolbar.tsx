@@ -7,6 +7,8 @@
  */
 
 import React, { useState } from 'react';
+import { useNoteStore } from "../../store";
+import { fs } from "../../utils";
 import { usePdfStore } from './PdfStore';
 import { askConfirm } from '../ConfirmDialog';
 import type { PdfTool } from './PdfTypes';
@@ -69,6 +71,7 @@ interface ExpandableToolButtonProps {
 }
 
 const ExpandableToolButton: React.FC<ExpandableToolButtonProps> = ({ label, Icon, active, onMain, options }) => {
+  const gfs = useNoteStore((s) => s.settings.fontSize);
   const [open, setOpen] = useState(false);
 
   return (
@@ -82,7 +85,7 @@ const ExpandableToolButton: React.FC<ExpandableToolButtonProps> = ({ label, Icon
           border: active ? 'none' : '1px solid var(--glass-border)',
           borderRadius: '6px', color: active ? '#fff' : 'var(--text-secondary)',
           cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center',
-          gap: '3px', fontFamily: 'inherit', fontSize: '10px',
+          gap: '3px', fontFamily: 'inherit', fontSize: fs(10, gfs),
           transition: 'all var(--transition, 0.2s ease)',
         }}
       >
@@ -113,7 +116,7 @@ const ExpandableToolButton: React.FC<ExpandableToolButtonProps> = ({ label, Icon
                 textAlign: 'left', padding: '6px 8px', border: 0, borderRadius: '6px',
                 background: o.active ? 'var(--accent)' : 'transparent',
                 color: o.active ? '#fff' : 'var(--text-secondary)', cursor: 'pointer',
-                fontSize: '10px', fontFamily: 'inherit', whiteSpace: 'nowrap',
+                fontSize: fs(10, gfs), fontFamily: 'inherit', whiteSpace: 'nowrap',
               }}>
               {o.label}
             </button>
@@ -127,6 +130,7 @@ const ExpandableToolButton: React.FC<ExpandableToolButtonProps> = ({ label, Icon
 // ---- Simple tool button ------------------------------------------------------
 
 function SimpleToolButton({ label, Icon, active, onClick }: { label: string; Icon: React.FC; active: boolean; onClick: () => void }) {
+  const gfs = useNoteStore((s) => s.settings.fontSize);
   return (
     <button onClick={onClick} title={label}
       style={{
@@ -135,7 +139,7 @@ function SimpleToolButton({ label, Icon, active, onClick }: { label: string; Ico
         border: active ? 'none' : '1px solid var(--glass-border)', borderRadius: '6px',
         color: active ? '#fff' : 'var(--text-secondary)', cursor: 'pointer',
         display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '3px',
-        fontFamily: 'inherit', fontSize: '10px', transition: 'all var(--transition, 0.2s ease)',
+        fontFamily: 'inherit', fontSize: fs(10, gfs), transition: 'all var(--transition, 0.2s ease)',
       }}>
       <Icon /><span style={{ whiteSpace: 'nowrap' }}>{label}</span>
     </button>
@@ -144,13 +148,14 @@ function SimpleToolButton({ label, Icon, active, onClick }: { label: string; Ico
 
 // ---- Styles ------------------------------------------------------------------
 
-const labelStyle: React.CSSProperties = { fontSize: '10px', color: 'var(--text-secondary)', marginBottom: '1px', display: 'flex', justifyContent: 'space-between' };
+const labelStyle = (gfs: number): React.CSSProperties => ({ fontSize: fs(10, gfs), color: 'var(--text-secondary)', marginBottom: '1px', display: 'flex', justifyContent: 'space-between' });
 const sectionStyle: React.CSSProperties = { marginBottom: '10px' };
 const trackStyle: React.CSSProperties = { width: '100%', height: '4px', WebkitAppearance: 'none', appearance: 'none' as any, background: 'var(--glass-bg-light)', borderRadius: '2px', outline: 'none', cursor: 'pointer', margin: '2px 0 6px 0' };
 
 // ---- Component ---------------------------------------------------------------
 
 const PdfToolbar: React.FC = () => {
+  const gfs = useNoteStore((s) => s.settings.fontSize);
   const {
     activeTool, brush, eraserMode, selectionMode, history, redoStack, currentPage, showDotGrid,
     setActiveTool, setBrush, setEraserMode, setSelectionMode, setShowDotGrid, undo, redo, clearPage,
@@ -187,7 +192,7 @@ const PdfToolbar: React.FC = () => {
 
       {/* ---- Color palette ---- */}
       <div style={sectionStyle}>
-        <div style={labelStyle}><span>颜色</span></div>
+        <div style={labelStyle(gfs)}><span>颜色</span></div>
         <div style={{ display: 'flex', gap: '2px', flexWrap: 'wrap', marginBottom: '6px' }}>
           {PRESET_COLORS.map((c) => (
             <button key={c} onClick={() => update({ color: c })} title={c}
@@ -204,25 +209,25 @@ const PdfToolbar: React.FC = () => {
 
       {/* ---- Brush Size ---- */}
       <div style={sectionStyle}>
-        <div style={labelStyle}><span>大小</span><span>{brush.size}</span></div>
+        <div style={labelStyle(gfs)}><span>大小</span><span>{brush.size}</span></div>
         <input type="range" min={1} max={100} value={brush.size} onChange={(e) => update({ size: Number(e.target.value) })} style={trackStyle} />
       </div>
 
       {/* ---- Opacity ---- */}
       <div style={sectionStyle}>
-        <div style={labelStyle}><span>透明度</span><span>{Math.round(brush.opacity * 100)}%</span></div>
+        <div style={labelStyle(gfs)}><span>透明度</span><span>{Math.round(brush.opacity * 100)}%</span></div>
         <input type="range" min={1} max={100} value={Math.round(brush.opacity * 100)} onChange={(e) => update({ opacity: Number(e.target.value) / 100 })} style={trackStyle} />
       </div>
 
       {/* ---- Smoothing ---- */}
       <div style={sectionStyle}>
-        <div style={labelStyle}><span>平滑</span><span>{Math.round(brush.smoothing * 100)}%</span></div>
+        <div style={labelStyle(gfs)}><span>平滑</span><span>{Math.round(brush.smoothing * 100)}%</span></div>
         <input type="range" min={0} max={100} value={Math.round(brush.smoothing * 100)} onChange={(e) => update({ smoothing: Number(e.target.value) / 100 })} style={trackStyle} />
       </div>
 
       {/* ---- Dot grid show/hide ---- */}
       <div style={sectionStyle}>
-        <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '11px', color: 'var(--text-secondary)', cursor: 'pointer' }}>
+        <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: fs(11, gfs), color: 'var(--text-secondary)', cursor: 'pointer' }}>
           <input type="checkbox" checked={showDotGrid} onChange={(e) => setShowDotGrid(e.target.checked)} style={{ accentColor: 'var(--accent)' }} />
           显示点阵背景
         </label>
@@ -230,10 +235,10 @@ const PdfToolbar: React.FC = () => {
 
       {/* ---- Undo / Redo ---- */}
       <div style={{ display: 'flex', gap: '4px', marginBottom: '6px' }}>
-        <button onClick={undo} disabled={!canUndo} style={{ flex: 1, padding: '5px 8px', background: 'var(--glass-bg-light)', border: '1px solid var(--glass-border)', borderRadius: '6px', color: 'var(--text-secondary)', cursor: canUndo ? 'pointer' : 'default', fontSize: '11px', fontFamily: 'inherit', opacity: canUndo ? 1 : 0.35, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '3px' }}>
+        <button onClick={undo} disabled={!canUndo} style={{ flex: 1, padding: '5px 8px', background: 'var(--glass-bg-light)', border: '1px solid var(--glass-border)', borderRadius: '6px', color: 'var(--text-secondary)', cursor: canUndo ? 'pointer' : 'default', fontSize: fs(11, gfs), fontFamily: 'inherit', opacity: canUndo ? 1 : 0.35, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '3px' }}>
           <UndoIcon />撤销
         </button>
-        <button onClick={redo} disabled={!canRedo} style={{ flex: 1, padding: '5px 8px', background: 'var(--glass-bg-light)', border: '1px solid var(--glass-border)', borderRadius: '6px', color: 'var(--text-secondary)', cursor: canRedo ? 'pointer' : 'default', fontSize: '11px', fontFamily: 'inherit', opacity: canRedo ? 1 : 0.35, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '3px' }}>
+        <button onClick={redo} disabled={!canRedo} style={{ flex: 1, padding: '5px 8px', background: 'var(--glass-bg-light)', border: '1px solid var(--glass-border)', borderRadius: '6px', color: 'var(--text-secondary)', cursor: canRedo ? 'pointer' : 'default', fontSize: fs(11, gfs), fontFamily: 'inherit', opacity: canRedo ? 1 : 0.35, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '3px' }}>
           <RedoIcon />重做
         </button>
       </div>
@@ -250,7 +255,7 @@ const PdfToolbar: React.FC = () => {
         style={{
           width: '100%', padding: '5px 8px', background: 'var(--glass-bg-light)',
           border: '1px solid rgba(231,76,60,0.3)', borderRadius: '6px',
-          color: 'var(--danger, #e74c3c)', cursor: 'pointer', fontSize: '11px', fontFamily: 'inherit',
+          color: 'var(--danger, #e74c3c)', cursor: 'pointer', fontSize: fs(11, gfs), fontFamily: 'inherit',
           display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '4px',
         }}>
         <TrashIcon />清空本页
