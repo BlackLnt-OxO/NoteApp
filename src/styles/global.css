@@ -28,6 +28,10 @@
   --radius-xl: 20px;
   --transition: 0.2s cubic-bezier(0.4, 0, 0.2, 1);
   --transition-slow: 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  /* Button hover language: glow follows the button's own base tone. */
+  --ring-on-dark: rgba(255, 255, 255, 0.45); /* solid/dark buttons → light ring */
+  --ring-on-light: rgba(0, 0, 0, 0.3);       /* light/glass buttons → dark ring */
+  --btn-scale: 1.03;
 }
 
 [data-theme="light"] {
@@ -123,28 +127,27 @@ body {
   font-family: inherit;
 }
 
-.glass-btn:hover {
-  background: var(--glass-bg-hover);
+/* Hover language: border highlight + a soft outer glow + a slight raise.
+   Background is left untouched. Two tones by the button's own base:
+   light/glass → dark glow; solid/dark → light glow. Disabled buttons never glow. */
+.glass-btn:hover:not(:disabled) {
   border-color: var(--glass-border-active);
+  box-shadow: 0 0 0 1px var(--ring-on-light), 0 4px 14px rgba(0, 0, 0, 0.22);
+  transform: scale(var(--btn-scale));
 }
 
-.glass-btn:active {
-  transform: scale(0.97);
-}
+.glass-btn:active { transform: scale(0.97); }
 
-/* Button hover language — highlight follows the button's own color, echoing the
-   sidebar tag rows: a background + border glow (keeps white/on-color text legible
-   and contrast strong). Ghost/glass buttons use .glass-btn (already handled). */
 .btn-accent {
   background: var(--accent);
   color: #fff;
   border: 1px solid transparent;
   transition: all var(--transition);
 }
-.btn-accent:hover {
-  background: var(--accent-hover);
-  border-color: rgba(255, 255, 255, 0.28);
-  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.12);
+.btn-accent:hover:not(:disabled) {
+  border-color: rgba(255, 255, 255, 0.35);
+  box-shadow: 0 0 0 1px var(--ring-on-dark), 0 0 12px rgba(255, 255, 255, 0.18);
+  transform: scale(var(--btn-scale));
 }
 .btn-accent:active { transform: scale(0.97); }
 
@@ -154,12 +157,33 @@ body {
   border: 1px solid transparent;
   transition: all var(--transition);
 }
-.btn-danger:hover {
-  background: var(--danger-hover);
-  border-color: rgba(255, 255, 255, 0.28);
-  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.12);
+.btn-danger:hover:not(:disabled) {
+  border-color: rgba(255, 255, 255, 0.35);
+  box-shadow: 0 0 0 1px var(--ring-on-dark), 0 0 12px rgba(255, 255, 255, 0.18);
+  transform: scale(var(--btn-scale));
 }
 .btn-danger:active { transform: scale(0.97); }
+
+/* Lightweight hover ring for inline-styled buttons (no background change —
+   only an outer ring/glow + a slight raise). Pick by the button's own tone:
+   light/transparent → .hover-ring-light (dark ring); solid/dark → .hover-ring-dark (light ring). */
+.hover-ring-light {
+  transition: all var(--transition);
+}
+.hover-ring-light:hover:not(:disabled) {
+  box-shadow: 0 0 0 1px var(--ring-on-light), 0 4px 14px rgba(0, 0, 0, 0.22);
+  transform: scale(var(--btn-scale));
+}
+.hover-ring-light:active { transform: scale(0.97); }
+
+.hover-ring-dark {
+  transition: all var(--transition);
+}
+.hover-ring-dark:hover:not(:disabled) {
+  box-shadow: 0 0 0 1px var(--ring-on-dark), 0 0 12px rgba(255, 255, 255, 0.18);
+  transform: scale(var(--btn-scale));
+}
+.hover-ring-dark:active { transform: scale(0.97); }
 
 .glass-input {
   background: var(--glass-bg-light);

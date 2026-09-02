@@ -79,6 +79,7 @@ const ExpandableToolButton: React.FC<ExpandableToolButtonProps> = ({ label, Icon
       <button
         onClick={onMain}
         title={label}
+        className={active ? 'hover-ring-dark' : 'hover-ring-light'}
         style={{
           flex: 1, padding: '7px 6px', paddingRight: 14,
           background: active ? 'var(--accent)' : 'var(--glass-bg-light)',
@@ -86,7 +87,6 @@ const ExpandableToolButton: React.FC<ExpandableToolButtonProps> = ({ label, Icon
           borderRadius: '6px', color: active ? '#fff' : 'var(--text-secondary)',
           cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center',
           gap: '3px', fontFamily: 'inherit', fontSize: fs(10, gfs),
-          transition: 'all var(--transition, 0.2s ease)',
         }}
       >
         <Icon /><span style={{ whiteSpace: 'nowrap' }}>{label}</span>
@@ -132,14 +132,14 @@ const ExpandableToolButton: React.FC<ExpandableToolButtonProps> = ({ label, Icon
 function SimpleToolButton({ label, Icon, active, onClick }: { label: string; Icon: React.FC; active: boolean; onClick: () => void }) {
   const gfs = useNoteStore((s) => s.settings.fontSize);
   return (
-    <button onClick={onClick} title={label}
+    <button onClick={onClick} title={label} className={active ? 'hover-ring-dark' : 'hover-ring-light'}
       style={{
         flex: '1 1 auto', minWidth: 32, padding: '7px 6px',
         background: active ? 'var(--accent)' : 'var(--glass-bg-light)',
         border: active ? 'none' : '1px solid var(--glass-border)', borderRadius: '6px',
         color: active ? '#fff' : 'var(--text-secondary)', cursor: 'pointer',
         display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '3px',
-        fontFamily: 'inherit', fontSize: fs(10, gfs), transition: 'all var(--transition, 0.2s ease)',
+        fontFamily: 'inherit', fontSize: fs(10, gfs),
       }}>
       <Icon /><span style={{ whiteSpace: 'nowrap' }}>{label}</span>
     </button>
@@ -235,10 +235,10 @@ const PdfToolbar: React.FC = () => {
 
       {/* ---- Undo / Redo ---- */}
       <div style={{ display: 'flex', gap: '4px', marginBottom: '6px' }}>
-        <button onClick={undo} disabled={!canUndo} style={{ flex: 1, padding: '5px 8px', background: 'var(--glass-bg-light)', border: '1px solid var(--glass-border)', borderRadius: '6px', color: 'var(--text-secondary)', cursor: canUndo ? 'pointer' : 'default', fontSize: fs(11, gfs), fontFamily: 'inherit', opacity: canUndo ? 1 : 0.35, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '3px' }}>
+        <button onClick={undo} disabled={!canUndo} className="hover-ring-light" style={{ flex: 1, padding: '5px 8px', background: 'var(--glass-bg-light)', border: '1px solid var(--glass-border)', borderRadius: '6px', color: 'var(--text-secondary)', cursor: canUndo ? 'pointer' : 'default', fontSize: fs(11, gfs), fontFamily: 'inherit', opacity: canUndo ? 1 : 0.35, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '3px' }}>
           <UndoIcon />撤销
         </button>
-        <button onClick={redo} disabled={!canRedo} style={{ flex: 1, padding: '5px 8px', background: 'var(--glass-bg-light)', border: '1px solid var(--glass-border)', borderRadius: '6px', color: 'var(--text-secondary)', cursor: canRedo ? 'pointer' : 'default', fontSize: fs(11, gfs), fontFamily: 'inherit', opacity: canRedo ? 1 : 0.35, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '3px' }}>
+        <button onClick={redo} disabled={!canRedo} className="hover-ring-light" style={{ flex: 1, padding: '5px 8px', background: 'var(--glass-bg-light)', border: '1px solid var(--glass-border)', borderRadius: '6px', color: 'var(--text-secondary)', cursor: canRedo ? 'pointer' : 'default', fontSize: fs(11, gfs), fontFamily: 'inherit', opacity: canRedo ? 1 : 0.35, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '3px' }}>
           <RedoIcon />重做
         </button>
       </div>

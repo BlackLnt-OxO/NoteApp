@@ -96,8 +96,7 @@ const Sidebar: React.FC<SidebarProps> = ({ onCreateNote }) => {
           <button
             key={m.id}
             onClick={() => setViewMode(m.id)}
-            onMouseEnter={(e) => { if (viewMode !== m.id) e.currentTarget.style.background = 'rgba(107,92,231,0.18)'; }}
-            onMouseLeave={(e) => { if (viewMode !== m.id) e.currentTarget.style.background = 'var(--glass-bg-light)'; }}
+            className={viewMode === m.id ? 'hover-ring-dark' : 'hover-ring-light'}
             style={{
               flex: 1,
               padding: '5px 6px',
@@ -108,7 +107,6 @@ const Sidebar: React.FC<SidebarProps> = ({ onCreateNote }) => {
               cursor: 'pointer',
               fontSize: Math.max(9, fs - 3) + 'px',
               fontFamily: 'inherit',
-              transition: 'all var(--transition)',
               fontWeight: viewMode === m.id ? 600 : 400,
             }}
           >
@@ -305,6 +303,7 @@ const Sidebar: React.FC<SidebarProps> = ({ onCreateNote }) => {
         ) : (
           <button
             onClick={() => setShowAddTag(true)}
+            className="hover-ring-light"
             style={{
               display: 'flex',
               alignItems: 'center',
@@ -317,15 +316,6 @@ const Sidebar: React.FC<SidebarProps> = ({ onCreateNote }) => {
               cursor: 'pointer',
               fontSize: Math.max(10, fs - 2) + 'px',
               fontFamily: 'inherit',
-              transition: 'all var(--transition)',
-            }}
-            onMouseEnter={(e) => {
-              e.currentTarget.style.borderColor = 'var(--glass-border-active)';
-              e.currentTarget.style.color = 'var(--text-secondary)';
-            }}
-            onMouseLeave={(e) => {
-              e.currentTarget.style.borderColor = 'var(--glass-border)';
-              e.currentTarget.style.color = 'var(--text-muted)';
             }}
           >
             + 添加标签
@@ -339,6 +329,7 @@ const Sidebar: React.FC<SidebarProps> = ({ onCreateNote }) => {
           onClick={() => {
             window.electronAPI?.startScreenshot();
           }}
+          className="hover-ring-light"
           style={{
             width: '100%',
             padding: '9px',
@@ -352,16 +343,7 @@ const Sidebar: React.FC<SidebarProps> = ({ onCreateNote }) => {
             alignItems: 'center',
             justifyContent: 'center',
             gap: '5px',
-            transition: 'all var(--transition)',
             fontFamily: 'inherit',
-          }}
-          onMouseEnter={(e) => {
-            e.currentTarget.style.background = 'var(--glass-bg-hover)';
-            e.currentTarget.style.color = 'var(--text-primary)';
-          }}
-          onMouseLeave={(e) => {
-            e.currentTarget.style.background = 'var(--glass-bg-light)';
-            e.currentTarget.style.color = 'var(--text-secondary)';
           }}
         >
           截图
@@ -371,6 +353,7 @@ const Sidebar: React.FC<SidebarProps> = ({ onCreateNote }) => {
           onClick={() => {
             window.electronAPI?.startLongScreenshot();
           }}
+          className="hover-ring-light"
           style={{
             width: '100%',
             padding: '9px',
@@ -384,16 +367,7 @@ const Sidebar: React.FC<SidebarProps> = ({ onCreateNote }) => {
             alignItems: 'center',
             justifyContent: 'center',
             gap: '5px',
-            transition: 'all var(--transition)',
             fontFamily: 'inherit',
-          }}
-          onMouseEnter={(e) => {
-            e.currentTarget.style.background = 'var(--glass-bg-hover)';
-            e.currentTarget.style.color = 'var(--text-primary)';
-          }}
-          onMouseLeave={(e) => {
-            e.currentTarget.style.background = 'var(--glass-bg-light)';
-            e.currentTarget.style.color = 'var(--text-secondary)';
           }}
         >
           长截图
