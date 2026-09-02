@@ -354,6 +354,7 @@ const PdfView: React.FC = () => {
 
   return (
     <div style={{ position: 'absolute', inset: 0, overflow: 'hidden', background: 'var(--page-bg)' }}>
+      <div key={fileName || 'home'} className="animate-fade-in" style={{ position: 'absolute', inset: 0 }}>
       {!fileName ? (
         libraryItems.length === 0 ? <ImportScreen /> : <LibraryHome />
       ) : (
@@ -385,6 +386,7 @@ const PdfView: React.FC = () => {
           </div>
         </>
       )}
+      </div>
     </div>
   );
 };

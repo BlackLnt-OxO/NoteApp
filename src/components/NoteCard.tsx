@@ -339,9 +339,12 @@ const NoteCard: React.FC<NoteCardProps> = ({ note, isDragGhost, isExpanded, onDr
         backdropFilter: 'blur(20px)', WebkitBackdropFilter: 'blur(20px)',
         border: isSelected ? '2px solid rgba(255,255,255,0.55)' : '1px solid rgba(255,255,255,0.18)',
         boxShadow: isDragGhost ? '0 16px 48px rgba(0,0,0,0.5)' : isSelected ? '0 10px 32px rgba(0,0,0,0.4)' : '0 4px 12px rgba(0,0,0,0.2)',
-        display: 'flex', flexDirection: 'column', transition: 'box-shadow 0.2s, border 0.2s',
+        display: 'flex', flexDirection: 'column',
+        transition: 'box-shadow 0.2s, border 0.2s, transform 0.2s, width 0.2s, height 0.2s',
         position: 'relative', userSelect: 'none', overflow: 'hidden',
-      }}>
+      }}
+      onMouseEnter={(e) => { if (!isDragGhost && !showExpanded) { e.currentTarget.style.transform = 'scale(1.012)'; } }}
+      onMouseLeave={(e) => { e.currentTarget.style.transform = 'scale(1)'; }}>
         {/* Header — fixed above scrollable area, always visible */}
         <div onPointerDown={handleHeaderPointerDown} style={{
           display: 'flex', alignItems: 'center', justifyContent: 'space-between',
@@ -360,7 +363,8 @@ const NoteCard: React.FC<NoteCardProps> = ({ note, isDragGhost, isExpanded, onDr
               {QUICK_COLORS.map((c) => (
                 <div key={c} className="color-dot" onClick={(ev) => { ev.stopPropagation(); handleColorChange(c); }}
                   style={{ width: fs(11, gfs), height: fs(11, gfs), borderRadius: '50%', background: c, cursor: 'pointer',
-                    border: note.color === c ? '2px solid white' : '1px solid rgba(255,255,255,0.25)' }} />
+                    border: note.color === c ? '2px solid white' : '1px solid rgba(255,255,255,0.25)',
+                    transition: 'border-color 0.2s, transform 0.2s' }} />
               ))}
             </div>
             <button onClick={(ev) => { ev.stopPropagation(); handlePinToScreen(); }}

@@ -141,17 +141,19 @@ const CanvasView: React.FC = () => {
 
   return (
     <div style={{ position: 'absolute', inset: 0, overflow: 'hidden', background: 'var(--page-bg)' }}>
-      {!currentCanvasId || !current ? (
-        <CanvasHome onOpen={openCanvas} onNew={newCanvas} />
-      ) : (
-        <>
-          <NavBar name={current.name} onHome={goHome} onRename={(name) => renameCanvas(current.id, name)} />
-          <div style={{ position: 'absolute', top: 44, left: 0, right: 0, bottom: 0 }}>
-            <InfiniteInkCanvas />
-          </div>
-          <FullscreenButton />
-        </>
-      )}
+      <div key={currentCanvasId || 'home'} className="animate-fade-in" style={{ position: 'absolute', inset: 0 }}>
+        {!currentCanvasId || !current ? (
+          <CanvasHome onOpen={openCanvas} onNew={newCanvas} />
+        ) : (
+          <>
+            <NavBar name={current.name} onHome={goHome} onRename={(name) => renameCanvas(current.id, name)} />
+            <div style={{ position: 'absolute', top: 44, left: 0, right: 0, bottom: 0 }}>
+              <InfiniteInkCanvas />
+            </div>
+            <FullscreenButton />
+          </>
+        )}
+      </div>
     </div>
   );
 };

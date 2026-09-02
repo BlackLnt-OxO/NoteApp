@@ -61,7 +61,6 @@ const Sidebar: React.FC<SidebarProps> = ({ onCreateNote }) => {
       zIndex: 1,
       overflow: 'hidden',
       background: 'var(--sidebar-bg, var(--glass-bg))',
-      borderRight: '1px solid var(--glass-border)',
     }}>
       {/* Create note button */}
       <button

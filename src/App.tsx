@@ -31,7 +31,7 @@ const App: React.FC = () => {
     const v = parseFloat(localStorage.getItem('sticky-notes-ui-zoom') || '');
     return Number.isFinite(v) && v >= 0.7 && v <= 1.6 ? v : 1;
   });
-  const [uiZoomToast, setUiZoomToast] = useState(0);
+  const [uiZoomToast, setUiZoomToast] = useState({ show: false, value: 0, fading: false });
 
   useEffect(() => { loadData(); }, []);
 
@@ -102,9 +102,13 @@ const App: React.FC = () => {
     setUiScale((prev) => {
       const n = Math.min(1.6, Math.max(0.7, Math.round((prev + delta) * 10) / 10));
       localStorage.setItem('sticky-notes-ui-zoom', String(n));
-      setUiZoomToast(n);
+      // Toast: show immediately, fade out after a beat (mirrors fontToast).
+      setUiZoomToast({ show: true, value: n, fading: false });
       clearTimeout((window as any).__uiZoomTimer);
-      (window as any).__uiZoomTimer = setTimeout(() => setUiZoomToast(0), 1500);
+      (window as any).__uiZoomTimer = setTimeout(() => {
+        setUiZoomToast((prev) => ({ ...prev, fading: true }));
+        setTimeout(() => setUiZoomToast((p) => ({ show: false, value: p.value, fading: false })), 600);
+      }, 1500);
       return n;
     });
   }, []);
@@ -213,22 +217,35 @@ const App: React.FC = () => {
       </div>
 
       <div style={{ flex: 1, display: 'flex', overflow: 'hidden' }}>
-        {!sidebarCollapsed && <Sidebar onCreateNote={() => setShowCreateDialog(true)} />}
+        {/* Sidebar lives in a width-clamping container so collapse/expand gets a
+            smooth height-free width transition (the content area re-flows each
+            frame, and NoteGrid/FlowGrid's left/top transitions animate the cards). */}
+        <div style={{
+          width: sidebarCollapsed ? 0 : 220,
+          overflow: 'hidden', flexShrink: 0,
+          transition: 'width var(--transition-slow)',
+          borderRight: sidebarCollapsed ? 'none' : '1px solid var(--glass-border)',
+        }}>
+          <Sidebar onCreateNote={() => setShowCreateDialog(true)} />
+        </div>
         <div style={{ flex: 1, position: 'relative', overflow: 'hidden', borderRadius: '0 0 12px 0' }}>
-          {viewMode === 'inkcanvas' ? (
-            <CanvasView />
-          ) : viewMode === 'pdf' ? (
-            <PdfView />
-          ) : (
-            <>
-              <div style={{
-                position: 'absolute', inset: 0,
-                background: 'var(--glass-bg)', backdropFilter: 'blur(20px)', WebkitBackdropFilter: 'blur(20px)',
-                borderLeft: '1px solid var(--glass-border)',
-              }} />
-              <NoteGrid />
-            </>
-          )}
+          {/* key=viewMode remounts on switch → the fade-in plays each time. */}
+          <div key={viewMode} className="animate-fade-in" style={{ position: 'absolute', inset: 0 }}>
+            {viewMode === 'inkcanvas' ? (
+              <CanvasView />
+            ) : viewMode === 'pdf' ? (
+              <PdfView />
+            ) : (
+              <>
+                <div style={{
+                  position: 'absolute', inset: 0,
+                  background: 'var(--glass-bg)', backdropFilter: 'blur(20px)', WebkitBackdropFilter: 'blur(20px)',
+                  borderLeft: '1px solid var(--glass-border)',
+                }} />
+                <NoteGrid />
+              </>
+            )}
+          </div>
 
           {/* Sidebar toggle — bottom-left of the content area, stays open-state
               aware (panel icon points left → collapse, right → expand). */}
@@ -298,7 +315,7 @@ const App: React.FC = () => {
           pointerEvents: 'auto',
         }}>{fontToast.size}px</div>
       )}
-      {uiZoomToast > 0 && (
+      {uiZoomToast.show && (
         <div style={{
           position: 'fixed', bottom: '60px', right: '20px', zIndex: 10001,
           background: 'var(--glass-bg)', backdropFilter: 'blur(12px)',
@@ -306,7 +323,9 @@ const App: React.FC = () => {
           padding: '6px 16px', color: 'var(--text-primary)',
           fontSize: '16px', fontWeight: 600, fontFamily: 'inherit',
           boxShadow: 'var(--glass-shadow)',
-        }}>{Math.round(uiZoomToast * 100)}%</div>
+          opacity: uiZoomToast.fading ? 0 : 1,
+          transition: 'opacity 0.5s ease',
+        }}>{Math.round(uiZoomToast.value * 100)}%</div>
       )}
       {showCreateDialog && <CreateNoteDialog onClose={() => setShowCreateDialog(false)} />}
       {showSettings && <SettingsDialog onClose={() => setShowSettings(false)} />}

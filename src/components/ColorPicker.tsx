@@ -114,7 +114,7 @@ export const ColorPicker: React.FC<Props> = ({ color, onChange, gfs }) => {
   );
 
   return (
-    <div onClick={(e)=>e.stopPropagation()} style={{
+    <div onClick={(e)=>e.stopPropagation()} className="animate-scale-in" style={{
       background:'rgba(30,30,30,0.97)', border:'1px solid rgba(255,255,255,0.12)',
       borderRadius:fsn(8,gfs), padding:fs(12,gfs), width:fsn(480,gfs),
       boxShadow:'0 16px 48px rgba(0,0,0,0.5)',
