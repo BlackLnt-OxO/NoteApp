@@ -429,7 +429,17 @@ function setupIPC() {
     }
 
     saveDataDirConfig({ dir: newDir, prevDir: oldDir });
-    relaunch();
+
+    if (isDev) {
+      // Dev: keep the concurrently-launched Vite server alive. Relaunching the
+      // Electron process (spawn/exit) drops the renderer for the moment it hits
+      // localhost:5173, which can come back as a black window. Instead point
+      // userData at the new dir immediately and just reload the renderer.
+      app.setPath('userData', newDir);
+      if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.reload();
+    } else {
+      relaunch();
+    }
     return { changed: true };
   });
 
