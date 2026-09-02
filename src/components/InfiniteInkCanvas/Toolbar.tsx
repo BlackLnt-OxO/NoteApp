@@ -97,6 +97,7 @@ const ExpandableToolButton: React.FC<ExpandableToolButtonProps> = ({ label, Icon
       <button
         onClick={() => setOpen(v => !v)}
         title="更多选项"
+        className="hover-ring-light"
         style={{
           position: 'absolute', right: 2, bottom: 2, width: 12, height: 10,
           padding: 0, border: 0, background: 'transparent', cursor: 'pointer',
@@ -115,6 +116,7 @@ const ExpandableToolButton: React.FC<ExpandableToolButtonProps> = ({ label, Icon
         }}>
           {options.map(o => (
             <button key={o.label} onClick={() => { o.onClick(); setOpen(false); }}
+              className={o.active ? 'hover-ring-dark' : 'hover-ring-light'}
               style={{
                 textAlign: 'left', padding: '6px 8px', border: 0, borderRadius: '6px',
                 background: o.active ? 'var(--accent)' : 'transparent',
@@ -160,8 +162,8 @@ const trackStyle: React.CSSProperties = { width: '100%', height: '4px', WebkitAp
 const Toolbar: React.FC = () => {
   const gfs = useNoteStore((s) => s.settings.fontSize);
   const {
-    activeTool, brushSettings, showDotGrid, selectionMode, eraserMode,
-    setActiveTool, setBrushSettings, setShowDotGrid, setSelectionMode, setEraserMode,
+    activeTool, brushSettings, showDotGrid, selectionMode, eraserMode, insertMode,
+    setActiveTool, setBrushSettings, setShowDotGrid, setSelectionMode, setEraserMode, setInsertMode,
     undo, redo, history, redoStack,
   } = useCanvasStore();
 
@@ -192,7 +194,15 @@ const Toolbar: React.FC = () => {
             { label: '擦除笔画', active: eraserMode === 'stroke', onClick: () => { setActiveTool('eraser'); setEraserMode('stroke'); } },
           ]}
         />
-        <SimpleToolButton label="文本" Icon={TextIcon} active={activeTool === 'text'} onClick={() => setActiveTool('text')} />
+        <ExpandableToolButton
+          label="插入" Icon={TextIcon}
+          active={activeTool === 'insert'}
+          onMain={() => { setActiveTool('insert'); setInsertMode('text'); }}
+          options={[
+            { label: '文本框', active: insertMode === 'text', onClick: () => { setActiveTool('insert'); setInsertMode('text'); } },
+            { label: '图片', active: insertMode === 'image', onClick: () => { setActiveTool('insert'); setInsertMode('image'); } },
+          ]}
+        />
       </div>
 
       {/* ---- Color palette ---- */}

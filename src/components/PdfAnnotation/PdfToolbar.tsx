@@ -94,6 +94,7 @@ const ExpandableToolButton: React.FC<ExpandableToolButtonProps> = ({ label, Icon
       <button
         onClick={() => setOpen(v => !v)}
         title="更多选项"
+        className="hover-ring-light"
         style={{
           position: 'absolute', right: 2, bottom: 2, width: 12, height: 10,
           padding: 0, border: 0, background: 'transparent', cursor: 'pointer',
@@ -112,6 +113,7 @@ const ExpandableToolButton: React.FC<ExpandableToolButtonProps> = ({ label, Icon
         }}>
           {options.map(o => (
             <button key={o.label} onClick={() => { o.onClick(); setOpen(false); }}
+              className={o.active ? 'hover-ring-dark' : 'hover-ring-light'}
               style={{
                 textAlign: 'left', padding: '6px 8px', border: 0, borderRadius: '6px',
                 background: o.active ? 'var(--accent)' : 'transparent',

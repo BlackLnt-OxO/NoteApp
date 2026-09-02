@@ -28,6 +28,8 @@ const InfiniteInkCanvas: React.FC = () => {
   const selectionRectRef = useRef<{ x1: number; y1: number; x2: number; y2: number } | null>(null);
   const selectDragRef = useRef<{ start: { x: number; y: number }; ids: string[]; snapshots: Map<string, StrokePoint[]>; dx: number; dy: number } | null>(null);
   const inkTilesRef = useRef<Map<string, HTMLCanvasElement>>(new Map());
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const insertWorldRef = useRef<{ x: number; y: number } | null>(null);
   const [cursorScreen, setCursorScreen] = useState<{ x: number; y: number } | null>(null);
   const rafRef = useRef<number>(0);
   const dprRef = useRef(1);
@@ -43,6 +45,7 @@ const InfiniteInkCanvas: React.FC = () => {
   const selectedIds = useCanvasStore((s) => s.selectedIds);
   const selectionMode = useCanvasStore((s) => s.selectionMode);
   const eraserMode = useCanvasStore((s) => s.eraserMode);
+  const insertMode = useCanvasStore((s) => s.insertMode);
   const isDraggingToolbar = useCanvasToolbarStore((s) => s.isDragging);
   const tOffset = useCanvasToolbarStore((s) => s.offset);
   const tWidth = useCanvasToolbarStore((s) => s.width);
@@ -260,6 +263,16 @@ const InfiniteInkCanvas: React.FC = () => {
 
     const world = screenToWorld(sx, sy, state.camera);
 
+    if (state.activeTool === 'insert') {
+      if (state.insertMode === 'image') {
+        // Click once to pick an image → it lands at the clicked world point.
+        insertWorldRef.current = world;
+        fileInputRef.current?.click();
+      } else {
+        state.addTextNode(world.x, world.y);
+      }
+      return;
+    }
     if (state.activeTool === 'text') {
       state.addTextNode(world.x, world.y);
       return;
@@ -455,6 +468,38 @@ const InfiniteInkCanvas: React.FC = () => {
     }
   }, [getCanvasPos]);
 
+  // Insert → image: read the picked file, downscale, and place it at the click.
+  const onPickImage = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    const target = insertWorldRef.current;
+    if (!file || !target) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      const src = String(reader.result || '');
+      const img = new Image();
+      img.onload = () => {
+        const maxW = 1280;
+        const scale = Math.min(1, maxW / img.naturalWidth);
+        const w = Math.round(img.naturalWidth * scale);
+        const h = Math.round(img.naturalHeight * scale);
+        const c = document.createElement('canvas');
+        c.width = w; c.height = h;
+        const ctx = c.getContext('2d');
+        if (ctx) ctx.drawImage(img, 0, 0, w, h);
+        useCanvasStore.getState().addImageObject({
+          dataUrl: c.toDataURL('image/png'),
+          x: target.x - w / 2,
+          y: target.y - h / 2,
+          width: w,
+          height: h,
+        });
+      };
+      img.src = src;
+    };
+    reader.readAsDataURL(file);
+  }, []);
+
   // ---- Cursor -----------------------------------------------------------------
 
   const freeEraser = activeTool === 'eraser' && eraserMode === 'free';
@@ -463,7 +508,8 @@ const InfiniteInkCanvas: React.FC = () => {
   const cursorStyle = (activeTool === 'pen' || freeEraser) ? 'none'
     : strokeEraser ? 'crosshair'
     : activeTool === 'text' ? 'text'
-    : activeTool === 'select' ? 'crosshair'
+    : activeTool === 'insert' && insertMode === 'text' ? 'text'
+    : (activeTool === 'select' || activeTool === 'insert') ? 'crosshair'
     : 'default';
   const editingNode = objects.find((o): o is TextNodeData => o.type === 'text' && o.id === editingTextId);
 
@@ -478,6 +524,7 @@ const InfiniteInkCanvas: React.FC = () => {
 
   return (
     <div ref={containerRef} style={{ position: 'absolute', inset: 0, overflow: 'hidden', background: 'var(--page-bg)', borderRadius: '0 0 12px 0' }}>
+      <input ref={fileInputRef} type="file" accept="image/*" style={{ display: 'none' }} onChange={onPickImage} />
       {/* Image objects render BEFORE the canvas → they sit below the ink layer. */}
       {objects.filter((o): o is ImageObjectType => o.type === 'image').map((o) => (
         <ImageObject key={o.id} obj={o} camera={camera} />

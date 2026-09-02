@@ -9,6 +9,7 @@ import type {
   CanvasObject,
   ToolType,
   SelectionMode,
+  InsertMode,
 } from './types';
 import {
   DEFAULT_CAMERA,
@@ -31,6 +32,7 @@ export interface CanvasStore {
   selectedIds: string[];
   selectionMode: SelectionMode;
   eraserMode: 'free' | 'stroke';
+  insertMode: InsertMode;
   history: CanvasObject[][];
   redoStack: CanvasObject[][];
   loaded: boolean;
@@ -63,6 +65,7 @@ export interface CanvasStore {
   setSelectionMode: (mode: SelectionMode) => void;
   clearSelection: () => void;
   setEraserMode: (mode: 'free' | 'stroke') => void;
+  setInsertMode: (mode: InsertMode) => void;
   pushHistory: () => void;
   undo: () => void;
   redo: () => void;
@@ -95,6 +98,7 @@ export const useCanvasStore = create<CanvasStore>((set, get) => ({
   selectedIds: [],
   selectionMode: 'box',
   eraserMode: 'free',
+  insertMode: 'text',
   history: [],
   redoStack: [],
   loaded: false,
@@ -276,6 +280,8 @@ export const useCanvasStore = create<CanvasStore>((set, get) => ({
   clearSelection: () => set({ selectedIds: [] }),
 
   setEraserMode: (mode) => set({ eraserMode: mode }),
+
+  setInsertMode: (mode) => set({ insertMode: mode }),
 
   // --- Persistence ---
 

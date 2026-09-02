@@ -1,6 +1,8 @@
 // ---- Tool & Interaction Types ------------------------------------------------
 
-export type ToolType = 'pen' | 'eraser' | 'text' | 'select';
+export type ToolType = 'pen' | 'eraser' | 'text' | 'select' | 'insert';
+
+export type InsertMode = 'text' | 'image';
 
 export type SelectionMode = 'box' | 'click';
 
