@@ -49,6 +49,7 @@ interface NoteStore {
   // Actions - View
   setViewMode: (mode: ViewMode) => void;
   toggleSidebar: () => void;
+  setSidebarCollapsed: (collapsed: boolean) => void;
 
   // Actions - Mind Map
   updateMindMap: (data: Partial<MindMapState>) => void;
@@ -176,6 +177,7 @@ export const useNoteStore = create<NoteStore>((set, get) => ({
   setViewMode: (mode) => set({ viewMode: mode }),
 
   toggleSidebar: () => set((s) => ({ sidebarCollapsed: !s.sidebarCollapsed })),
+  setSidebarCollapsed: (collapsed) => set({ sidebarCollapsed: collapsed }),
 
   updateMindMap: (data) => {
     set((state) => ({ mindMap: { ...state.mindMap, ...data } }));

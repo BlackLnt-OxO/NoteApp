@@ -16,7 +16,7 @@ import { themeCanvasColors, isDefaultBrushColor } from './themeColors';
 import { fs, fsn } from './utils';
 
 const App: React.FC = () => {
-  const { settings, loadData, saveData, setNoteFloating, viewMode, sidebarCollapsed, toggleSidebar } = useNoteStore();
+  const { settings, loadData, saveData, setNoteFloating, viewMode, setViewMode, sidebarCollapsed, toggleSidebar } = useNoteStore();
   const gfs = settings.fontSize;
   const titleBarH = gfs >= 18 ? fsn(38, gfs) : 38;
   const [showCreateDialog, setShowCreateDialog] = useState(false);
@@ -229,9 +229,37 @@ const App: React.FC = () => {
         }}>
           <Sidebar onCreateNote={() => setShowCreateDialog(true)} />
         </div>
-        <div style={{ flex: 1, position: 'relative', overflow: 'hidden', borderRadius: '0 0 12px 0' }}>
+        <div style={{ flex: 1, position: 'relative', overflow: 'hidden', borderRadius: '0 0 12px 0', display: 'flex', flexDirection: 'column' }}>
+          {/* When the left sidebar is collapsed, a slim top bar keeps the view
+              switcher (and screenshot tools) reachable, especially in canvas/PDF. */}
+          {sidebarCollapsed && (
+            <div style={{
+              flexShrink: 0, display: 'flex', alignItems: 'center', gap: 6,
+              padding: '6px 10px', background: 'var(--chrome-bg)',
+              borderBottom: '1px solid var(--glass-border)', zIndex: 98,
+            }}>
+              {([{ id: 'notes' as const, label: '便笺' }, { id: 'inkcanvas' as const, label: '画布' }, { id: 'pdf' as const, label: 'PDF' }]).map((m) => (
+                <button key={m.id} onClick={() => setViewMode(m.id)}
+                  className={viewMode === m.id ? 'hover-ring-dark' : 'hover-ring-light'}
+                  style={{ padding: '4px 10px', borderRadius: '6px', background: viewMode === m.id ? 'var(--accent)' : 'var(--glass-bg-light)',
+                    border: viewMode === m.id ? 'none' : '1px solid var(--glass-border)', color: viewMode === m.id ? '#fff' : 'var(--text-secondary)',
+                    cursor: 'pointer', fontSize: 12, fontFamily: 'inherit' }}>
+                  {m.label}
+                </button>
+              ))}
+              <span style={{ flex: 1 }} />
+              <button onClick={() => window.electronAPI?.startScreenshot()} className="hover-ring-light"
+                style={{ padding: '4px 10px', borderRadius: '6px', background: 'var(--glass-bg-light)', border: '1px solid var(--glass-border)', color: 'var(--text-secondary)', cursor: 'pointer', fontSize: 12, fontFamily: 'inherit' }}>
+                截图
+              </button>
+              <button onClick={() => window.electronAPI?.startLongScreenshot()} className="hover-ring-light"
+                style={{ padding: '4px 10px', borderRadius: '6px', background: 'var(--glass-bg-light)', border: '1px solid var(--glass-border)', color: 'var(--text-secondary)', cursor: 'pointer', fontSize: 12, fontFamily: 'inherit' }}>
+                长截图
+              </button>
+            </div>
+          )}
           {/* key=viewMode remounts on switch → the fade-in plays each time. */}
-          <div key={viewMode} className="animate-fade-in" style={{ position: 'absolute', inset: 0 }}>
+          <div key={viewMode} className="animate-fade-in" style={{ flex: 1, position: 'relative', minHeight: 0 }}>
             {viewMode === 'inkcanvas' ? (
               <CanvasView />
             ) : viewMode === 'pdf' ? (

@@ -8,7 +8,7 @@ interface SidebarProps {
 }
 
 const Sidebar: React.FC<SidebarProps> = ({ onCreateNote }) => {
-  const { notes, tags, activeTag, setActiveTag, addTag, deleteTag, updateTag, settings, viewMode, setViewMode } = useNoteStore();
+  const { notes, tags, activeTag, setActiveTag, addTag, deleteTag, updateTag, settings, viewMode, setViewMode, setSidebarCollapsed } = useNoteStore();
   const fs = settings.fontSize;
   const [editingTag, setEditingTag] = useState<string | null>(null);
   const [hoverTag, setHoverTag] = useState<string | null>(null);
@@ -95,7 +95,7 @@ const Sidebar: React.FC<SidebarProps> = ({ onCreateNote }) => {
         ]).map((m) => (
           <button
             key={m.id}
-            onClick={() => setViewMode(m.id)}
+            onClick={() => { setViewMode(m.id); if (m.id !== 'notes') setSidebarCollapsed(true); }}
             className={viewMode === m.id ? 'hover-ring-dark' : 'hover-ring-light'}
             style={{
               flex: 1,
