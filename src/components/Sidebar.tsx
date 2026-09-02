@@ -53,6 +53,7 @@ const Sidebar: React.FC<SidebarProps> = ({ onCreateNote }) => {
     <div style={{
       width: '220px',
       flexShrink: 0,
+      height: '100%',
       display: 'flex',
       flexDirection: 'column',
       padding: '12px',

@@ -223,6 +223,7 @@ const App: React.FC = () => {
         <div style={{
           width: sidebarCollapsed ? 0 : 220,
           overflow: 'hidden', flexShrink: 0,
+          display: 'flex',
           transition: 'width var(--transition-slow)',
           borderRight: sidebarCollapsed ? 'none' : '1px solid var(--glass-border)',
         }}>
