@@ -15,8 +15,19 @@ import { usePdfStore } from './components/PdfAnnotation/PdfStore';
 import { themeCanvasColors, isDefaultBrushColor } from './themeColors';
 import { fs, fsn } from './utils';
 
+// Round glass affordance shared by the collapsed-state screenshot buttons
+// (bottom-left cluster) — same look as the settings / fullscreen circles.
+const shotBtnStyle: React.CSSProperties = {
+  width: '36px', height: '36px', borderRadius: '50%',
+  background: 'var(--glass-bg)', backdropFilter: 'blur(20px)', WebkitBackdropFilter: 'blur(20px)',
+  border: '1px solid var(--glass-border)',
+  color: 'var(--text-secondary)', cursor: 'pointer',
+  display: 'flex', alignItems: 'center', justifyContent: 'center',
+  boxShadow: 'var(--glass-shadow)',
+};
+
 const App: React.FC = () => {
-  const { settings, loadData, saveData, setNoteFloating, viewMode, setViewMode, sidebarCollapsed, toggleSidebar } = useNoteStore();
+  const { settings, loadData, saveData, setNoteFloating, viewMode, setViewMode, sidebarCollapsed, setSidebarCollapsed, toggleSidebar } = useNoteStore();
   const gfs = settings.fontSize;
   const titleBarH = gfs >= 18 ? fsn(38, gfs) : 38;
   const [showCreateDialog, setShowCreateDialog] = useState(false);
@@ -231,7 +242,7 @@ const App: React.FC = () => {
         </div>
         <div style={{ flex: 1, position: 'relative', overflow: 'hidden', borderRadius: '0 0 12px 0', display: 'flex', flexDirection: 'column' }}>
           {/* When the left sidebar is collapsed, a slim top bar keeps the view
-              switcher (and screenshot tools) reachable, especially in canvas/PDF. */}
+              switcher reachable (screenshots live in the bottom-left cluster). */}
           {sidebarCollapsed && (
             <div style={{
               flexShrink: 0, display: 'flex', alignItems: 'center', gap: 6,
@@ -239,7 +250,7 @@ const App: React.FC = () => {
               borderBottom: '1px solid var(--glass-border)', zIndex: 98,
             }}>
               {([{ id: 'notes' as const, label: '便笺' }, { id: 'inkcanvas' as const, label: '画布' }, { id: 'pdf' as const, label: 'PDF' }]).map((m) => (
-                <button key={m.id} onClick={() => setViewMode(m.id)}
+                <button key={m.id} onClick={() => { setViewMode(m.id); if (m.id === 'notes') setSidebarCollapsed(false); }}
                   className={viewMode === m.id ? 'hover-ring-dark' : 'hover-ring-light'}
                   style={{ padding: '4px 10px', borderRadius: '6px', background: viewMode === m.id ? 'var(--accent)' : 'var(--glass-bg-light)',
                     border: viewMode === m.id ? 'none' : '1px solid var(--glass-border)', color: viewMode === m.id ? '#fff' : 'var(--text-secondary)',
@@ -247,15 +258,6 @@ const App: React.FC = () => {
                   {m.label}
                 </button>
               ))}
-              <span style={{ flex: 1 }} />
-              <button onClick={() => window.electronAPI?.startScreenshot()} className="hover-ring-light"
-                style={{ padding: '4px 10px', borderRadius: '6px', background: 'var(--glass-bg-light)', border: '1px solid var(--glass-border)', color: 'var(--text-secondary)', cursor: 'pointer', fontSize: 12, fontFamily: 'inherit' }}>
-                截图
-              </button>
-              <button onClick={() => window.electronAPI?.startLongScreenshot()} className="hover-ring-light"
-                style={{ padding: '4px 10px', borderRadius: '6px', background: 'var(--glass-bg-light)', border: '1px solid var(--glass-border)', color: 'var(--text-secondary)', cursor: 'pointer', fontSize: 12, fontFamily: 'inherit' }}>
-                长截图
-              </button>
             </div>
           )}
           {/* key=viewMode remounts on switch → the fade-in plays each time. */}
@@ -276,28 +278,50 @@ const App: React.FC = () => {
             )}
           </div>
 
-          {/* Sidebar toggle — bottom-left of the content area, stays open-state
-              aware (panel icon points left → collapse, right → expand). */}
-          <button
-            onClick={toggleSidebar}
-            title={sidebarCollapsed ? '展开边栏' : '收起边栏'}
-            className="hover-ring-light"
-            style={{
-              position: 'absolute', bottom: '16px', left: '16px',
-              width: '36px', height: '36px', borderRadius: '12px',
-              background: 'var(--glass-bg)', backdropFilter: 'blur(20px)',
-              border: '1px solid var(--glass-border)',
-              color: 'var(--text-secondary)', cursor: 'pointer',
-              display: 'flex', alignItems: 'center', justifyContent: 'center',
-              zIndex: 120,
-              boxShadow: 'var(--glass-shadow)',
-            }}>
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"
-              style={{ transform: sidebarCollapsed ? 'scaleX(-1)' : 'none', transition: 'transform 0.2s' }}>
-              <rect x="3" y="3" width="18" height="18" rx="3" opacity="0.5" />
-              <line x1="9" y1="3" x2="9" y2="21" />
-            </svg>
-          </button>
+          {/* Bottom-left cluster: while the sidebar is collapsed it stacks the
+              two round screenshot buttons above the sidebar toggle; as soon as
+              the sidebar opens those disappear (the sidebar's own bottom buttons
+              take over), so there is never a duplicate entry. */}
+          <div style={{
+            position: 'absolute', bottom: '16px', left: '16px', zIndex: 120,
+            display: 'flex', flexDirection: 'column', gap: '8px', alignItems: 'center',
+          }}>
+            {sidebarCollapsed && (<>
+              <button onClick={() => window.electronAPI?.startScreenshot()} title="截图" className="hover-ring-light" style={shotBtnStyle}>
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z" />
+                  <circle cx="12" cy="13" r="4" />
+                </svg>
+              </button>
+              <button onClick={() => window.electronAPI?.startLongScreenshot()} title="长截图" className="hover-ring-light" style={shotBtnStyle}>
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <rect x="4" y="3" width="16" height="10" rx="2" />
+                  <path d="M12 15v4" />
+                  <path d="m9 19 3 3 3-3" />
+                </svg>
+              </button>
+            </>)}
+            {/* Sidebar toggle — stays bottom-most and open-state aware (panel icon
+                points left → collapse, right → expand). */}
+            <button
+              onClick={toggleSidebar}
+              title={sidebarCollapsed ? '展开边栏' : '收起边栏'}
+              className="hover-ring-light"
+              style={{
+                width: '36px', height: '36px', borderRadius: '12px',
+                background: 'var(--glass-bg)', backdropFilter: 'blur(20px)',
+                border: '1px solid var(--glass-border)',
+                color: 'var(--text-secondary)', cursor: 'pointer',
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                boxShadow: 'var(--glass-shadow)',
+              }}>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"
+                style={{ transform: sidebarCollapsed ? 'scaleX(-1)' : 'none', transition: 'transform 0.2s' }}>
+                <rect x="3" y="3" width="18" height="18" rx="3" opacity="0.5" />
+                <line x1="9" y1="3" x2="9" y2="21" />
+              </svg>
+            </button>
+          </div>
 
           {/* Global settings entry — bottom-right on all three views. */}
           <button onClick={() => setShowSettings(true)} title="设置" className="hover-ring-light" style={{

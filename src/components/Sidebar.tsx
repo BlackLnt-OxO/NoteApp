@@ -95,7 +95,7 @@ const Sidebar: React.FC<SidebarProps> = ({ onCreateNote }) => {
         ]).map((m) => (
           <button
             key={m.id}
-            onClick={() => { setViewMode(m.id); if (m.id !== 'notes') setSidebarCollapsed(true); }}
+            onClick={() => { setViewMode(m.id); setSidebarCollapsed(m.id !== 'notes'); }}
             className={viewMode === m.id ? 'hover-ring-dark' : 'hover-ring-light'}
             style={{
               flex: 1,
