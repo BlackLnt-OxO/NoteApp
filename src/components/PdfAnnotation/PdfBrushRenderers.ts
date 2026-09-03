@@ -4,16 +4,13 @@
  * strokes stay pixel-identical across the two surfaces).
  *
  * RENDERING MODEL (continuous ribbon, single fill): each brush stroke is turned
- * into ONE fill — the ribbon body (left half-width boundary traced forward,
- * right half-width boundary traced back) plus FULL-DISC round caps centered on
- * the first/last samples as extra subpaths of the same path — then filled
- * EXACTLY ONCE at one globalAlpha. Because nothing is stroked per-segment and
- * no sub-path is re-filled, there is no alpha stacking anywhere in the stroke:
- * no round-cap "dots" at any opacity/speed, no butt-cap trapezoid steps at
- * joins, no AA bright edges between segments, no hollow/ringed tips. The
- * full-disc caps (not half-discs) fully cover the start/stop point even when a
- * stroke doubles back over itself, so its own outline re-crossing there can't
- * carve out a winding-0 colorless sliver.
+ * into ONE closed outline — the left half-width boundary traced forward, a
+ * semicircular round cap at the far end, the right half-width boundary traced
+ * back, and a semicircular round cap at the start — then filled EXACTLY ONCE at
+ * one globalAlpha. Because nothing is stroked per-segment and no sub-path is
+ * re-filled, there is no alpha stacking anywhere in the stroke: no round-cap
+ * "dots" at any opacity/speed, no butt-cap trapezoid steps at joins, no AA
+ * bright edges between segments, no hollow/ringed tips.
  *
  * Widths are per-point (pressure for marker; pressure + writing speed for the
  * pen; a narrow pressure core for the pencil), spatially RESAMPLED along the
@@ -247,16 +244,15 @@ export function smoothWidths(widths: number[]): number[] {
 // ---- Single-fill variable-width ribbon ------------------------------------------
 
 /**
- * Draw a variable-width stroke as a ribbon body + two full-disc round caps and
- * fill the whole path exactly once. Left/right boundaries are the centerline
- * offset by ±halfWidth along each sample's normal.
+ * Draw a variable-width stroke as ONE continuous closed outline and fill it
+ * exactly once. Left/right boundaries are the centerline offset by ±halfWidth
+ * along each sample's normal; the far/start ends get semicircular round caps.
  *
  * Canvas semantics that make this dot-free:
  *  - a single fill() never re-composites — no per-segment round caps to stack,
  *    no butt end-faces to create trapezoid steps, no overlapping strokes;
- *  - the round tips are FULL discs (own subpaths in the same path, positive
- *    winding), so the brush fully covers its start/stop point even when the
- *    stroke loops back over itself — no winding-0 sliver, no hollow/ring.
+ *  - the round caps are part of the same filled path, so tips are smooth half
+ *    discs with no hollow/ring.
  *
  * No Path2D is used (keeps it jsdom/mock-ctx friendly and identical on real
  * canvases). Points/widths are already in the caller's coordinate space; dx/dy
@@ -321,32 +317,32 @@ export function drawVariableRibbon(
 
   ctx.beginPath();
 
-  // Ribbon body (butt outline): left boundary forward, straight cross edge at
-  // the far end, right boundary backward, closed across the start.
+  // Left boundary, forward.
   ctx.moveTo(left[0].x + dx, left[0].y + dy);
   for (let i = 1; i < n; i++) {
     ctx.lineTo(left[i].x + dx, left[i].y + dy);
   }
-  ctx.lineTo(right[n - 1].x + dx, right[n - 1].y + dy);
-  for (let i = n - 2; i >= 0; i--) {
+
+  // Far-end round cap (bulges toward the pen direction).
+  const end = points[n - 1];
+  const endT = tangentAt(n - 1);
+  const endR = half(widths[n - 1]);
+  const endAngle = Math.atan2(endT.y, endT.x);
+  ctx.arc(end.x + dx, end.y + dy, endR, endAngle - Math.PI / 2, endAngle + Math.PI / 2);
+
+  // Right boundary, backward.
+  for (let i = n - 1; i >= 0; i--) {
     ctx.lineTo(right[i].x + dx, right[i].y + dy);
   }
-  ctx.closePath();
 
-  // Round tips: FULL discs centered on the first/last samples, added as their
-  // own subpaths of the SAME path (positive winding) — one fill, so no alpha
-  // stacking anywhere. Full discs (not half) guarantee the brush fully covers
-  // its start/stop spot even when the stroke doubles back so its own outline
-  // re-crosses there — a half-disc cap can leave a winding-0 colorless sliver.
-  const end = points[n - 1];
+  // Start round cap (bulges away from the pen direction).
   const start = points[0];
-  const endR = half(widths[n - 1]);
+  const startT = tangentAt(0);
   const startR = half(widths[0]);
-  ctx.moveTo(end.x + dx + endR, end.y + dy);
-  ctx.arc(end.x + dx, end.y + dy, endR, 0, Math.PI * 2);
-  ctx.moveTo(start.x + dx + startR, start.y + dy);
-  ctx.arc(start.x + dx, start.y + dy, startR, 0, Math.PI * 2);
+  const startAngle = Math.atan2(startT.y, startT.x);
+  ctx.arc(start.x + dx, start.y + dy, startR, startAngle + Math.PI / 2, startAngle + Math.PI * 1.5);
 
+  ctx.closePath();
   ctx.fill();
   ctx.restore();
 }
