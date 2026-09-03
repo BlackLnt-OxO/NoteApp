@@ -120,12 +120,18 @@ export function drawVisibleTiles(
     for (let tx = tx0; tx <= tx1; tx++) {
       const c = tiles.get(tileKey(tx, ty));
       if (!c) continue;
-      const topLeft = worldToScreen(tx * TILE, ty * TILE, cam);
-      const size = TILE * cam.zoom;
-      const x = Math.round(topLeft.x * dpr) / dpr;
-      const y = Math.round(topLeft.y * dpr) / dpr;
-      const s = Math.round(size * dpr) / dpr;
-      ctx.drawImage(c, x, y, s, s);
+      // Snap each tile's SHARED boundary once. A tile's lower-right corner is the
+      // next tile's upper-left in world space, so rounding the lower-right corner
+      // and the next tile's upper-left to the same device pixel gives adjacent
+      // tiles an identical edge → no seam at any zoom. Rounding left+width
+      // independently double-rounds the shared boundary and can disagree by 1px.
+      const tl = worldToScreen(tx * TILE, ty * TILE, cam);
+      const br = worldToScreen((tx + 1) * TILE, (ty + 1) * TILE, cam);
+      const x0 = Math.round(tl.x * dpr) / dpr;
+      const y0 = Math.round(tl.y * dpr) / dpr;
+      const x1 = Math.round(br.x * dpr) / dpr;
+      const y1 = Math.round(br.y * dpr) / dpr;
+      ctx.drawImage(c, x0, y0, x1 - x0, y1 - y0);
     }
   }
 

@@ -97,9 +97,11 @@ function drawFountain(ctx: CanvasRenderingContext2D, stroke: PdfStroke, dx = 0, 
 
   const pts = applyOneEuro(raw, smoothingToMinCutoff(stroke.smoothing));
   // applyOneEuro emits one output per input point, so pts[i] aligns with raw[i].
-  // Ink-speed sensitivity: fast strokes run thin (ink lags), slow strokes lay
-  // down full ink. ws = 0 → pure pressure; ws = 1 → fast writing thins to 0.15×.
+  // Ink-speed = how much ink the pen lays down. Higher ws → thicker/more full
+  // (ws=1 → 1.0× base width, ws=0 → 0.5×), and a fixed speed term keeps fast
+  // strokes running thinner than slow strokes (ink lags when you write fast).
   const ws = stroke.inkSpeed ?? 0.5;
+  const gain = 0.5 + 0.5 * ws; // 0.5 (ws=0) → 1.0 (ws=1): ws=100 is thicker
 
   ctx.save();
   ctx.lineCap = 'round';
@@ -110,7 +112,7 @@ function drawFountain(ctx: CanvasRenderingContext2D, stroke: PdfStroke, dx = 0, 
   ctx.fillStyle = stroke.color;
 
   if (pts.length === 1) {
-    const w = fountainWidth(pts[0].p, stroke.size);
+    const w = fountainWidth(pts[0].p, stroke.size) * gain;
     ctx.beginPath();
     ctx.arc(pts[0].x + dx, pts[0].y + dy, w / 2, 0, Math.PI * 2);
     ctx.fill();
@@ -121,14 +123,13 @@ function drawFountain(ctx: CanvasRenderingContext2D, stroke: PdfStroke, dx = 0, 
   for (let i = 1; i < pts.length; i++) {
     const a = pts[i - 1];
     const b = pts[i];
-    let w = (fountainWidth(a.p, stroke.size) + fountainWidth(b.p, stroke.size)) / 2;
-    if (ws > 0) {
-      const dt = raw[i].t - raw[i - 1].t;
-      if (dt > 0) {
-        const v = Math.hypot(b.x - a.x, b.y - a.y) / dt; // world units / ms
-        const speedFactor = 1 - clamp01(v / INK_SPEED_VREF);
-        w *= Math.max(0.15, 1 - ws * (1 - speedFactor));
-      }
+    let w = ((fountainWidth(a.p, stroke.size) + fountainWidth(b.p, stroke.size)) / 2) * gain;
+    // Fixed speed term: fast strokes thin out (min 0.25×), slow strokes stay full.
+    const dt = raw[i].t - raw[i - 1].t;
+    if (dt > 0) {
+      const v = Math.hypot(b.x - a.x, b.y - a.y) / dt; // world units / ms
+      const speedFactor = 1 - clamp01(v / INK_SPEED_VREF);
+      w *= Math.max(0.25, 1 - 0.75 * (1 - speedFactor));
     }
     ctx.lineWidth = Math.max(0.4, w);
     ctx.beginPath();
@@ -157,34 +158,34 @@ function drawMarkerPressureAlpha(ctx: CanvasRenderingContext2D, stroke: PdfStrok
 
   const pts = applyOneEuro(raw, smoothingToMinCutoff(stroke.smoothing));
 
+  // Use the AVERAGE pressure for one uniform alpha per stroke, drawn as a
+  // single continuous path. Per-segment round caps would reprocess each point
+  // and compound alpha in the dense middle (making it nearly opaque while the
+  // ends stay translucent). One path + one alpha is clean and matches "the
+  // stroke's ink depth follows how hard you press".
+  let sum = 0;
+  for (const pt of pts) sum += pt.p;
+  const avgP = pts.length > 0 ? sum / pts.length : 0.5;
+  const alpha = stroke.opacity * clamp01(0.2 + 0.8 * avgP);
+  const w = Math.max(0.5, strokeWidth(avgP, stroke.size, false));
+
   ctx.save();
   ctx.lineCap = 'round';
   ctx.lineJoin = 'round';
   ctx.globalCompositeOperation = stroke.compositeOperation;
+  ctx.globalAlpha = alpha;
   ctx.strokeStyle = stroke.color;
   ctx.fillStyle = stroke.color;
+  ctx.lineWidth = w;
 
   if (pts.length === 1) {
-    const p = pts[0].p;
-    const alpha = stroke.opacity * (0.15 + 0.85 * clamp01(p));
-    const w = strokeWidth(p, stroke.size, false);
-    ctx.globalAlpha = alpha;
     ctx.beginPath();
     ctx.arc(pts[0].x + dx, pts[0].y + dy, w / 2, 0, Math.PI * 2);
     ctx.fill();
-    ctx.restore();
-    return;
-  }
-
-  for (let i = 1; i < pts.length; i++) {
-    const a = pts[i - 1];
-    const b = pts[i];
-    const p = (a.p + b.p) / 2;
-    ctx.globalAlpha = stroke.opacity * (0.15 + 0.85 * clamp01(p));
-    ctx.lineWidth = strokeWidth(p, stroke.size, false);
+  } else {
     ctx.beginPath();
-    ctx.moveTo(a.x + dx, a.y + dy);
-    ctx.lineTo(b.x + dx, b.y + dy);
+    ctx.moveTo(pts[0].x + dx, pts[0].y + dy);
+    for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i].x + dx, pts[i].y + dy);
     ctx.stroke();
   }
 

@@ -47,14 +47,18 @@ interface LaserSegment {
   points: PdfPoint[];
   color: string;
   size: number;
+  /** Timestamp of stroke start (pen-down). */
   start: number;
+  /** Timestamp of pen-up — the fade clock starts HERE, not at pen-down. */
+  end?: number;
 }
 const LASER_LIFETIME = 1800; // ms — how long a laser trail stays visible
 
-/** Draw a laser segment with an alpha that fades linearly with age. */
+/** Draw a laser segment; it stays fully visible while writing (no `end` yet),
+ *  then fades linearly from the pen-up time. */
 function drawLaser(ctx: CanvasRenderingContext2D, seg: LaserSegment, now: number): void {
-  const age = now - seg.start;
-  const alpha = age <= 0 ? 1 : Math.max(0, 1 - age / LASER_LIFETIME);
+  const age = seg.end === undefined ? 0 : now - seg.end;
+  const alpha = age >= LASER_LIFETIME ? 0 : 1 - age / LASER_LIFETIME;
   if (alpha <= 0 || seg.points.length === 0) return;
 
   ctx.save();
@@ -176,12 +180,15 @@ function drawVisibleTiles(
     for (let tx = tx0; tx <= tx1; tx++) {
       const c = tiles.get(tileKey(tx, ty));
       if (!c) continue;
-      const topLeft = worldToScreen(tx * TILE, ty * TILE, cam);
-      const size = TILE * cam.zoom;
-      const x = Math.round(topLeft.x * dpr) / dpr;
-      const y = Math.round(topLeft.y * dpr) / dpr;
-      const s = Math.round(size * dpr) / dpr;
-      ctx.drawImage(c, x, y, s, s);
+      // Snap shared boundaries once (see InkTiles.drawVisibleTiles) so adjacent
+      // tiles share an exact edge at any zoom — no 1px seam.
+      const tl = worldToScreen(tx * TILE, ty * TILE, cam);
+      const br = worldToScreen((tx + 1) * TILE, (ty + 1) * TILE, cam);
+      const x0 = Math.round(tl.x * dpr) / dpr;
+      const y0 = Math.round(tl.y * dpr) / dpr;
+      const x1 = Math.round(br.x * dpr) / dpr;
+      const y1 = Math.round(br.y * dpr) / dpr;
+      ctx.drawImage(c, x0, y0, x1 - x0, y1 - y0);
     }
   }
 
@@ -380,7 +387,8 @@ const PdfCanvas: React.FC = () => {
   const tickLaser = useCallback(() => {
     laserRafRef.current = 0;
     const now = performance.now();
-    laserRef.current = laserRef.current.filter((s) => now - s.start < LASER_LIFETIME);
+    // Keep in-progress segments (no `end`) alive; drop finished ones past expiry.
+    laserRef.current = laserRef.current.filter((s) => s.end === undefined || now - s.end < LASER_LIFETIME);
     if (laserRef.current.length) {
       dirtyRef.current = true;
       doRender();
@@ -813,9 +821,11 @@ const PdfCanvas: React.FC = () => {
       return;
     }
 
-    // Laser pointer — just stop feeding points; the fade loop keeps it alive then
-    // drops it. Never commitStroke/stampStroke.
+    // Laser pointer — stop feeding points and start the fade clock from pen-up.
+    // Never commitStroke/stampStroke.
     if (isDrawingRef.current && usePdfStore.getState().brushType === 'laser') {
+      const seg = laserRef.current[laserRef.current.length - 1];
+      if (seg && seg.end === undefined) seg.end = performance.now();
       isDrawingRef.current = false;
       dirtyRef.current = true;
       scheduleRender();
