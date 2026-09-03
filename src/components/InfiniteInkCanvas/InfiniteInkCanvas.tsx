@@ -173,7 +173,7 @@ const InfiniteInkCanvas: React.FC = () => {
     ctx.scale(cam.zoom, cam.zoom);
 
     // Rasterized ink tiles (O(1) per frame).
-    drawVisibleTiles(ctx, inkTilesRef.current, cam, vw, vh);
+    drawVisibleTiles(ctx, inkTilesRef.current, cam, vw, vh, dpr);
 
     // Text nodes stay vector — drawn every frame (never rasterized into tiles).
     for (const obj of state.objects) {
@@ -422,6 +422,8 @@ const InfiniteInkCanvas: React.FC = () => {
       smoothing: isEraser ? 0 : state.brushSettings.smoothing,
       compositeOperation: isEraser ? 'destination-out' : 'source-over',
       style: isEraser ? undefined : (state.brush === 'fountain' || state.brush === 'pencil' ? state.brush : undefined),
+      inkSpeed: isEraser ? undefined : state.brushSettings.inkSpeed,
+      pressureOpacity: isEraser ? undefined : state.brushSettings.pressureOpacity,
       createdAt: Date.now(),
     };
     addRawPoint(stroke, world.x, world.y, getPressure(e), e.timeStamp);

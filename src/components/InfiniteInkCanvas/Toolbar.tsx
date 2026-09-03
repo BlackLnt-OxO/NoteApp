@@ -266,6 +266,24 @@ const Toolbar: React.FC = () => {
         <input type="range" min={0} max={100} value={Math.round(brushSettings.smoothing * 100)} onChange={(e) => update({ smoothing: Number(e.target.value) / 100 })} style={trackStyle} />
       </div>
 
+      {/* ---- Fountain-only: ink speed (fast = thin, slow = full ink) ---- */}
+      {brush === 'fountain' && (
+        <div style={sectionStyle}>
+          <div style={labelStyle(gfs)}><span>出墨速度</span><span>{Math.round(brushSettings.inkSpeed * 100)}%</span></div>
+          <input type="range" min={0} max={100} value={Math.round(brushSettings.inkSpeed * 100)} onChange={(e) => update({ inkSpeed: Number(e.target.value) / 100 })} style={trackStyle} />
+        </div>
+      )}
+
+      {/* ---- Marker-only: pressure → opacity toggle ---- */}
+      {brush === 'marker' && (
+        <div style={sectionStyle}>
+          <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: fs(11, gfs), color: 'var(--text-secondary)', cursor: 'pointer' }}>
+            <input type="checkbox" checked={brushSettings.pressureOpacity} onChange={(e) => update({ pressureOpacity: e.target.checked })} style={{ accentColor: 'var(--accent)' }} />
+            压感控制透明度
+          </label>
+        </div>
+      )}
+
       {/* ---- Dot grid show/hide ---- */}
       <div style={sectionStyle}>
         <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: fs(11, gfs), color: 'var(--text-secondary)', cursor: 'pointer' }}>

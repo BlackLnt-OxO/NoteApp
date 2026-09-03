@@ -33,6 +33,7 @@ import {
   getStrokeBounds,
   boundsIntersectRect,
   screenToWorld,
+  worldToScreen,
   clampZoom,
   zoomAt,
   fitCamera,
@@ -156,17 +157,35 @@ function drawVisibleTiles(
   cam: { x: number; y: number; zoom: number },
   vw: number,
   vh: number,
+  dpr: number,
 ): void {
   const tl = screenToWorld(0, 0, cam);
   const br = screenToWorld(vw, vh, cam);
   const tx0 = Math.floor(tl.x / TILE), tx1 = Math.floor(br.x / TILE);
   const ty0 = Math.floor(tl.y / TILE), ty1 = Math.floor(br.y / TILE);
+
+  // Snap tiles to integer device pixels so neighbors share an exact edge → no
+  // 1px seam (dark/white line) and crisper edges when 3×-supersampled tiles are
+  // downscaled. See InkTiles.drawVisibleTiles for the same rationale.
+  ctx.save();
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = 'high';
+
   for (let ty = ty0; ty <= ty1; ty++) {
     for (let tx = tx0; tx <= tx1; tx++) {
       const c = tiles.get(tileKey(tx, ty));
-      if (c) ctx.drawImage(c, tx * TILE, ty * TILE, TILE, TILE);
+      if (!c) continue;
+      const topLeft = worldToScreen(tx * TILE, ty * TILE, cam);
+      const size = TILE * cam.zoom;
+      const x = Math.round(topLeft.x * dpr) / dpr;
+      const y = Math.round(topLeft.y * dpr) / dpr;
+      const s = Math.round(size * dpr) / dpr;
+      ctx.drawImage(c, x, y, s, s);
     }
   }
+
+  ctx.restore();
 }
 
 // ---- Selection drawing helpers (world coords) ---------------------------------
@@ -312,7 +331,7 @@ const PdfCanvas: React.FC = () => {
       const bg = bgCanvasRef.current;
       if (bg) ctx.drawImage(bg, 0, 0, size.width, size.height);
 
-      drawVisibleTiles(ctx, inkTilesRef.current, cam, vw, vh);
+      drawVisibleTiles(ctx, inkTilesRef.current, cam, vw, vh, dpr);
 
       const strokes = st.strokes[st.currentPage] ?? [];
 
@@ -643,6 +662,8 @@ const PdfCanvas: React.FC = () => {
       smoothing: isEraser ? 0 : st.brush.smoothing,
       compositeOperation: isEraser ? 'destination-out' : 'source-over',
       style: isEraser ? undefined : (st.brushType === 'fountain' || st.brushType === 'pencil' ? st.brushType : undefined),
+      inkSpeed: isEraser ? undefined : st.brush.inkSpeed,
+      pressureOpacity: isEraser ? undefined : st.brush.pressureOpacity,
       createdAt: Date.now(),
     };
     addRawPoint(stroke, world.x, world.y, getPressure(e), e.timeStamp);

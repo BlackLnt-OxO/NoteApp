@@ -21,6 +21,10 @@ export interface BrushSettings {
   opacity: number;
   color: string;
   smoothing: number; // 0-1, maps to 1€ filter minCutoff (PS-style)
+  /** Fountain only: how strongly fast writing thins the line (0-1). */
+  inkSpeed: number;
+  /** Marker only: enable pressure-driven opacity (0 → light ink, 1 → full). */
+  pressureOpacity: boolean;
 }
 
 // ---- Stroke ------------------------------------------------------------------
@@ -46,6 +50,10 @@ export interface Stroke {
    * 'laser' is excluded because it is transient and never committed.
    */
   style?: CommittedStrokeStyle;
+  /** Fountain only: ink-speed sensitivity captured at draw time. */
+  inkSpeed?: number;
+  /** Marker only: pressure→opacity flag captured at draw time. */
+  pressureOpacity?: boolean;
   createdAt: number;
 }
 

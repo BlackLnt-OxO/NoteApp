@@ -12,7 +12,7 @@
  */
 
 import type { Camera, Stroke } from './types';
-import { screenToWorld } from './constants';
+import { screenToWorld, worldToScreen } from './constants';
 import { drawAnnotatedStroke } from '../PdfAnnotation/PdfBrushRenderers';
 import {
   drawEraserSegment,
@@ -98,17 +98,38 @@ export function drawVisibleTiles(
   cam: Camera,
   vw: number,
   vh: number,
+  dpr: number,
 ): void {
   const tl = screenToWorld(0, 0, cam);
   const br = screenToWorld(vw, vh, cam);
   const tx0 = Math.floor(tl.x / TILE), tx1 = Math.floor(br.x / TILE);
   const ty0 = Math.floor(tl.y / TILE), ty1 = Math.floor(br.y / TILE);
+
+  // The caller's ctx is already under the world transform (camera translate +
+  // zoom). Drawing tiles in WORLD coords makes each tile's target rectangle land
+  // on fractional device pixels, so 3×-supersampled tiles get soft/aliased edges
+  // and adjacent tiles leave a 1px seam (dark line in dark theme, white in light).
+  // Instead, reset to the device-pixel (dpr) base and draw each tile in SCREEN
+  // coords, snapped to integer device pixels so neighbors share an exact edge.
+  ctx.save();
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = 'high';
+
   for (let ty = ty0; ty <= ty1; ty++) {
     for (let tx = tx0; tx <= tx1; tx++) {
       const c = tiles.get(tileKey(tx, ty));
-      if (c) ctx.drawImage(c, tx * TILE, ty * TILE, TILE, TILE);
+      if (!c) continue;
+      const topLeft = worldToScreen(tx * TILE, ty * TILE, cam);
+      const size = TILE * cam.zoom;
+      const x = Math.round(topLeft.x * dpr) / dpr;
+      const y = Math.round(topLeft.y * dpr) / dpr;
+      const s = Math.round(size * dpr) / dpr;
+      ctx.drawImage(c, x, y, s, s);
     }
   }
+
+  ctx.restore();
 }
 
 /** Rebuild the tile map from the vector source of truth (structural ops). */

@@ -15,7 +15,7 @@
  * stroke.id (mulberry32 PRNG).
  */
 
-import { drawStrokePath, applyOneEuro, smoothingToMinCutoff } from './PdfEngine';
+import { drawStrokePath, applyOneEuro, smoothingToMinCutoff, strokeWidth } from './PdfEngine';
 import type { PdfStroke } from './PdfTypes';
 
 // ---- Deterministic helpers -----------------------------------------------------
@@ -68,6 +68,12 @@ export function drawAnnotatedStroke(
       return drawFountain(ctx, stroke, dx, dy);
     case 'pencil':
       return drawPencil(ctx, stroke, dx, dy);
+    case 'marker':
+      // Only a marker stroke drawn with the pressure→opacity toggle ON uses the
+      // pressure-alpha renderer. Legacy/no-style strokes and the toggle OFF fall
+      // through to drawStrokePath (constant alpha), preserving existing behavior.
+      if (stroke.pressureOpacity === true) return drawMarkerPressureAlpha(ctx, stroke, dx, dy);
+      return drawStrokePath(ctx, stroke, dx, dy);
     default:
       return drawStrokePath(ctx, stroke, dx, dy);
   }
@@ -90,6 +96,10 @@ function drawFountain(ctx: CanvasRenderingContext2D, stroke: PdfStroke, dx = 0, 
   if (raw.length === 0) return;
 
   const pts = applyOneEuro(raw, smoothingToMinCutoff(stroke.smoothing));
+  // applyOneEuro emits one output per input point, so pts[i] aligns with raw[i].
+  // Ink-speed sensitivity: fast strokes run thin (ink lags), slow strokes lay
+  // down full ink. ws = 0 → pure pressure; ws = 1 → fast writing thins to 0.15×.
+  const ws = stroke.inkSpeed ?? 0.5;
 
   ctx.save();
   ctx.lineCap = 'round';
@@ -111,8 +121,67 @@ function drawFountain(ctx: CanvasRenderingContext2D, stroke: PdfStroke, dx = 0, 
   for (let i = 1; i < pts.length; i++) {
     const a = pts[i - 1];
     const b = pts[i];
-    const w = (fountainWidth(a.p, stroke.size) + fountainWidth(b.p, stroke.size)) / 2;
-    ctx.lineWidth = w;
+    let w = (fountainWidth(a.p, stroke.size) + fountainWidth(b.p, stroke.size)) / 2;
+    if (ws > 0) {
+      const dt = raw[i].t - raw[i - 1].t;
+      if (dt > 0) {
+        const v = Math.hypot(b.x - a.x, b.y - a.y) / dt; // world units / ms
+        const speedFactor = 1 - clamp01(v / INK_SPEED_VREF);
+        w *= Math.max(0.15, 1 - ws * (1 - speedFactor));
+      }
+    }
+    ctx.lineWidth = Math.max(0.4, w);
+    ctx.beginPath();
+    ctx.moveTo(a.x + dx, a.y + dy);
+    ctx.lineTo(b.x + dx, b.y + dy);
+    ctx.stroke();
+  }
+
+  ctx.restore();
+}
+
+/** Reference speed (~world units/ms) at which fast writing counts as "full thin". */
+const INK_SPEED_VREF = 1.0;
+
+// ---- Marker (pressure → opacity, optional) --------------------------------------
+
+/**
+ * Default brush with the "pressure opacity" toggle ON: per-segment alpha rises
+ * with pressure (light ink at low pressure, full ink at high pressure). Same
+ * marker width curve (strokeWidth) as drawStrokePath. Per-segment round-caps do
+ * stack slightly at joints — the intended "ink depth" watermark effect.
+ */
+function drawMarkerPressureAlpha(ctx: CanvasRenderingContext2D, stroke: PdfStroke, dx = 0, dy = 0): void {
+  const raw = stroke.points;
+  if (raw.length === 0) return;
+
+  const pts = applyOneEuro(raw, smoothingToMinCutoff(stroke.smoothing));
+
+  ctx.save();
+  ctx.lineCap = 'round';
+  ctx.lineJoin = 'round';
+  ctx.globalCompositeOperation = stroke.compositeOperation;
+  ctx.strokeStyle = stroke.color;
+  ctx.fillStyle = stroke.color;
+
+  if (pts.length === 1) {
+    const p = pts[0].p;
+    const alpha = stroke.opacity * (0.15 + 0.85 * clamp01(p));
+    const w = strokeWidth(p, stroke.size, false);
+    ctx.globalAlpha = alpha;
+    ctx.beginPath();
+    ctx.arc(pts[0].x + dx, pts[0].y + dy, w / 2, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+    return;
+  }
+
+  for (let i = 1; i < pts.length; i++) {
+    const a = pts[i - 1];
+    const b = pts[i];
+    const p = (a.p + b.p) / 2;
+    ctx.globalAlpha = stroke.opacity * (0.15 + 0.85 * clamp01(p));
+    ctx.lineWidth = strokeWidth(p, stroke.size, false);
     ctx.beginPath();
     ctx.moveTo(a.x + dx, a.y + dy);
     ctx.lineTo(b.x + dx, b.y + dy);

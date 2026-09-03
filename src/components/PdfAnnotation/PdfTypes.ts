@@ -28,6 +28,10 @@ export interface PdfStroke {
    * 'laser' is excluded here because it is transient and never committed.
    */
   style?: PdfCommittedStrokeStyle;
+  /** Fountain only: ink-speed sensitivity captured at draw time. */
+  inkSpeed?: number;
+  /** Marker only: pressure→opacity flag captured at draw time. */
+  pressureOpacity?: boolean;
   createdAt: number;
 }
 
@@ -45,6 +49,10 @@ export interface PdfBrush {
   opacity: number;
   color: string;
   smoothing: number;
+  /** Fountain only: how strongly fast writing thins the line (0-1). */
+  inkSpeed: number;
+  /** Marker only: enable pressure-driven opacity (0 → light ink, 1 → full). */
+  pressureOpacity: boolean;
 }
 
 export interface PdfCamera {
