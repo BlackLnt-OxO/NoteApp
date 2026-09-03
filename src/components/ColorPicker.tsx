@@ -52,7 +52,7 @@ export const ColorPicker: React.FC<Props> = ({ color, onChange, gfs }) => {
   },[onChange]);
 
   // Wheel drag
-  const wheelDrag = useRef<(e: PointerEvent) => void | null>(null);
+  const wheelDrag = useRef<((e: PointerEvent) => void) | null>(null);
   const onWheelDown = (e: React.PointerEvent) => {
     e.preventDefault();
     const el = wheelRef.current!;
