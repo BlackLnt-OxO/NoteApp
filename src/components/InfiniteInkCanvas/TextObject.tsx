@@ -2,8 +2,9 @@
  * TextObject — a committed text node rendered as an ALWAYS-visible DOM "card"
  * above the canvas (so it reads as a sticky-note text box and can be interacted
  * with). Supports: drag-to-move, corner (width) resize, delete × on hover,
- * double-click / context-menu to re-open editing, and a right-click menu whose
- * "删除" row uses a checkbox-style control.
+ * context-menu (编辑 / checkbox-style 删除), and a plain CLICK on the card opens
+ * it for editing. Empty cards render a visible placeholder so a placed box never
+ * vanishes.
  *
  * When not `interactive` (pen/eraser/laser tools) the card is pointer-events:none
  * so drawing passes straight through it — the box just stays visible above ink.
@@ -31,7 +32,7 @@ const TextObject: React.FC<Props> = ({ node, camera, interactive }) => {
   const [rzW, setRzW] = useState<number | null>(null); // live world delta while resizing
   const boxRef = useRef<HTMLDivElement>(null);
 
-  if (!node.content || !node.content.trim()) return null;
+  const hasContent = !!node.content && !!node.content.trim();
 
   const screen = worldToScreen(node.x, node.y, camera);
   const left = screen.x + (dragD ? dragD.x : 0);
@@ -40,6 +41,13 @@ const TextObject: React.FC<Props> = ({ node, camera, interactive }) => {
   const screenW = Math.max(60, widthWorld * camera.zoom);
   const screenH = Math.max(28, node.height * camera.zoom);
   const fontSize = Math.max(10, node.fontSize * camera.zoom);
+
+  const openEdit = useCallback(() => {
+    setMenu(null);
+    setDragD(null);
+    setRzW(null);
+    setEditingTextId(node.id);
+  }, [node.id, setEditingTextId]);
 
   // ---- drag to move (world delta = screen delta / zoom) ------------------------
   const dragRef = useRef<{ sx: number; sy: number; ox: number; oy: number } | null>(null);
@@ -66,12 +74,18 @@ const TextObject: React.FC<Props> = ({ node, camera, interactive }) => {
     try {
       (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId);
     } catch { /* ignore */ }
+    const moved = Math.hypot(e.clientX - d.sx, e.clientY - d.sy);
+    setDragD(null);
+    if (moved < 5) {
+      // A plain click (no drag) = open the box for editing.
+      openEdit();
+      return;
+    }
     updateTextNode(node.id, {
       x: d.ox + (e.clientX - d.sx) / camera.zoom,
       y: d.oy + (e.clientY - d.sy) / camera.zoom,
     });
-    setDragD(null);
-  }, [node.id, camera.zoom, updateTextNode]);
+  }, [node.id, camera.zoom, updateTextNode, openEdit]);
 
   // ---- width resize (height follows content) ------------------------------------
   const rzRef = useRef<{ sx: number; ow: number } | null>(null);
@@ -105,13 +119,6 @@ const TextObject: React.FC<Props> = ({ node, camera, interactive }) => {
     });
     setRzW(null);
   }, [node.id, camera.zoom, node.height, updateTextNode]);
-
-  const openEdit = useCallback(() => {
-    setMenu(null);
-    setDragD(null);
-    setRzW(null);
-    setEditingTextId(node.id);
-  }, [node.id, setEditingTextId]);
 
   const onContext = useCallback((e: React.MouseEvent) => {
     if (!interactive) return;
@@ -161,16 +168,17 @@ const TextObject: React.FC<Props> = ({ node, camera, interactive }) => {
             background: 'var(--glass-bg, rgba(30,30,50,0.72))',
             backdropFilter: 'blur(6px)',
             WebkitBackdropFilter: 'blur(6px)',
-            border: `1px solid ${hover ? 'var(--accent, rgba(255,255,255,0.6))' : 'rgba(128,128,150,0.35)'}`,
+            border: `1px solid ${hover ? 'var(--accent, rgba(255,255,255,0.6))' : hasContent ? 'rgba(128,128,150,0.35)' : 'rgba(128,128,150,0.22)'}`,
             color: node.color || 'var(--text-primary, #e0e0e0)',
             fontSize,
             lineHeight: 1.5,
             whiteSpace: 'pre-wrap',
             wordBreak: 'break-word',
             boxShadow: '0 2px 10px rgba(0,0,0,0.18)',
+            minWidth: 0,
           }}
         >
-          {node.content}
+          {hasContent ? node.content : <span style={{ opacity: 0.5 }}>输入文本…</span>}
         </div>
 
         {interactive && hover && (

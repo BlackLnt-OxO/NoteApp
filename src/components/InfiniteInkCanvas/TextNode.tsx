@@ -20,13 +20,13 @@ const TextNode: React.FC<Props> = ({ node, camera }) => {
   const screenW = Math.max(120, node.width * camera.zoom);
   const fontSizePx = Math.max(12, node.fontSize * camera.zoom);
 
-  // Commit current content (or delete when empty) and close the editor.
+  // Commit current content and close the editor. Even an EMPTY box is kept (it
+  // becomes a visible placeholder card) so a tap/click that places a box never
+  // makes it vanish — users can click the card again to type.
+  const finishedRef = useRef(false);
   const commit = useCallback(() => {
-    if (content.trim() === '') {
-      deleteTextNode(node.id); // empty → don't leave an invisible box
-      setEditingTextId(null);
-      return;
-    }
+    if (finishedRef.current) return;
+    finishedRef.current = true;
     const el = containerRef.current;
     pushHistory();
     updateTextNode(node.id, {
@@ -35,7 +35,18 @@ const TextNode: React.FC<Props> = ({ node, camera }) => {
       height: Math.max(20, (el?.offsetHeight ?? 40) / camera.zoom),
     });
     setEditingTextId(null);
-  }, [content, node.id, camera.zoom, updateTextNode, deleteTextNode, pushHistory, setEditingTextId]);
+  }, [content, node.id, camera.zoom, updateTextNode, pushHistory, setEditingTextId]);
+
+  // Escape = explicit cancel: only deletes the node when it is still empty.
+  const cancel = useCallback(() => {
+    if (finishedRef.current) return;
+    if (content.trim() === '') {
+      finishedRef.current = true;
+      deleteTextNode(node.id); // clears editingTextId itself
+    } else {
+      commit();
+    }
+  }, [content, commit, deleteTextNode]);
 
   // Auto-focus on mount + reset height to fit content.
   useEffect(() => {
@@ -58,20 +69,19 @@ const TextNode: React.FC<Props> = ({ node, camera }) => {
     }
   }, []);
 
-  // Commit on blur (delete when empty).
+  // Blur = normal finish (keeps even an empty box).
   const handleBlur = useCallback(() => commit(), [commit]);
 
-  // Keyboard shortcuts
+  // Keyboard shortcuts: Ctrl+Enter = finish; Escape = cancel (delete if empty).
   const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && e.ctrlKey) {
       e.preventDefault();
       commit();
-    }
-    if (e.key === 'Escape') {
+    } else if (e.key === 'Escape') {
       e.preventDefault();
-      commit();
+      cancel();
     }
-  }, [commit]);
+  }, [commit, cancel]);
 
   // Prevent pointer events from falling through
   const stopProp = (e: React.PointerEvent) => e.stopPropagation();
