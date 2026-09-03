@@ -28,8 +28,11 @@ export function getPressure(e: { pointerType: string; pressure: number }): numbe
   // Non-pen pointers (mouse/touch) have no real pressure → neutral 0.5.
   if (e.pointerType !== 'pen') return 0.5;
   const p = e.pressure;
-  // Hover / missing / corrupt events: treat as a very light (but non-zero) touch.
-  if (!Number.isFinite(p) || p <= 0.01) return 0.05;
+  // Hover / zero / corrupt events: keep a tiny floor so the pen never "disappears"
+  // when a driver reports 0 while barely touching.
+  if (!Number.isFinite(p) || p <= 0) return 0.05;
+  // Otherwise pass the REAL tiny pressures through (a 16383-level tablet gives
+  // values as small as ~0.001) so ultra-light strokes can be drawn very fine.
   return Math.max(0, Math.min(1, p));
 }
 

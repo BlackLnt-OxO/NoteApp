@@ -217,7 +217,10 @@ describe('marker widths', () => {
       expect(widths[i]).toBeGreaterThanOrEqual(widths[i - 1] - 1e-6); // no sudden drop
       expect(Math.abs(widths[i] - widths[i - 1])).toBeLessThanOrEqual(10 * 0.2 + 1e-6); // capped step
     }
-    expect(widths[0]).toBeGreaterThanOrEqual(Math.max(0.5, 10 * 0.1)); // light pressure still visible
+    // Very light pressure → a fine but NON-ZERO hairline (not collapsed to fat).
+    expect(widths[0]).toBeGreaterThanOrEqual(Math.max(0.5, 10 * 0.04) - 1e-6);
+    // And ultra-light pressure is much thinner than full pressure (fine strokes OK).
+    expect(widths[0]).toBeLessThanOrEqual(widths[widths.length - 1] * 0.35 + 1e-6);
     expect(widths[widths.length - 1]).toBeLessThanOrEqual(10 + 1e-6);
   });
 

@@ -41,6 +41,10 @@ describe('getPressure', () => {
     expect(getPressure({ pointerType: 'pen', pressure: Number.NaN })).toBe(0.05);
     expect(getPressure({ pointerType: 'pen', pressure: Number.POSITIVE_INFINITY })).toBe(0.05);
   });
+  it('tiny but real pen pressure passes through (16383-level tablets)', () => {
+    expect(getPressure({ pointerType: 'pen', pressure: 0.004 })).toBe(0.004);
+    expect(getPressure({ pointerType: 'pen', pressure: 0.001 })).toBe(0.001);
+  });
 });
 
 describe('addRawPoint', () => {

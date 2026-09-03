@@ -90,11 +90,20 @@ export function smoothPressure(pts: { p: number }[], responsiveness = 0.42): num
   return out;
 }
 
-/** Photoshop-like pressure → width: a gamma curve so LOW pressure still yields a
- *  clearly visible line, with a hard floor (never below 0.5 px). */
-export function pressureToWidth(pressure: number, baseSize: number, gamma = 0.84): number {
+/** Hairline floor: very light pressure must still draw a FINE line (the user's
+ *  16383-level tablet reports genuinely tiny pressures), so the floor is small —
+ *  ≈4% of the brush size, never below 0.5 px (below that the anti-aliased line
+ *  starts to flicker/disappear). */
+function minStrokeWidth(baseSize: number): number {
+  return Math.max(0.5, baseSize * 0.04);
+}
+
+/** Pressure → width. LINEAR mapping (gamma=1) so a light touch maps to a thin
+ *  line and only heavier pressure fattens it — Photoshop-style size-by-pressure
+ *  with a small hairline floor. */
+export function pressureToWidth(pressure: number, baseSize: number, gamma = 1): number {
   const p = Math.pow(finite01(pressure), gamma);
-  const min = Math.max(0.5, baseSize * 0.12);
+  const min = minStrokeWidth(baseSize);
   const max = Math.max(min, baseSize);
   return min + (max - min) * p;
 }
@@ -105,7 +114,7 @@ export function pressureToWidth(pressure: number, baseSize: number, gamma = 0.84
 export function stabilizeWidths(widths: number[], baseSize: number): number[] {
   const n = widths.length;
   if (n === 0) return [];
-  const min = Math.max(0.5, baseSize * 0.1);
+  const min = minStrokeWidth(baseSize);
   const max = Math.max(min, baseSize * 1.15);
   const widening = Math.max(0.35, baseSize * 0.16);
   const narrowing = Math.max(0.25, baseSize * 0.11);
@@ -131,7 +140,7 @@ export function computeMarkerWidths(pts: { p: number }[], baseSize: number): num
   const pressures = smoothPressure(pts, 0.42);
   const widths = new Array<number>(pressures.length);
   for (let i = 0; i < pressures.length; i++) {
-    widths[i] = pressureToWidth(pressures[i], baseSize, 0.84);
+    widths[i] = pressureToWidth(pressures[i], baseSize);
   }
   return stabilizeWidths(widths, baseSize);
 }
@@ -174,11 +183,11 @@ export function computeFountainWidths(
   if (n === 0) return [];
   const pressures = smoothPressure(pts, 0.42);
   const gain = 0.5 + 0.5 * clamp01(inkSpeed); // 0.5 (inkSpeed=0) → 1.0 (inkSpeed=1)
-  const min = Math.max(0.5, baseSize * 0.1);
+  const min = minStrokeWidth(baseSize);
 
   const out = new Array<number>(n);
   for (let i = 0; i < n; i++) {
-    const pw = pressureToWidth(pressures[i], baseSize, 0.84) * gain;
+    const pw = pressureToWidth(pressures[i], baseSize) * gain;
     const norm = clamp01(computePointSpeed(pts, i) / INK_SPEED_VREF);
     const speedFactor = Math.max(0.58, 1 - norm * 0.42); // slow≈1 → fast≈0.58
     out[i] = Math.max(min, pw * speedFactor);
