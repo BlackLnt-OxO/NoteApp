@@ -35,6 +35,12 @@ describe('getPressure', () => {
   it('pen', () => expect(getPressure({ pointerType: 'pen', pressure: 0.8 })).toBe(0.8));
   it('zero pen → 0.05', () => expect(getPressure({ pointerType: 'pen', pressure: 0 })).toBe(0.05));
   it('mouse → 0.5', () => expect(getPressure({ pointerType: 'mouse', pressure: 0 })).toBe(0.5));
+  it('pen above 1 clamps to 1', () => expect(getPressure({ pointerType: 'pen', pressure: 1.4 })).toBe(1));
+  it('pen negative → 0.05', () => expect(getPressure({ pointerType: 'pen', pressure: -2 })).toBe(0.05));
+  it('pen NaN/Infinity → 0.05', () => {
+    expect(getPressure({ pointerType: 'pen', pressure: Number.NaN })).toBe(0.05);
+    expect(getPressure({ pointerType: 'pen', pressure: Number.POSITIVE_INFINITY })).toBe(0.05);
+  });
 });
 
 describe('addRawPoint', () => {

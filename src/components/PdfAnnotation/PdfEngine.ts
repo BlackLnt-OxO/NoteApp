@@ -25,8 +25,12 @@ export const MAX_ZOOM = 8;
 // ---- Pressure -----------------------------------------------------------------
 
 export function getPressure(e: { pointerType: string; pressure: number }): number {
-  if (e.pointerType === 'pen') return e.pressure > 0.01 ? e.pressure : 0.05;
-  return 0.5;
+  // Non-pen pointers (mouse/touch) have no real pressure → neutral 0.5.
+  if (e.pointerType !== 'pen') return 0.5;
+  const p = e.pressure;
+  // Hover / missing / corrupt events: treat as a very light (but non-zero) touch.
+  if (!Number.isFinite(p) || p <= 0.01) return 0.05;
+  return Math.max(0, Math.min(1, p));
 }
 
 // ---- Raw sampling -------------------------------------------------------------

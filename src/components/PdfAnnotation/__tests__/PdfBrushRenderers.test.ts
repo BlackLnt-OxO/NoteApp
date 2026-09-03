@@ -182,6 +182,20 @@ describe('fountain widths (pressure + speed)', () => {
       expect(w).toBeGreaterThanOrEqual(0.4);
     }
   });
+
+  it('stays clearly visible when fast AND low pressure (never near zero)', () => {
+    const fastLight = [
+      { x: 0, y: 0, p: 0.05, t: 0 },
+      { x: 10, y: 0, p: 0.05, t: 8 },
+      { x: 20, y: 0, p: 0.05, t: 16 },
+      { x: 30, y: 0, p: 0.05, t: 24 },
+    ];
+    const widths = computeFountainWidths(fastLight, 12, 0.5);
+    for (const w of widths) {
+      expect(Number.isFinite(w)).toBe(true);
+      expect(w).toBeGreaterThanOrEqual(0.5); // min-width floor keeps it visible
+    }
+  });
 });
 
 describe('marker widths', () => {
@@ -193,6 +207,35 @@ describe('marker widths', () => {
       expect(w).toBeGreaterThanOrEqual(0.5);
       expect(w).toBeLessThanOrEqual(12);
     }
+  });
+
+  it('responds smoothly and monotonically to pressure (no jumps), never collapsing at low pressure', () => {
+    const pts: { p: number }[] = [];
+    for (let p = 0; p <= 1.0001; p += 0.05) pts.push({ p });
+    const widths = computeMarkerWidths(pts, 10);
+    for (let i = 1; i < widths.length; i++) {
+      expect(widths[i]).toBeGreaterThanOrEqual(widths[i - 1] - 1e-6); // no sudden drop
+      expect(Math.abs(widths[i] - widths[i - 1])).toBeLessThanOrEqual(10 * 0.2 + 1e-6); // capped step
+    }
+    expect(widths[0]).toBeGreaterThanOrEqual(Math.max(0.5, 10 * 0.1)); // light pressure still visible
+    expect(widths[widths.length - 1]).toBeLessThanOrEqual(10 + 1e-6);
+  });
+
+  it('is independent of writing speed (only pressure drives marker width)', () => {
+    const pressures = [
+      { p: 0.2 },
+      { p: 0.5 },
+      { p: 0.9 },
+      { p: 0.4 },
+      { p: 0.8 },
+      { p: 1 },
+      { p: 0.6 },
+      { p: 0.3 },
+    ];
+    // Same pressure profile, completely different (irrelevant) geometry/timestamps.
+    const slow = pressures.map((q, i) => ({ x: i * 4, y: 0, p: q.p, t: i * 50, pressure: q.p }));
+    const fast = pressures.map((q, i) => ({ x: i * 40, y: 0, p: q.p, t: i * 5, pressure: q.p }));
+    expect(computeMarkerWidths(slow, 10)).toEqual(computeMarkerWidths(fast, 10));
   });
 });
 
@@ -296,7 +339,7 @@ describe('drawAnnotatedStroke — marker union single-fill (explicit nonzero)', 
       ),
     );
     const alphas = setValues(c, 'globalAlpha');
-    expect(alphas[alphas.length - 1] as number).toBeCloseTo(0.2 + 0.8 * 0.3, 5);
+    expect(alphas[alphas.length - 1] as number).toBeCloseTo(0.45 + 0.55 * 0.3, 5); // gentle pressure-alpha
   });
 });
 

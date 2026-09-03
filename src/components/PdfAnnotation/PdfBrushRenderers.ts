@@ -30,7 +30,7 @@
  * you press) — still a single fill, so it never stacks.
  */
 
-import { drawStrokePath, applyOneEuro, smoothingToMinCutoff, strokeWidth } from './PdfEngine';
+import { drawStrokePath, applyOneEuro, smoothingToMinCutoff } from './PdfEngine';
 import type { PdfStroke } from './PdfTypes';
 
 // ---- Small numeric helpers ----------------------------------------------------
@@ -70,62 +70,120 @@ export function averagePressure(pts: { p: number }[]): number {
   return sum / pts.length;
 }
 
-// ---- Width computation ---------------------------------------------------------
+// ---- Pressure + width computation -------------------------------------------------
 
-/** Marker: linear pressure → width (same curve PdfEngine.drawStrokePath used). */
-export function computeMarkerWidths(pts: { p: number }[], baseSize: number): number[] {
-  const out = new Array<number>(pts.length);
-  for (let i = 0; i < pts.length; i++) {
-    out[i] = Math.max(0.5, strokeWidth(finite01(pts[i].p), baseSize, false));
+/** Forward EMA (+ light backward pass) over the pressure samples so a single
+ *  device spike can't cause a sharp width jump. Coordinate smoothing (the 1€
+ *  filter) and pressure smoothing are kept separate. */
+export function smoothPressure(pts: { p: number }[], responsiveness = 0.42): number[] {
+  const n = pts.length;
+  if (n === 0) return [];
+  const alpha = Math.max(0.05, Math.min(0.9, responsiveness));
+  const out = new Array<number>(n);
+  out[0] = finite01(pts[0].p);
+  for (let i = 1; i < n; i++) {
+    out[i] = out[i - 1] + (finite01(pts[i].p) - out[i - 1]) * alpha;
+  }
+  for (let i = n - 2; i >= 0; i--) {
+    out[i] = out[i] + (out[i + 1] - out[i]) * 0.15;
   }
   return out;
+}
+
+/** Photoshop-like pressure → width: a gamma curve so LOW pressure still yields a
+ *  clearly visible line, with a hard floor (never below 0.5 px). */
+export function pressureToWidth(pressure: number, baseSize: number, gamma = 0.84): number {
+  const p = Math.pow(finite01(pressure), gamma);
+  const min = Math.max(0.5, baseSize * 0.12);
+  const max = Math.max(min, baseSize);
+  return min + (max - min) * p;
+}
+
+/** Cap per-sample width deltas (wider can change a bit faster than narrower) so
+ *  a pressure spike can't blow a stroke up instantly, then a light backward
+ *  blend so the tail doesn't step. */
+export function stabilizeWidths(widths: number[], baseSize: number): number[] {
+  const n = widths.length;
+  if (n === 0) return [];
+  const min = Math.max(0.5, baseSize * 0.1);
+  const max = Math.max(min, baseSize * 1.15);
+  const widening = Math.max(0.35, baseSize * 0.16);
+  const narrowing = Math.max(0.25, baseSize * 0.11);
+  const safe = (w: number) => (Number.isFinite(w) ? w : min);
+
+  const out = new Array<number>(n);
+  out[0] = Math.max(min, Math.min(max, safe(widths[0])));
+  for (let i = 1; i < n; i++) {
+    const target = Math.max(min, Math.min(max, safe(widths[i])));
+    const d = target - out[i - 1];
+    out[i] = d > widening ? out[i - 1] + widening : d < -narrowing ? out[i - 1] - narrowing : target;
+  }
+  for (let i = n - 2; i >= 0; i--) {
+    out[i] = out[i] * 0.84 + out[i + 1] * 0.16;
+  }
+  return out;
+}
+
+/** Marker (default brush): width is driven ONLY by smoothed pressure through a
+ *  gamma curve — never by writing speed — and stabilized so it changes smoothly.
+ *  Opacity stays constant (see drawMarker). */
+export function computeMarkerWidths(pts: { p: number }[], baseSize: number): number[] {
+  const pressures = smoothPressure(pts, 0.42);
+  const widths = new Array<number>(pressures.length);
+  for (let i = 0; i < pressures.length; i++) {
+    widths[i] = pressureToWidth(pressures[i], baseSize, 0.84);
+  }
+  return stabilizeWidths(widths, baseSize);
 }
 
 /** Reference speed (~world units/ms) at which fast writing counts as "full thin". */
 const INK_SPEED_VREF = 1.0;
 
-/** Fountain: pressure → width (capillary curve) × ink-gain × fast-thin speed
- *  factor. `inkSpeed` keeps its toolbar meaning — how much ink the pen lays
- *  down (higher → thicker base) — with a FIXED extra term that keeps fast
- *  strokes thinner than slow strokes (ink lags when you write fast). */
+/** Average of the two adjacent segment speeds at a sample; dt<=0 / non-finite is
+ *  skipped (never divides), extreme speeds are clamped by the caller. */
+export function computePointSpeed(
+  pts: { x: number; y: number; t: number }[],
+  index: number,
+): number {
+  let sum = 0, count = 0;
+  const add = (a: { x: number; y: number; t: number }, b: { x: number; y: number; t: number }) => {
+    const dt = b.t - a.t;
+    if (!Number.isFinite(dt) || dt <= 0) return;
+    const dist = Math.hypot(b.x - a.x, b.y - a.y);
+    const speed = dist / dt;
+    if (Number.isFinite(speed)) {
+      sum += speed;
+      count++;
+    }
+  };
+  if (index > 0) add(pts[index - 1], pts[index]);
+  if (index < pts.length - 1) add(pts[index], pts[index + 1]);
+  return count > 0 ? sum / count : 0;
+}
+
+/** Fountain: pressure (gamma curve) is the main width driver; writing speed only
+ *  thins the stroke by a bounded ≤~42% (never to the point of disappearing), and
+ *  alpha stays constant. `inkSpeed` keeps its toolbar meaning (how much ink the
+ *  pen lays down → base thickness), NOT "faster = thicker": fast always thins. */
 export function computeFountainWidths(
   pts: { x: number; y: number; p: number; t: number }[],
   baseSize: number,
   inkSpeed: number,
 ): number[] {
   const n = pts.length;
-  const out = new Array<number>(n);
+  if (n === 0) return [];
+  const pressures = smoothPressure(pts, 0.42);
   const gain = 0.5 + 0.5 * clamp01(inkSpeed); // 0.5 (inkSpeed=0) → 1.0 (inkSpeed=1)
+  const min = Math.max(0.5, baseSize * 0.1);
 
+  const out = new Array<number>(n);
   for (let i = 0; i < n; i++) {
-    const p = finite01(pts[i].p);
-    // Thin at low pressure, approaching `size` at full pressure.
-    let w = Math.max(0.4, baseSize * (0.08 + 0.92 * Math.pow(p, 1.6))) * gain;
-
-    // Average adjacent segment speeds at this point → smooth taper. dt<=0 (equal
-    // or inverted timestamps) is skipped so no division by zero / negative width.
-    let v = 0, cnt = 0;
-    if (i > 0) {
-      const dt = pts[i].t - pts[i - 1].t;
-      if (dt > 0) {
-        v += Math.hypot(pts[i].x - pts[i - 1].x, pts[i].y - pts[i - 1].y) / dt;
-        cnt++;
-      }
-    }
-    if (i < n - 1) {
-      const dt = pts[i + 1].t - pts[i].t;
-      if (dt > 0) {
-        v += Math.hypot(pts[i + 1].x - pts[i].x, pts[i + 1].y - pts[i].y) / dt;
-        cnt++;
-      }
-    }
-    if (cnt > 0) {
-      const sf = 1 - clamp01((v / cnt) / INK_SPEED_VREF);
-      w *= Math.max(0.45, 1 - 0.55 * (1 - sf)); // fast → thinner (min 0.45×)
-    }
-    out[i] = Math.max(0.4, w);
+    const pw = pressureToWidth(pressures[i], baseSize, 0.84) * gain;
+    const norm = clamp01(computePointSpeed(pts, i) / INK_SPEED_VREF);
+    const speedFactor = Math.max(0.58, 1 - norm * 0.42); // slow≈1 → fast≈0.58
+    out[i] = Math.max(min, pw * speedFactor);
   }
-  return out;
+  return stabilizeWidths(out, baseSize);
 }
 
 /** Pencil lead core: narrow hard lead that widens a little with pressure. */
@@ -426,9 +484,14 @@ function drawMarker(ctx: CanvasRenderingContext2D, stroke: PdfStroke, dx = 0, dy
   // Whole-stroke alpha: if the "pressure opacity" toggle is on, the stroke's ink
   // depth follows how hard you press (AVERAGE pressure) — still a single fill,
   // so it never stacks. Toggle off / legacy strokes stay at constant opacity.
+  // Whole-stroke alpha: if the "pressure opacity" toggle is on, ink depth still
+  // follows how hard you press (AVERAGE pressure, one fill → never stacks), but
+  // the curve is GENTLE (0.45..1) so a light stroke stays clearly visible instead
+  // of almost disappearing (width and opacity should not both collapse at low
+  // pressure). Toggle off / legacy strokes stay at constant opacity.
   const alpha =
     stroke.pressureOpacity === true
-      ? clamp01(stroke.opacity * (0.2 + 0.8 * averagePressure(pts)))
+      ? clamp01(stroke.opacity * (0.45 + 0.55 * averagePressure(pts)))
       : stroke.opacity;
 
   drawVariableRibbon(ctx, ribbon.points, ribbon.widths, stroke.color, alpha, stroke.compositeOperation, dx, dy);
