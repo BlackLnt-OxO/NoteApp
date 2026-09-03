@@ -193,18 +193,18 @@ describe('fountain widths (pressure + speed)', () => {
     const widths = computeFountainWidths(fastLight, 12, 0.5);
     for (const w of widths) {
       expect(Number.isFinite(w)).toBe(true);
-      expect(w).toBeGreaterThanOrEqual(0.5); // min-width floor keeps it visible
+      expect(w).toBeGreaterThanOrEqual(0.25); // fine hairline, never zero
     }
   });
 });
 
 describe('marker widths', () => {
-  it('are bounded within [0.5, size] and finite even for NaN/Inf pressure', () => {
+  it('are bounded within [~0.25, size] and finite even for NaN/Inf pressure', () => {
     const pts = [{ p: 0 }, { p: 0.5 }, { p: 1 }, { p: NaN }, { p: Infinity }];
     const widths = computeMarkerWidths(pts, 12);
     for (const w of widths) {
       expect(Number.isFinite(w)).toBe(true);
-      expect(w).toBeGreaterThanOrEqual(0.5);
+      expect(w).toBeGreaterThanOrEqual(0.25);
       expect(w).toBeLessThanOrEqual(12);
     }
   });
@@ -217,8 +217,8 @@ describe('marker widths', () => {
       expect(widths[i]).toBeGreaterThanOrEqual(widths[i - 1] - 1e-6); // no sudden drop
       expect(Math.abs(widths[i] - widths[i - 1])).toBeLessThanOrEqual(10 * 0.2 + 1e-6); // capped step
     }
-    // Very light pressure → a fine but NON-ZERO hairline (not collapsed to fat).
-    expect(widths[0]).toBeGreaterThanOrEqual(Math.max(0.5, 10 * 0.04) - 1e-6);
+    // Very light pressure → an EXTREMELY fine but NON-ZERO hairline.
+    expect(widths[0]).toBeGreaterThanOrEqual(Math.max(0.25, 10 * 0.02) - 1e-6);
     // And ultra-light pressure is much thinner than full pressure (fine strokes OK).
     expect(widths[0]).toBeLessThanOrEqual(widths[widths.length - 1] * 0.35 + 1e-6);
     expect(widths[widths.length - 1]).toBeLessThanOrEqual(10 + 1e-6);

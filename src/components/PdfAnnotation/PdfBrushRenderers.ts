@@ -90,12 +90,12 @@ export function smoothPressure(pts: { p: number }[], responsiveness = 0.42): num
   return out;
 }
 
-/** Hairline floor: very light pressure must still draw a FINE line (the user's
- *  16383-level tablet reports genuinely tiny pressures), so the floor is small —
- *  ≈4% of the brush size, never below 0.5 px (below that the anti-aliased line
- *  starts to flicker/disappear). */
+/** Hairline floor: very light pressure should map to an EXTREMELY thin line (the
+ *  user's 16383-level tablet reports genuinely tiny pressures). The floor is only
+ *  ≈2% of the brush size and ~0.25 px absolute — enough to keep the anti-aliased
+ *  hairline from fully flickering out while staying as fine as possible. */
 function minStrokeWidth(baseSize: number): number {
-  return Math.max(0.5, baseSize * 0.04);
+  return Math.max(0.25, baseSize * 0.02);
 }
 
 /** Pressure → width. LINEAR mapping (gamma=1) so a light touch maps to a thin
@@ -347,7 +347,7 @@ export function drawVariableRibbon(
   const n = points.length;
   if (n === 0) return;
 
-  const half = (w: number) => Math.max(0.5, w) * 0.5;
+  const half = (w: number) => Math.max(0.25, w) * 0.5;
   const disc = (cx: number, cy: number, r: number, ccw: boolean) => {
     ctx.moveTo(cx + dx + r, cy + dy);
     ctx.arc(cx + dx, cy + dy, r, 0, Math.PI * 2, ccw);
