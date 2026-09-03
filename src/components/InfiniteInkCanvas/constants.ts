@@ -8,9 +8,9 @@ export const DEFAULT_BRUSH: BrushSettings = {
   size: 8,
   opacity: 1,
   color: 'rgba(255,255,255,0.95)',
-  smoothing: 0.35,
+  smoothing: 0.1,
   inkSpeed: 0.5,
-  pressureOpacity: true,
+  pressureOpacity: false,
   quickSizes: [8, 20, 40],
 };
 

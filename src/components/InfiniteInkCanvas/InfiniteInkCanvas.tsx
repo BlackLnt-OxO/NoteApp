@@ -1,6 +1,6 @@
 import React, { useRef, useEffect, useCallback, useState } from 'react';
 import { useCanvasStore } from './useCanvasStore';
-import { drawTextOnCanvas, drawSelectionHighlight, drawSelectionRect } from './CanvasRenderer';
+import { drawSelectionHighlight, drawSelectionRect } from './CanvasRenderer';
 import {
   drawDotGrid, getPressure, addRawPoint,
   hitTestStroke, getStrokeBounds, boundsIntersectRect,
@@ -12,6 +12,7 @@ import {
 } from './InkTiles';
 import TextNode from './TextNode';
 import ImageObject from './ImageObject';
+import TextObject from './TextObject';
 import Toolbar from './Toolbar';
 import ToolbarShell from './ToolbarShell';
 import { useCanvasToolbarStore } from './useToolbarStore';
@@ -93,7 +94,6 @@ const InfiniteInkCanvas: React.FC = () => {
   const editingTextId = useCanvasStore((s) => s.editingTextId);
   const selectedIds = useCanvasStore((s) => s.selectedIds);
   const selectionMode = useCanvasStore((s) => s.selectionMode);
-  const eraserMode = useCanvasStore((s) => s.eraserMode);
   const insertMode = useCanvasStore((s) => s.insertMode);
   const isDraggingToolbar = useCanvasToolbarStore((s) => s.isDragging);
   const tOffset = useCanvasToolbarStore((s) => s.offset);
@@ -182,10 +182,8 @@ const InfiniteInkCanvas: React.FC = () => {
     // Rasterized ink tiles (O(1) per frame).
     drawVisibleTiles(ctx, inkTilesRef.current, cam, vw, vh, dpr);
 
-    // Text nodes stay vector — drawn every frame (never rasterized into tiles).
-    for (const obj of state.objects) {
-      if (obj.type === 'text' && obj.id !== state.editingTextId) drawTextOnCanvas(ctx, obj);
-    }
+    // Text nodes are now always-interactive DOM cards rendered ABOVE the canvas
+    // (TextObject) — they are intentionally NOT drawn into the vector canvas.
 
     // Live drag-move of selected strokes (snapshot + delta).
     if (selectDragRef.current) {
@@ -242,7 +240,13 @@ const InfiniteInkCanvas: React.FC = () => {
     // While writing, keep ALL trails lit (earlier strokes stay until the last
     // one lifts). Once idle, clear the whole group after it fades past lifetime.
     const holding = laserRef.current.some((s) => s.end === undefined);
-    if (!holding && now - laserActiveRef.current >= LASER_LIFETIME) laserRef.current = [];
+    if (!holding && now - laserActiveRef.current >= LASER_LIFETIME) {
+      laserRef.current = [];
+      // Paint ONE final frame with no lasers so the last faint (alpha≈0) trail is
+      // not left on the canvas until an unrelated later render clears it.
+      dirtyRef.current = true;
+      doRender();
+    }
     if (laserRef.current.length) {
       dirtyRef.current = true;
       doRender();
@@ -668,18 +672,16 @@ const InfiniteInkCanvas: React.FC = () => {
 
   // ---- Cursor -----------------------------------------------------------------
 
-  const freeEraser = activeTool === 'eraser' && eraserMode === 'free';
-  const strokeEraser = activeTool === 'eraser' && eraserMode === 'stroke';
-  // None → CSS circle overlay (pen / free eraser); others use native cursor
-  const cursorStyle = (activeTool === 'pen' || freeEraser) ? 'none'
-    : strokeEraser ? 'crosshair'
+  // Pen AND the eraser (both free & whole-stroke modes) share the round brush
+  // cursor; the ring stays visible while pressing/dragging (never hidden on down).
+  const cursorStyle = (activeTool === 'pen' || activeTool === 'eraser') ? 'none'
     : activeTool === 'text' ? 'text'
     : activeTool === 'insert' && insertMode === 'text' ? 'text'
     : (activeTool === 'select' || activeTool === 'insert') ? 'crosshair'
     : 'default';
   const editingNode = objects.find((o): o is TextNodeData => o.type === 'text' && o.id === editingTextId);
 
-  const showCursor = (activeTool === 'pen' || freeEraser) && cursorScreen && !isDraggingToolbar;
+  const showCursor = (activeTool === 'pen' || activeTool === 'eraser') && cursorScreen && !isDraggingToolbar;
   // Circle diameter in screen px = world width × zoom, so it matches the drawn line.
   const laserSize = Math.max(1.5, brushSettings.size * 0.4);
   const cs = (activeTool === 'eraser'
@@ -690,6 +692,10 @@ const InfiniteInkCanvas: React.FC = () => {
   const ringBg = isLight
     ? (activeTool === 'eraser' ? 'rgba(30,30,40,0.14)' : 'rgba(30,30,40,0.07)')
     : (activeTool === 'eraser' ? 'rgba(255,255,255,0.12)' : 'rgba(255,255,255,0.06)');
+  // Text cards are interactive in the select tool and in insert-text mode; while
+  // drawing/erasing they are pointer-events:none so strokes pass through.
+  const interactiveText =
+    activeTool === 'select' || (activeTool === 'insert' && insertMode === 'text');
 
   return (
     <div ref={containerRef} style={{ position: 'absolute', inset: 0, overflow: 'hidden', background: 'var(--page-bg)', borderRadius: '0 0 12px 0' }}>
@@ -703,6 +709,14 @@ const InfiniteInkCanvas: React.FC = () => {
         onPointerCancel={handlePointerUp}
         onPointerLeave={() => setCursorScreen(null)}
         onWheel={handleWheel} />
+
+      {/* Committed text = always-visible DOM cards (above ink). Interactive in the
+          select / insert-text tools; the one being edited is rendered by TextNode. */}
+      {objects
+        .filter((o): o is TextNodeData => o.type === 'text' && o.id !== editingTextId)
+        .map((o) => (
+          <TextObject key={o.id} node={o} camera={camera} interactive={interactiveText} />
+        ))}
 
       {showCursor && cursorScreen && (
         <div style={{ position: 'absolute', left: cursorScreen.x / uiScale, top: cursorScreen.y / uiScale, width: cs / uiScale, height: cs / uiScale,

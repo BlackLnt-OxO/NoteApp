@@ -287,7 +287,6 @@ const PdfCanvas: React.FC = () => {
   const activeTool = usePdfStore((s) => s.activeTool);
   const brushType = usePdfStore((s) => s.brushType);
   const brush = usePdfStore((s) => s.brush);
-  const eraserMode = usePdfStore((s) => s.eraserMode);
   const showDotGrid = usePdfStore((s) => s.showDotGrid);
   const camera = usePdfStore((s) => s.camera);
   const isDraggingToolbar = usePdfToolbarStore((s) => s.isDragging);
@@ -412,7 +411,13 @@ const PdfCanvas: React.FC = () => {
     const now = performance.now();
     // While writing, keep ALL trails lit; once idle, clear the group after fade.
     const holding = laserRef.current.some((s) => s.end === undefined);
-    if (!holding && now - laserActiveRef.current >= LASER_LIFETIME) laserRef.current = [];
+    if (!holding && now - laserActiveRef.current >= LASER_LIFETIME) {
+      laserRef.current = [];
+      // Paint ONE final frame with no lasers so the last faint (alpha≈0) trail is
+      // not left on the canvas until an unrelated later render clears it.
+      dirtyRef.current = true;
+      doRender();
+    }
     if (laserRef.current.length) {
       dirtyRef.current = true;
       doRender();
@@ -910,13 +915,13 @@ const PdfCanvas: React.FC = () => {
 
   // ---- Cursor -----------------------------------------------------------------
 
-  const freeEraser = activeTool === 'eraser' && eraserMode === 'free';
-  const cursorStyle = (activeTool === 'pen' || freeEraser)
+  // Pen AND the eraser (both free & whole-stroke modes) share the round brush
+  // cursor; the ring stays visible while pressing/dragging (never hidden on down).
+  const cursorStyle = (activeTool === 'pen' || activeTool === 'eraser')
     ? 'none'
     : activeTool === 'select' ? 'crosshair'
-    : activeTool === 'eraser' ? 'crosshair'
     : 'default';
-  const showCursor = (activeTool === 'pen' || freeEraser) && cursorScreen && !isDraggingToolbar;
+  const showCursor = (activeTool === 'pen' || activeTool === 'eraser') && cursorScreen && !isDraggingToolbar;
   const laserSize = Math.max(1.5, brush.size * 0.4);
   const cs = (activeTool === 'eraser'
     ? PDF_ERASER_RADIUS
@@ -932,6 +937,7 @@ const PdfCanvas: React.FC = () => {
         onPointerUp={handlePointerUp}
         onPointerCancel={handlePointerUp}
         onLostPointerCapture={handlePointerUp}
+        onPointerLeave={() => setCursorScreen(null)}
         onWheel={handleWheel}
       />
 
