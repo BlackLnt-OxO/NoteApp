@@ -230,7 +230,7 @@ export const useNoteStore = create<NoteStore>((set, get) => ({
         if (raw) data = JSON.parse(raw);
       }
 
-      if (data && Array.isArray(data.notes) && data.notes.length) {
+      if (data) {
         // Clear isFloating on all notes (float windows don't persist across restarts)
         const notes = (data.notes || []).map((n: Note) => ({ ...n, isFloating: false, floatWindowId: undefined }));
         set({

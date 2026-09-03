@@ -175,8 +175,8 @@ const trackStyle: React.CSSProperties = { width: '100%', height: '4px', WebkitAp
 const PdfToolbar: React.FC = () => {
   const gfs = useNoteStore((s) => s.settings.fontSize);
   const {
-    activeTool, brush, eraserMode, selectionMode, history, redoStack, currentPage, showDotGrid,
-    setActiveTool, setBrush, setEraserMode, setSelectionMode, setShowDotGrid, undo, redo, clearPage,
+    activeTool, brushType, brush, eraserMode, selectionMode, history, redoStack, currentPage, showDotGrid,
+    setActiveTool, setBrushType, setBrush, setEraserMode, setSelectionMode, setShowDotGrid, undo, redo, clearPage,
   } = usePdfStore();
 
   const canUndo = (history[currentPage]?.length ?? 0) > 0;
@@ -196,7 +196,17 @@ const PdfToolbar: React.FC = () => {
             { label: '点选', active: selectionMode === 'click', onClick: () => { setActiveTool('select'); setSelectionMode('click'); } },
           ]}
         />
-        <SimpleToolButton label="笔刷" Icon={PenIcon} active={activeTool === 'pen'} onClick={() => setActiveTool('pen')} />
+        <ExpandableToolButton
+          label="笔刷" Icon={PenIcon}
+          active={activeTool === 'pen'}
+          onMain={() => setActiveTool('pen')}
+          options={[
+            { label: '笔刷',   active: brushType === 'marker',   onClick: () => { setActiveTool('pen'); setBrushType('marker'); } },
+            { label: '钢笔',   active: brushType === 'fountain', onClick: () => { setActiveTool('pen'); setBrushType('fountain'); } },
+            { label: '铅笔',   active: brushType === 'pencil',   onClick: () => { setActiveTool('pen'); setBrushType('pencil'); } },
+            { label: '激光笔', active: brushType === 'laser',    onClick: () => { setActiveTool('pen'); setBrushType('laser'); } },
+          ]}
+        />
         <ExpandableToolButton
           label="橡皮" Icon={EraserIcon}
           active={activeTool === 'eraser'}

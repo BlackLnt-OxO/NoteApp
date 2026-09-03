@@ -23,8 +23,17 @@ export interface PdfStroke {
   smoothing: number;
   /** 'destination-out' marks an eraser stroke (must be applied to inkLayer only). */
   compositeOperation: 'source-over' | 'destination-out';
+  /**
+   * Optional brush style. Legacy strokes (without this field) render as marker.
+   * 'laser' is excluded here because it is transient and never committed.
+   */
+  style?: PdfCommittedStrokeStyle;
   createdAt: number;
 }
+
+export type PdfCommittedStrokeStyle = 'marker' | 'fountain' | 'pencil';
+
+export type PdfBrushType = PdfCommittedStrokeStyle | 'laser';
 
 export type PdfTool = 'pen' | 'eraser' | 'select';
 

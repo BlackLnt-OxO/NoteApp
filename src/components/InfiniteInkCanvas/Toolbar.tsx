@@ -178,8 +178,8 @@ const trackStyle: React.CSSProperties = { width: '100%', height: '4px', WebkitAp
 const Toolbar: React.FC = () => {
   const gfs = useNoteStore((s) => s.settings.fontSize);
   const {
-    activeTool, brushSettings, showDotGrid, selectionMode, eraserMode, insertMode,
-    setActiveTool, setBrushSettings, setShowDotGrid, setSelectionMode, setEraserMode, setInsertMode,
+    activeTool, brush, brushSettings, showDotGrid, selectionMode, eraserMode, insertMode,
+    setActiveTool, setBrush, setBrushSettings, setShowDotGrid, setSelectionMode, setEraserMode, setInsertMode,
     undo, redo, history, redoStack,
   } = useCanvasStore();
 
@@ -200,7 +200,17 @@ const Toolbar: React.FC = () => {
             { label: '点选', active: selectionMode === 'click', onClick: () => { setActiveTool('select'); setSelectionMode('click'); } },
           ]}
         />
-        <SimpleToolButton label="笔刷" Icon={PenIcon} active={activeTool === 'pen'} onClick={() => setActiveTool('pen')} />
+        <ExpandableToolButton
+          label="笔刷" Icon={PenIcon}
+          active={activeTool === 'pen'}
+          onMain={() => setActiveTool('pen')}
+          options={[
+            { label: '笔刷',   active: brush === 'marker',   onClick: () => { setActiveTool('pen'); setBrush('marker'); } },
+            { label: '钢笔',   active: brush === 'fountain', onClick: () => { setActiveTool('pen'); setBrush('fountain'); } },
+            { label: '铅笔',   active: brush === 'pencil',   onClick: () => { setActiveTool('pen'); setBrush('pencil'); } },
+            { label: '激光笔', active: brush === 'laser',    onClick: () => { setActiveTool('pen'); setBrush('laser'); } },
+          ]}
+        />
         <ExpandableToolButton
           label="橡皮" Icon={EraserIcon}
           active={activeTool === 'eraser'}

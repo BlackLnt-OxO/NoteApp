@@ -2,9 +2,10 @@ import React, { useRef, useEffect, useCallback, useState } from 'react';
 import { useCanvasStore } from './useCanvasStore';
 import { drawTextOnCanvas, drawSelectionHighlight, drawSelectionRect } from './CanvasRenderer';
 import {
-  drawStrokePath, drawDotGrid, getPressure, addRawPoint,
+  drawDotGrid, getPressure, addRawPoint,
   hitTestStroke, getStrokeBounds, boundsIntersectRect,
 } from '../PdfAnnotation/PdfEngine';
+import { drawAnnotatedStroke } from '../PdfAnnotation/PdfBrushRenderers';
 import { screenToWorld, clampZoom, zoomAt, ERASER_RADIUS } from './constants';
 import {
   stampStroke, eraseSegTiles, eraseDotTiles, drawVisibleTiles, rebuildTiles,
@@ -17,6 +18,44 @@ import { useCanvasToolbarStore } from './useToolbarStore';
 import { useNoteStore } from '../../store';
 import { themeCanvasColors } from '../../themeColors';
 import type { Stroke, StrokePoint, TextNodeData, ImageObject as ImageObjectType } from './types';
+
+/** Transient laser-pointer stroke segment (never committed / persisted). */
+interface LaserSegment {
+  points: StrokePoint[];
+  color: string;
+  size: number;
+  start: number;
+}
+const LASER_LIFETIME = 1800; // ms — how long a laser trail stays visible
+
+/** Draw a laser segment with an alpha that fades linearly with age. */
+function drawLaser(ctx: CanvasRenderingContext2D, seg: LaserSegment, now: number): void {
+  const age = now - seg.start;
+  const alpha = age <= 0 ? 1 : Math.max(0, 1 - age / LASER_LIFETIME);
+  if (alpha <= 0 || seg.points.length === 0) return;
+
+  ctx.save();
+  ctx.lineCap = 'round';
+  ctx.lineJoin = 'round';
+  ctx.globalCompositeOperation = 'source-over';
+  ctx.strokeStyle = seg.color;
+  ctx.fillStyle = seg.color;
+  ctx.lineWidth = seg.size;
+  ctx.globalAlpha = alpha;
+  ctx.shadowColor = seg.color;
+  ctx.shadowBlur = 6;
+  if (seg.points.length === 1) {
+    ctx.beginPath();
+    ctx.arc(seg.points[0].x, seg.points[0].y, seg.size / 2, 0, Math.PI * 2);
+    ctx.fill();
+  } else {
+    ctx.beginPath();
+    ctx.moveTo(seg.points[0].x, seg.points[0].y);
+    for (let i = 1; i < seg.points.length; i++) ctx.lineTo(seg.points[i].x, seg.points[i].y);
+    ctx.stroke();
+  }
+  ctx.restore();
+}
 
 const InfiniteInkCanvas: React.FC = () => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -35,10 +74,13 @@ const InfiniteInkCanvas: React.FC = () => {
   const dprRef = useRef(1);
   const spaceDownRef = useRef(false);
   const dirtyRef = useRef(false);
+  const laserRef = useRef<LaserSegment[]>([]);
+  const laserRafRef = useRef(0);
 
   const objects = useCanvasStore((s) => s.objects);
   const camera = useCanvasStore((s) => s.camera);
   const activeTool = useCanvasStore((s) => s.activeTool);
+  const brush = useCanvasStore((s) => s.brush);
   const brushSettings = useCanvasStore((s) => s.brushSettings);
   const showDotGrid = useCanvasStore((s) => s.showDotGrid);
   const editingTextId = useCanvasStore((s) => s.editingTextId);
@@ -145,7 +187,7 @@ const InfiniteInkCanvas: React.FC = () => {
       for (const [id, snap] of d.snapshots) {
         const orig = byId.get(id);
         if (!orig || orig.type !== 'stroke') continue;
-        drawStrokePath(ctx, { ...orig, points: snap.map((p) => ({ ...p, x: p.x + d.dx, y: p.y + d.dy })) });
+        drawAnnotatedStroke(ctx, { ...orig, points: snap.map((p) => ({ ...p, x: p.x + d.dx, y: p.y + d.dy })) });
       }
     } else if (state.selectedIds.length > 0) {
       drawSelectionHighlight(ctx, state.objects, state.selectedIds);
@@ -156,8 +198,12 @@ const InfiniteInkCanvas: React.FC = () => {
     if (currentStrokeRef.current
         && currentStrokeRef.current.compositeOperation !== 'destination-out'
         && currentStrokeRef.current.points.length > 0) {
-      drawStrokePath(ctx, currentStrokeRef.current);
+      drawAnnotatedStroke(ctx, currentStrokeRef.current);
     }
+
+    // Transient laser-pointer strokes (drawn on top of everything, fading out).
+    const now = performance.now();
+    for (const seg of laserRef.current) drawLaser(ctx, seg, now);
 
     ctx.restore();
     dirtyRef.current = false;
@@ -170,6 +216,23 @@ const InfiniteInkCanvas: React.FC = () => {
       if (dirtyRef.current) doRender();
     });
   }, [doRender]);
+
+  // Laser fade loop: advance frames while any segment is still visible, then
+  // stop. Independent of scheduleRender's dirty-flag gating, so the fade never
+  // stalls after one frame.
+  const tickLaser = useCallback(() => {
+    laserRafRef.current = 0;
+    const now = performance.now();
+    laserRef.current = laserRef.current.filter((s) => now - s.start < LASER_LIFETIME);
+    if (laserRef.current.length) {
+      dirtyRef.current = true;
+      doRender();
+      laserRafRef.current = requestAnimationFrame(tickLaser);
+    }
+  }, [doRender]);
+  const startLaser = useCallback(() => {
+    if (!laserRafRef.current) laserRafRef.current = requestAnimationFrame(tickLaser);
+  }, [tickLaser]);
 
   useEffect(() => {
     dirtyRef.current = true;
@@ -327,6 +390,24 @@ const InfiniteInkCanvas: React.FC = () => {
       return;
     }
 
+    // Laser pointer — a transient stroke that never lands in objects/history/tiles.
+    if (state.brush === 'laser') {
+      canvas.setPointerCapture(e.pointerId);
+      isDrawingRef.current = true;
+      const seg: LaserSegment = {
+        points: [],
+        color: state.brushSettings.color,
+        size: Math.max(1.5, state.brushSettings.size * 0.4),
+        start: performance.now(),
+      };
+      addRawPoint(seg as any, world.x, world.y, getPressure(e), e.timeStamp);
+      laserRef.current.push(seg);
+      startLaser();
+      dirtyRef.current = true;
+      scheduleRender();
+      return;
+    }
+
     canvas.setPointerCapture(e.pointerId);
     isDrawingRef.current = true;
 
@@ -340,6 +421,7 @@ const InfiniteInkCanvas: React.FC = () => {
       opacity: isEraser ? 1 : state.brushSettings.opacity,
       smoothing: isEraser ? 0 : state.brushSettings.smoothing,
       compositeOperation: isEraser ? 'destination-out' : 'source-over',
+      style: isEraser ? undefined : (state.brush === 'fountain' || state.brush === 'pencil' ? state.brush : undefined),
       createdAt: Date.now(),
     };
     addRawPoint(stroke, world.x, world.y, getPressure(e), e.timeStamp);
@@ -387,6 +469,25 @@ const InfiniteInkCanvas: React.FC = () => {
       const w = screenToWorld(sx, sy, state.camera);
       d.dx = w.x - d.start.x;
       d.dy = w.y - d.start.y;
+      dirtyRef.current = true;
+      scheduleRender();
+      return;
+    }
+
+    // Laser pointer — append coalesced points to the active laser segment.
+    if (isDrawingRef.current && state.brush === 'laser') {
+      const seg = laserRef.current[laserRef.current.length - 1];
+      if (seg) {
+        const rect = canvasRef.current?.getBoundingClientRect();
+        if (rect) {
+          const events: PointerEvent[] = (e.nativeEvent as any).getCoalescedEvents?.() || [e.nativeEvent];
+          for (const ce of events) {
+            const w = screenToWorld(ce.clientX - rect.left, ce.clientY - rect.top, state.camera);
+            addRawPoint(seg as any, w.x, w.y, getPressure(ce), ce.timeStamp);
+          }
+        }
+      }
+      startLaser();
       dirtyRef.current = true;
       scheduleRender();
       return;
@@ -452,6 +553,16 @@ const InfiniteInkCanvas: React.FC = () => {
       useCanvasStore.getState().commitStrokesPoints(entries);
       dirtyRef.current = true;
       scheduleRender();
+      return;
+    }
+
+    // Laser pointer — just stop feeding points; the fade loop keeps it alive then
+    // drops it. Never addStroke/stampStroke.
+    if (isDrawingRef.current && useCanvasStore.getState().brush === 'laser') {
+      isDrawingRef.current = false;
+      dirtyRef.current = true;
+      scheduleRender();
+      startLaser();
       return;
     }
 
@@ -543,8 +654,11 @@ const InfiniteInkCanvas: React.FC = () => {
   const editingNode = objects.find((o): o is TextNodeData => o.type === 'text' && o.id === editingTextId);
 
   const showCursor = (activeTool === 'pen' || freeEraser) && cursorScreen && !isDraggingToolbar;
-  // Circle diameter in screen px = world width × zoom, so it matches the drawn line
-  const cs = (activeTool === 'eraser' ? ERASER_RADIUS : brushSettings.size) * camera.zoom;
+  // Circle diameter in screen px = world width × zoom, so it matches the drawn line.
+  const laserSize = Math.max(1.5, brushSettings.size * 0.4);
+  const cs = (activeTool === 'eraser'
+    ? ERASER_RADIUS
+    : brush === 'laser' ? laserSize : brushSettings.size) * camera.zoom;
   const isLight = theme === 'light';
   const ringBorder = isLight ? 'rgba(30,30,40,0.85)' : 'rgba(255,255,255,0.7)';
   const ringBg = isLight

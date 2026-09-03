@@ -26,7 +26,6 @@ import {
   PDF_ERASER_RADIUS,
   getPressure,
   addRawPoint,
-  drawStrokePath,
   drawEraserSegment,
   drawEraserDot,
   drawDotGrid,
@@ -38,8 +37,47 @@ import {
   zoomAt,
   fitCamera,
 } from './PdfEngine';
+import { drawAnnotatedStroke } from './PdfBrushRenderers';
 import { renderPageToCanvas, getPageSize, cleanupPage } from './PdfLoader';
 import type { PdfPoint, PdfStroke } from './PdfTypes';
+
+/** Transient laser-pointer stroke segment (never committed / persisted). */
+interface LaserSegment {
+  points: PdfPoint[];
+  color: string;
+  size: number;
+  start: number;
+}
+const LASER_LIFETIME = 1800; // ms — how long a laser trail stays visible
+
+/** Draw a laser segment with an alpha that fades linearly with age. */
+function drawLaser(ctx: CanvasRenderingContext2D, seg: LaserSegment, now: number): void {
+  const age = now - seg.start;
+  const alpha = age <= 0 ? 1 : Math.max(0, 1 - age / LASER_LIFETIME);
+  if (alpha <= 0 || seg.points.length === 0) return;
+
+  ctx.save();
+  ctx.lineCap = 'round';
+  ctx.lineJoin = 'round';
+  ctx.globalCompositeOperation = 'source-over';
+  ctx.strokeStyle = seg.color;
+  ctx.fillStyle = seg.color;
+  ctx.lineWidth = seg.size;
+  ctx.globalAlpha = alpha;
+  ctx.shadowColor = seg.color;
+  ctx.shadowBlur = 6;
+  if (seg.points.length === 1) {
+    ctx.beginPath();
+    ctx.arc(seg.points[0].x, seg.points[0].y, seg.size / 2, 0, Math.PI * 2);
+    ctx.fill();
+  } else {
+    ctx.beginPath();
+    ctx.moveTo(seg.points[0].x, seg.points[0].y);
+    for (let i = 1; i < seg.points.length; i++) ctx.lineTo(seg.points[i].x, seg.points[i].y);
+    ctx.stroke();
+  }
+  ctx.restore();
+}
 
 // ---- Tiling -------------------------------------------------------------------
 
@@ -78,7 +116,7 @@ function stampStroke(tiles: Map<string, HTMLCanvasElement>, stroke: PdfStroke): 
     for (let tx = tx0; tx <= tx1; tx++) {
       const ctx = tileCtx(tiles, tx, ty);
       ctx.setTransform(SCALE, 0, 0, SCALE, -tx * TILE * SCALE, -ty * TILE * SCALE);
-      drawStrokePath(ctx, stroke);
+      drawAnnotatedStroke(ctx, stroke);
     }
   }
 }
@@ -185,6 +223,8 @@ const PdfCanvas: React.FC = () => {
   const isDrawingRef = useRef(false);
   const panAnchorRef = useRef<{ sx: number; sy: number; camX: number; camY: number } | null>(null);
   const spaceDownRef = useRef(false);
+  const laserRef = useRef<LaserSegment[]>([]);
+  const laserRafRef = useRef(0);
 
   const selectAnchorRef = useRef<{ x: number; y: number } | null>(null);
   const selectionRectRef = useRef<{ x1: number; y1: number; x2: number; y2: number } | null>(null);
@@ -205,6 +245,7 @@ const PdfCanvas: React.FC = () => {
   const currentPage = usePdfStore((s) => s.currentPage);
   const renderEpoch = usePdfStore((s) => s.renderEpoch);
   const activeTool = usePdfStore((s) => s.activeTool);
+  const brushType = usePdfStore((s) => s.brushType);
   const brush = usePdfStore((s) => s.brush);
   const eraserMode = usePdfStore((s) => s.eraserMode);
   const showDotGrid = usePdfStore((s) => s.showDotGrid);
@@ -287,7 +328,7 @@ const PdfCanvas: React.FC = () => {
           if (!orig || !snap) continue;
           moved.push({ ...orig, points: snap.map((p) => ({ ...p, x: p.x + d.dx, y: p.y + d.dy })) });
         }
-        for (const m of moved) drawStrokePath(ctx, m);
+        for (const m of moved) drawAnnotatedStroke(ctx, m);
         if (st.selectedIds.length > 0) drawSelectionHighlight(ctx, moved, st.selectedIds);
       } else if (st.selectedIds.length > 0) {
         drawSelectionHighlight(ctx, strokes, st.selectedIds);
@@ -296,8 +337,12 @@ const PdfCanvas: React.FC = () => {
       if (selectionRectRef.current) drawSelectionRect(ctx, selectionRectRef.current);
 
       if (isDrawingRef.current && currentStrokeRef.current) {
-        drawStrokePath(ctx, currentStrokeRef.current);
+        drawAnnotatedStroke(ctx, currentStrokeRef.current);
       }
+
+      // Transient laser-pointer strokes (drawn on top of everything, fading out).
+      const now = performance.now();
+      for (const seg of laserRef.current) drawLaser(ctx, seg, now);
       ctx.restore();
     }
 
@@ -311,6 +356,21 @@ const PdfCanvas: React.FC = () => {
       if (dirtyRef.current) doRender();
     });
   }, [doRender]);
+
+  // Laser fade loop: advance frames while any segment is still visible, then stop.
+  const tickLaser = useCallback(() => {
+    laserRafRef.current = 0;
+    const now = performance.now();
+    laserRef.current = laserRef.current.filter((s) => now - s.start < LASER_LIFETIME);
+    if (laserRef.current.length) {
+      dirtyRef.current = true;
+      doRender();
+      laserRafRef.current = requestAnimationFrame(tickLaser);
+    }
+  }, [doRender]);
+  const startLaser = useCallback(() => {
+    if (!laserRafRef.current) laserRafRef.current = requestAnimationFrame(tickLaser);
+  }, [tickLaser]);
 
   // ---- Rebuild ink tiles from vector source of truth --------------------------
 
@@ -551,6 +611,24 @@ const PdfCanvas: React.FC = () => {
       return;
     }
 
+    // Laser pointer — a transient stroke that never commits to strokes/history/tiles.
+    if (st.brushType === 'laser') {
+      canvas.setPointerCapture(e.pointerId);
+      isDrawingRef.current = true;
+      const seg: LaserSegment = {
+        points: [],
+        color: st.brush.color,
+        size: Math.max(1.5, st.brush.size * 0.4),
+        start: performance.now(),
+      };
+      addRawPoint(seg as any, world.x, world.y, getPressure(e), e.timeStamp);
+      laserRef.current.push(seg);
+      startLaser();
+      dirtyRef.current = true;
+      scheduleRender();
+      return;
+    }
+
     // Pen / free eraser — begin a stroke
     canvas.setPointerCapture(e.pointerId);
     isDrawingRef.current = true;
@@ -564,6 +642,7 @@ const PdfCanvas: React.FC = () => {
       opacity: isEraser ? 1 : st.brush.opacity,
       smoothing: isEraser ? 0 : st.brush.smoothing,
       compositeOperation: isEraser ? 'destination-out' : 'source-over',
+      style: isEraser ? undefined : (st.brushType === 'fountain' || st.brushType === 'pencil' ? st.brushType : undefined),
       createdAt: Date.now(),
     };
     addRawPoint(stroke, world.x, world.y, getPressure(e), e.timeStamp);
@@ -612,6 +691,23 @@ const PdfCanvas: React.FC = () => {
       const w = screenToWorld(sx, sy, st.camera);
       d.dx = w.x - d.start.x;
       d.dy = w.y - d.start.y;
+      dirtyRef.current = true;
+      scheduleRender();
+      return;
+    }
+
+    // Laser pointer — append coalesced points to the active laser segment.
+    if (isDrawingRef.current && st.brushType === 'laser') {
+      const seg = laserRef.current[laserRef.current.length - 1];
+      if (seg) {
+        const rect = canvas.getBoundingClientRect();
+        const events: PointerEvent[] = (e.nativeEvent as any).getCoalescedEvents?.() || [e.nativeEvent];
+        for (const ce of events) {
+          const w = screenToWorld(ce.clientX - rect.left, ce.clientY - rect.top, st.camera);
+          addRawPoint(seg as any, w.x, w.y, getPressure(ce), ce.timeStamp);
+        }
+      }
+      startLaser();
       dirtyRef.current = true;
       scheduleRender();
       return;
@@ -696,6 +792,16 @@ const PdfCanvas: React.FC = () => {
       return;
     }
 
+    // Laser pointer — just stop feeding points; the fade loop keeps it alive then
+    // drops it. Never commitStroke/stampStroke.
+    if (isDrawingRef.current && usePdfStore.getState().brushType === 'laser') {
+      isDrawingRef.current = false;
+      dirtyRef.current = true;
+      scheduleRender();
+      startLaser();
+      return;
+    }
+
     if (!isDrawingRef.current) return;
 
     // Free eraser — commit (already erased into tiles live)
@@ -753,7 +859,10 @@ const PdfCanvas: React.FC = () => {
     : activeTool === 'eraser' ? 'crosshair'
     : 'default';
   const showCursor = (activeTool === 'pen' || freeEraser) && cursorScreen && !isDraggingToolbar;
-  const cs = (activeTool === 'eraser' ? PDF_ERASER_RADIUS : brush.size) * camera.zoom;
+  const laserSize = Math.max(1.5, brush.size * 0.4);
+  const cs = (activeTool === 'eraser'
+    ? PDF_ERASER_RADIUS
+    : brushType === 'laser' ? laserSize : brush.size) * camera.zoom;
 
   return (
     <div ref={containerRef} style={{ position: 'absolute', inset: 0, overflow: 'hidden', background: 'var(--page-bg)' }}>

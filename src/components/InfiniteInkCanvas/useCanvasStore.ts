@@ -10,6 +10,7 @@ import type {
   ToolType,
   SelectionMode,
   InsertMode,
+  BrushType,
 } from './types';
 import {
   DEFAULT_CAMERA,
@@ -26,6 +27,8 @@ export interface CanvasStore {
   objects: CanvasObject[];
   camera: Camera;
   activeTool: ToolType;
+  /** Sub-type of the pen tool (marker / fountain / pencil / laser). */
+  brush: BrushType;
   brushSettings: BrushSettings;
   showDotGrid: boolean;
   editingTextId: string | null;
@@ -59,6 +62,7 @@ export interface CanvasStore {
   updateImageObject: (id: string, patch: Partial<Pick<ImageObject, 'x' | 'y' | 'width' | 'height'>>) => void;
   setCamera: (partial: Partial<Camera>) => void;
   setActiveTool: (tool: ToolType) => void;
+  setBrush: (brush: BrushType) => void;
   setBrushSettings: (partial: Partial<BrushSettings>) => void;
   setShowDotGrid: (show: boolean) => void;
   setEditingTextId: (id: string | null) => void;
@@ -94,6 +98,7 @@ export const useCanvasStore = create<CanvasStore>((set, get) => ({
   objects: [],
   camera: { ...DEFAULT_CAMERA },
   activeTool: 'pen',
+  brush: 'marker',
   brushSettings: { ...DEFAULT_BRUSH },
   showDotGrid: true,
   editingTextId: null,
@@ -260,6 +265,8 @@ export const useCanvasStore = create<CanvasStore>((set, get) => ({
     set((s) => ({ camera: { ...s.camera, ...partial } })),
 
   setActiveTool: (tool) => set({ activeTool: tool }),
+
+  setBrush: (brush) => set({ brush }),
 
   setBrushSettings: (partial) =>
     set((s) => ({ brushSettings: { ...s.brushSettings, ...partial } })),

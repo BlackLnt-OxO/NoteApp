@@ -41,8 +41,19 @@ export interface Stroke {
   opacity: number;
   smoothing: number;
   compositeOperation: 'source-over' | 'destination-out';
+  /**
+   * Optional brush style. Legacy strokes (without this field) render as marker.
+   * 'laser' is excluded because it is transient and never committed.
+   */
+  style?: CommittedStrokeStyle;
   createdAt: number;
 }
+
+// ---- Brush style --------------------------------------------------------------
+
+export type CommittedStrokeStyle = 'marker' | 'fountain' | 'pencil';
+
+export type BrushType = CommittedStrokeStyle | 'laser';
 
 // ---- Text Node ---------------------------------------------------------------
 

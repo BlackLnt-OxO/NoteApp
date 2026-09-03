@@ -13,8 +13,8 @@
 
 import type { Camera, Stroke } from './types';
 import { screenToWorld } from './constants';
+import { drawAnnotatedStroke } from '../PdfAnnotation/PdfBrushRenderers';
 import {
-  drawStrokePath,
   drawEraserSegment,
   drawEraserDot,
   getStrokeBounds,
@@ -52,7 +52,7 @@ export function stampStroke(tiles: Map<string, HTMLCanvasElement>, stroke: Strok
     for (let tx = tx0; tx <= tx1; tx++) {
       const ctx = tileCtx(tiles, tx, ty);
       ctx.setTransform(SCALE, 0, 0, SCALE, -tx * TILE * SCALE, -ty * TILE * SCALE);
-      drawStrokePath(ctx, stroke);
+      drawAnnotatedStroke(ctx, stroke);
     }
   }
 }

@@ -22,6 +22,7 @@ import type {
   PdfSelectionMode,
   PdfStroke,
   PdfTool,
+  PdfBrushType,
 } from './PdfTypes';
 import { loadPdfDocument, type PdfJsDocument } from './PdfLoader';
 
@@ -69,6 +70,8 @@ export interface PdfStore {
 
   // Tool / brush
   activeTool: PdfTool;
+  /** Sub-type of the pen tool (marker / fountain / pencil / laser). */
+  brushType: PdfBrushType;
   brush: PdfBrush;
   eraserMode: PdfEraserMode;
   selectionMode: PdfSelectionMode;
@@ -113,6 +116,7 @@ export interface PdfStore {
   setSidebarScrollTarget: (page: number | null) => void;
 
   setActiveTool: (t: PdfTool) => void;
+  setBrushType: (t: PdfBrushType) => void;
   setBrush: (partial: Partial<PdfBrush>) => void;
   setEraserMode: (m: PdfEraserMode) => void;
   setSelectionMode: (m: PdfSelectionMode) => void;
@@ -183,6 +187,7 @@ export const usePdfStore = create<PdfStore>((set, get) => ({
   renderEpoch: 0,
 
   activeTool: 'pen',
+  brushType: 'marker',
   brush: { ...DEFAULT_PDF_BRUSH },
   eraserMode: 'free',
   selectionMode: 'box',
@@ -306,6 +311,8 @@ export const usePdfStore = create<PdfStore>((set, get) => ({
   // --- tool / brush --------------------------------------------------------
 
   setActiveTool: (t) => set({ activeTool: t }),
+
+  setBrushType: (t) => set({ brushType: t }),
 
   setBrush: (partial) => set((s) => ({ brush: { ...s.brush, ...partial } })),
 
@@ -525,6 +532,7 @@ export const usePdfStore = create<PdfStore>((set, get) => ({
       redoStack: {},
       renderEpoch: 0,
       activeTool: 'pen',
+      brushType: 'marker',
       brush: { ...DEFAULT_PDF_BRUSH },
       eraserMode: 'free',
       selectionMode: 'box',
