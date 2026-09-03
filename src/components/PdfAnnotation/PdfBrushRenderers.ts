@@ -91,11 +91,11 @@ export function smoothPressure(pts: { p: number }[], responsiveness = 0.42): num
 }
 
 /** Hairline floor: very light pressure should map to an EXTREMELY thin line (the
- *  user's 16383-level tablet reports genuinely tiny pressures). The floor is only
- *  ≈2% of the brush size and ~0.25 px absolute — enough to keep the anti-aliased
- *  hairline from fully flickering out while staying as fine as possible. */
+ *  user's 16383-level tablet reports genuinely tiny pressures). The floor is a
+ *  ~0.15 px world absolute (≈1.5% of the brush size) — fine enough to act as a
+ *  near-hairline while not fully flickering out. */
 function minStrokeWidth(baseSize: number): number {
-  return Math.max(0.25, baseSize * 0.02);
+  return Math.max(0.15, baseSize * 0.015);
 }
 
 /** Pressure → width. LINEAR mapping (gamma=1) so a light touch maps to a thin
@@ -347,7 +347,7 @@ export function drawVariableRibbon(
   const n = points.length;
   if (n === 0) return;
 
-  const half = (w: number) => Math.max(0.25, w) * 0.5;
+  const half = (w: number) => Math.max(0.06, w * 0.5); // allow sub-0.25px hairlines
   const disc = (cx: number, cy: number, r: number, ccw: boolean) => {
     ctx.moveTo(cx + dx + r, cy + dy);
     ctx.arc(cx + dx, cy + dy, r, 0, Math.PI * 2, ccw);
@@ -357,6 +357,34 @@ export function drawVariableRibbon(
   ctx.globalCompositeOperation = composite === 'destination-out' ? 'destination-out' : 'source-over';
   ctx.globalAlpha = clamp01(alpha);
   ctx.fillStyle = color;
+
+  // Soft ink edge: a SHORT outward fade at the silhouette (like ink bleeding into
+  // paper). Applied as a world-space gaussian to the single union fill, so the
+  // "one fill / no alpha stacking" invariant and translucency rules are untouched.
+  // Hairlines skip it (the fade would swallow them); contexts without ctx.filter
+  // (headless/jsdom, older engines) fall back to a crisp edge — deterministic.
+  {
+    let sum = 0;
+    for (const w of widths) sum += Number.isFinite(w) ? w : 0;
+    const avgWidth = widths.length ? sum / widths.length : 0;
+    const softWorld = Math.min(1, avgWidth * 0.25); // ≤1 world px fade, scaled with line
+    if (softWorld > 0.05) {
+      let scale = 1;
+      try {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const t = typeof (ctx as any).getTransform === 'function' ? (ctx as any).getTransform() : undefined;
+        if (t) scale = Math.hypot(t.a, t.b) || 1;
+      } catch {
+        scale = 1;
+      }
+      try {
+        ctx.filter = `blur(${softWorld * scale}px)`; // device px = world × current scale
+      } catch {
+        /* no filter support → crisp edge */
+      }
+    }
+  }
+
   ctx.beginPath();
 
   if (n === 1) {

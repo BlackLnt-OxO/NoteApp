@@ -193,18 +193,18 @@ describe('fountain widths (pressure + speed)', () => {
     const widths = computeFountainWidths(fastLight, 12, 0.5);
     for (const w of widths) {
       expect(Number.isFinite(w)).toBe(true);
-      expect(w).toBeGreaterThanOrEqual(0.25); // fine hairline, never zero
+      expect(w).toBeGreaterThanOrEqual(Math.max(0.15, 12 * 0.015)); // fine hairline, never zero
     }
   });
 });
 
 describe('marker widths', () => {
-  it('are bounded within [~0.25, size] and finite even for NaN/Inf pressure', () => {
+  it('are bounded within [~0.15, size] and finite even for NaN/Inf pressure', () => {
     const pts = [{ p: 0 }, { p: 0.5 }, { p: 1 }, { p: NaN }, { p: Infinity }];
     const widths = computeMarkerWidths(pts, 12);
     for (const w of widths) {
       expect(Number.isFinite(w)).toBe(true);
-      expect(w).toBeGreaterThanOrEqual(0.25);
+      expect(w).toBeGreaterThanOrEqual(Math.max(0.15, 12 * 0.015));
       expect(w).toBeLessThanOrEqual(12);
     }
   });
@@ -217,8 +217,8 @@ describe('marker widths', () => {
       expect(widths[i]).toBeGreaterThanOrEqual(widths[i - 1] - 1e-6); // no sudden drop
       expect(Math.abs(widths[i] - widths[i - 1])).toBeLessThanOrEqual(10 * 0.2 + 1e-6); // capped step
     }
-    // Very light pressure → an EXTREMELY fine but NON-ZERO hairline.
-    expect(widths[0]).toBeGreaterThanOrEqual(Math.max(0.25, 10 * 0.02) - 1e-6);
+    // Very light pressure → an EXTREMELY fine but NON-ZERO hairline (~0.15px).
+    expect(widths[0]).toBeGreaterThanOrEqual(Math.max(0.15, 10 * 0.015) - 1e-6);
     // And ultra-light pressure is much thinner than full pressure (fine strokes OK).
     expect(widths[0]).toBeLessThanOrEqual(widths[widths.length - 1] * 0.35 + 1e-6);
     expect(widths[widths.length - 1]).toBeLessThanOrEqual(10 + 1e-6);
@@ -298,6 +298,25 @@ describe('drawAnnotatedStroke — marker union single-fill (explicit nonzero)', 
     expect(JSON.stringify(c.ops)).not.toContain('evenodd');
     // Round discs at (resampled) samples → joins + tips stay round.
     expect(calls(c, 'arc').length).toBeGreaterThan(0);
+  });
+
+  it('requests a short world-space blur for a soft ink edge on a normal-width stroke', () => {
+    const c = makeCtx();
+    drawAnnotatedStroke(
+      ctx2d(c),
+      makeStroke(
+        [
+          { x: 0, y: 0, pressure: 1, t: 0 },
+          { x: 60, y: 20, pressure: 1, t: 16 },
+          { x: 130, y: -5, pressure: 1, t: 32 },
+        ],
+        { size: 8, opacity: 1, pressureOpacity: false },
+      ),
+    );
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const f = (c.ctx as any).filter as string | undefined;
+    expect(f).toBeDefined();
+    expect(f).toMatch(/^blur\([\d.]+px\)$/);
   });
 
   it('subdivides a fast far-apart pair into many small quads + discs (no giant facet)', () => {
