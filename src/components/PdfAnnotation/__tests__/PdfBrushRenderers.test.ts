@@ -232,8 +232,8 @@ describe('helpers', () => {
 
 // ---- Rasterization through drawAnnotatedStroke (mock ctx) -----------------------
 
-describe('drawAnnotatedStroke — marker single-fill ribbon', () => {
-  it('fills the whole stroke exactly once, with round caps only at the two ends', () => {
+describe('drawAnnotatedStroke — marker union single-fill (explicit nonzero)', () => {
+  it('fills the whole stroke exactly once with the NONZERO rule and never evenodd', () => {
     const raw = [
       { x: 0, y: 0, pressure: 1, t: 0 },
       { x: 60, y: 20, pressure: 0.6, t: 16 },
@@ -245,37 +245,27 @@ describe('drawAnnotatedStroke — marker single-fill ribbon', () => {
       makeStroke(raw, { size: 8, opacity: 1, pressureOpacity: false }),
     );
 
-    expect(calls(c, 'fill')).toHaveLength(1); // ONE fill for the whole stroke
-    expect(calls(c, 'stroke')).toHaveLength(0); // no per-segment stroking at all
-
-    // Exactly two semicircular cap arcs, centered on the first & last samples —
-    // there must be NO per-point circle in the middle (the old dot source).
-    const arcs = calls(c, 'arc');
-    expect(arcs).toHaveLength(2);
-    const centers = arcs.map((a) => ({ x: a.args[0] as number, y: a.args[1] as number }));
-    const first = raw[0];
-    const last = raw[raw.length - 1];
-    const nearFirst = centers.some(
-      (p) => Math.abs(p.x - first.x) < 1e-3 && Math.abs(p.y - first.y) < 1e-3,
-    );
-    const nearLast = centers.some(
-      (p) => Math.abs(p.x - last.x) < 1e-3 && Math.abs(p.y - last.y) < 1e-3,
-    );
-    expect(nearFirst).toBe(true);
-    expect(nearLast).toBe(true);
+    const fills = calls(c, 'fill');
+    expect(fills).toHaveLength(1); // ONE fill for the whole stroke (union)
+    expect(fills[0].args).toContain('nonzero'); // explicit nonzero fill rule
+    expect(calls(c, 'stroke')).toHaveLength(0); // nothing stroked per-segment
+    expect(JSON.stringify(c.ops)).not.toContain('evenodd');
+    // Round discs at (resampled) samples → joins + tips stay round.
+    expect(calls(c, 'arc').length).toBeGreaterThan(0);
   });
 
-  it('subdivides a fast far-apart pair instead of one huge quad', () => {
+  it('subdivides a fast far-apart pair into many small quads + discs (no giant facet)', () => {
     const raw = [
       { x: 0, y: 0, pressure: 1, t: 0 },
       { x: 500, y: 0, pressure: 1, t: 1000 },
     ];
     const c = makeCtx();
     drawAnnotatedStroke(ctx2d(c), makeStroke(raw, { size: 10, pressureOpacity: false }));
-    expect(calls(c, 'lineTo').length).toBeGreaterThan(60);
+    expect(calls(c, 'lineTo').length).toBeGreaterThan(60); // resampled quads
+    expect(calls(c, 'arc').length).toBeGreaterThan(60); // per-resampled-sample discs
   });
 
-  it('draws a single point as one disc', () => {
+  it('draws a single point as one full disc', () => {
     const c = makeCtx();
     drawAnnotatedStroke(
       ctx2d(c),
@@ -287,7 +277,9 @@ describe('drawAnnotatedStroke — marker single-fill ribbon', () => {
     expect(a[0]).toBeCloseTo(10, 3);
     expect(a[1]).toBeCloseTo(10, 3);
     expect(a[2]).toBeCloseTo(8 / 2, 3); // radius = width/2 = 4
-    expect(calls(c, 'fill')).toHaveLength(1);
+    const fills = calls(c, 'fill');
+    expect(fills).toHaveLength(1);
+    expect(fills[0].args).toContain('nonzero');
   });
 
   it('pressure→opacity toggle ON scales whole-stroke alpha by average pressure', () => {

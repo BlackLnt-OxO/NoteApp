@@ -3,14 +3,15 @@
  * pipeline (used by BOTH the infinite canvas and the PDF annotation canvas, so
  * strokes stay pixel-identical across the two surfaces).
  *
- * RENDERING MODEL (continuous ribbon, single fill): each brush stroke is turned
- * into ONE closed outline — the left half-width boundary traced forward, a
- * semicircular round cap at the far end, the right half-width boundary traced
- * back, and a semicircular round cap at the start — then filled EXACTLY ONCE at
- * one globalAlpha. Because nothing is stroked per-segment and no sub-path is
- * re-filled, there is no alpha stacking anywhere in the stroke: no round-cap
- * "dots" at any opacity/speed, no butt-cap trapezoid steps at joins, no AA
- * bright edges between segments, no hollow/ringed tips.
+ * RENDERING MODEL (union of same-winding subpaths, ONE fill): a stroke is drawn
+ * as one quad per consecutive sample pair plus one round disc per sample, all
+ * added to the SAME path and filled exactly once with the explicit NONZERO rule.
+ * Because every subpath is an independent, convex, same-orientation closed
+ * shape, an overlap inside the stroke is winding ±2 (never 0) — so when a stroke
+ * turns back and covers itself it can NOT carve out a transparent hole, and a
+ * single fill means no alpha stacking anywhere (no round-cap dots at any
+ * opacity/speed, no AA bright edges, no hollow/ringed tips, even under
+ * self-overlap). 'evenodd' is never used.
  *
  * Widths are per-point (pressure for marker; pressure + writing speed for the
  * pen; a narrow pressure core for the pencil), spatially RESAMPLED along the
@@ -244,15 +245,23 @@ export function smoothWidths(widths: number[]): number[] {
 // ---- Single-fill variable-width ribbon ------------------------------------------
 
 /**
- * Draw a variable-width stroke as ONE continuous closed outline and fill it
- * exactly once. Left/right boundaries are the centerline offset by ±halfWidth
- * along each sample's normal; the far/start ends get semicircular round caps.
+ * Draw a variable-width stroke as a UNION of small same-orientation closed
+ * subpaths and fill the whole path exactly ONCE with the explicit NONZERO rule:
+ *  - one quad (rectangle) per consecutive sample pair, from the +normal side of
+ *    `a` to the +normal side of `b`, around to the -normal side and back;
+ *  - one round disc centered on EVERY sample (round joins + round tips).
  *
- * Canvas semantics that make this dot-free:
- *  - a single fill() never re-composites — no per-segment round caps to stack,
- *    no butt end-faces to create trapezoid steps, no overlapping strokes;
- *  - the round caps are part of the same filled path, so tips are smooth half
- *    discs with no hollow/ring.
+ * Why NOT a single self-intersecting outer outline: when a stroke turns back and
+ * covers itself, one big left/right outline crosses itself and nonzero winding
+ * can cancel to 0 in the overlap — a transparent "dug out" hole. With a union of
+ * independent convex subpaths that are ALL wound the same direction, an overlap
+ * is winding ±2 (never 0), so a retrace can NEVER carve a hole.
+ *
+ * Canvas semantics that make this dot-free AND hole-free:
+ *  - exactly one fill('nonzero'); nothing is stroked per-segment, no sub-path is
+ *    re-filled, no alpha stacking → no round-cap dots, no AA bright edges;
+ *  - the round discs are subpaths of the SAME path, so tips/joins are smooth;
+ *  - explicit 'nonzero' (never 'evenodd').
  *
  * No Path2D is used (keeps it jsdom/mock-ctx friendly and identical on real
  * canvases). Points/widths are already in the caller's coordinate space; dx/dy
@@ -271,79 +280,78 @@ export function drawVariableRibbon(
   const n = points.length;
   if (n === 0) return;
 
+  const half = (w: number) => Math.max(0.5, w) * 0.5;
+  const disc = (cx: number, cy: number, r: number, ccw: boolean) => {
+    ctx.moveTo(cx + dx + r, cy + dy);
+    ctx.arc(cx + dx, cy + dy, r, 0, Math.PI * 2, ccw);
+  };
+
   ctx.save();
   ctx.globalCompositeOperation = composite === 'destination-out' ? 'destination-out' : 'source-over';
   ctx.globalAlpha = clamp01(alpha);
   ctx.fillStyle = color;
+  ctx.beginPath();
 
   if (n === 1) {
-    const radius = Math.max(0.5, widths[0]) * 0.5;
-    ctx.beginPath();
-    ctx.arc(points[0].x + dx, points[0].y + dy, radius, 0, Math.PI * 2);
-    ctx.fill();
+    disc(points[0].x, points[0].y, half(widths[0]), false);
+    ctx.fill('nonzero');
     ctx.restore();
     return;
   }
 
-  const half = (w: number) => Math.max(0.5, w) * 0.5;
-  const tangentAt = (i: number) => {
-    const cur = points[i];
-    const prev = points[Math.max(0, i - 1)];
-    const next = points[Math.min(n - 1, i + 1)];
-    let tx = next.x - prev.x;
-    let ty = next.y - prev.y;
-    if (Math.hypot(tx, ty) < 1e-5) {
-      tx = next.x - cur.x;
-      ty = next.y - cur.y;
-    }
-    if (Math.hypot(tx, ty) < 1e-5) {
-      tx = cur.x - prev.x;
-      ty = cur.y - prev.y;
-    }
-    const len = Math.hypot(tx, ty);
-    if (len < 1e-5) return { x: 1, y: 0 }; // degenerate: single point handled above
-    return { x: tx / len, y: ty / len };
-  };
-
-  const left: ResamplePoint[] = [];
-  const right: ResamplePoint[] = [];
-  for (let i = 0; i < n; i++) {
-    const t = tangentAt(i);
-    const hw = half(widths[i]);
-    // normal = (-ty, tx)
-    left.push({ x: points[i].x + -t.y * hw, y: points[i].y + t.x * hw });
-    right.push({ x: points[i].x - -t.y * hw, y: points[i].y - t.x * hw });
-  }
-
-  ctx.beginPath();
-
-  // Left boundary, forward.
-  ctx.moveTo(left[0].x + dx, left[0].y + dy);
+  // Quads. Each is an independent closed subpath (own moveTo) so they never join
+  // into one giant self-crossing outline.
+  let discCCW = false; // pick disc winding to MATCH the quad winding below
+  let emitted = false;
   for (let i = 1; i < n; i++) {
-    ctx.lineTo(left[i].x + dx, left[i].y + dy);
+    const a = points[i - 1];
+    const b = points[i];
+    const sdx = b.x - a.x;
+    const sdy = b.y - a.y;
+    const len = Math.hypot(sdx, sdy);
+    if (len < 1e-5) continue;
+
+    const nx = -sdy / len;
+    const ny = sdx / len;
+    const ra = half(widths[i - 1]);
+    const rb = half(widths[i]);
+
+    const x1 = a.x + nx * ra, y1 = a.y + ny * ra;
+    const x2 = b.x + nx * rb, y2 = b.y + ny * rb;
+    const x3 = b.x - nx * rb, y3 = b.y - ny * rb;
+    const x4 = a.x - nx * ra, y4 = a.y - ny * ra;
+
+    if (!emitted) {
+      emitted = true;
+      // Shoelace sign of the FIRST quad → winding all quads share.
+      const area = (x1 * y2 - x2 * y1) + (x2 * y3 - x3 * y2) + (x3 * y4 - x4 * y3) + (x4 * y1 - x1 * y4);
+      // ctx.arc(default anticlockwise=false) sweeps increasing angle → POSITIVE
+      // signed area in the canvas frame, so a NEGATIVE quad must use ccw=true.
+      discCCW = area < 0;
+    }
+
+    ctx.moveTo(x1 + dx, y1 + dy);
+    ctx.lineTo(x2 + dx, y2 + dy);
+    ctx.lineTo(x3 + dx, y3 + dy);
+    ctx.lineTo(x4 + dx, y4 + dy);
+    ctx.closePath();
   }
 
-  // Far-end round cap (bulges toward the pen direction).
-  const end = points[n - 1];
-  const endT = tangentAt(n - 1);
-  const endR = half(widths[n - 1]);
-  const endAngle = Math.atan2(endT.y, endT.x);
-  ctx.arc(end.x + dx, end.y + dy, endR, endAngle - Math.PI / 2, endAngle + Math.PI / 2);
-
-  // Right boundary, backward.
-  for (let i = n - 1; i >= 0; i--) {
-    ctx.lineTo(right[i].x + dx, right[i].y + dy);
+  if (!emitted) {
+    // All samples coincident → single disc.
+    disc(points[0].x, points[0].y, half(widths[0]), false);
+    ctx.fill('nonzero');
+    ctx.restore();
+    return;
   }
 
-  // Start round cap (bulges away from the pen direction).
-  const start = points[0];
-  const startT = tangentAt(0);
-  const startR = half(widths[0]);
-  const startAngle = Math.atan2(startT.y, startT.x);
-  ctx.arc(start.x + dx, start.y + dy, startR, startAngle + Math.PI / 2, startAngle + Math.PI * 1.5);
+  // Round join + round tip discs at every sample (own subpaths, same winding as
+  // the quads). Shared by two neighbouring quads, so joints stay smooth.
+  for (let i = 0; i < n; i++) {
+    disc(points[i].x, points[i].y, half(widths[i]), discCCW);
+  }
 
-  ctx.closePath();
-  ctx.fill();
+  ctx.fill('nonzero');
   ctx.restore();
 }
 
