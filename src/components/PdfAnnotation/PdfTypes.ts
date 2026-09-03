@@ -32,6 +32,8 @@ export interface PdfStroke {
   inkSpeed?: number;
   /** Marker only: pressure→opacity flag captured at draw time. */
   pressureOpacity?: boolean;
+  /** Soft edge feather flag captured at draw time (defaults to ON). */
+  edgeFeather?: boolean;
   createdAt: number;
 }
 
@@ -53,6 +55,8 @@ export interface PdfBrush {
   inkSpeed: number;
   /** Marker only: enable pressure-driven opacity (0 → light ink, 1 → full). */
   pressureOpacity: boolean;
+  /** Soft edge: apply a short, width-proportional feather to ink edges. */
+  edgeFeather?: boolean;
   /** Three quick-size presets (default 8 / 20 / 40). */
   quickSizes: number[];
 }

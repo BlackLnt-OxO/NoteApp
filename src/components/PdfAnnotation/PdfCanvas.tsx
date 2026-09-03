@@ -715,6 +715,7 @@ const PdfCanvas: React.FC = () => {
       style: isEraser ? undefined : (st.brushType === 'fountain' || st.brushType === 'pencil' ? st.brushType : undefined),
       inkSpeed: isEraser ? undefined : st.brush.inkSpeed,
       pressureOpacity: isEraser ? undefined : st.brush.pressureOpacity,
+      edgeFeather: isEraser ? undefined : st.brush.edgeFeather,
       createdAt: Date.now(),
     };
     addRawPoint(stroke, world.x, world.y, getPressure(e), e.timeStamp);

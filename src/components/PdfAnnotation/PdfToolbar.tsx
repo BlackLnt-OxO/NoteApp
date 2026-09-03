@@ -341,6 +341,15 @@ const PdfToolbar: React.FC = () => {
         <input type="range" min={0} max={100} value={Math.round(brush.smoothing * 100)} onChange={(e) => update({ smoothing: Number(e.target.value) / 100 })} style={trackStyle} />
       </div>
 
+      {/* ---- Soft edge feather toggle ---- */}
+      <div style={sectionStyle}>
+        <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: fs(11, gfs), color: 'var(--text-secondary)', cursor: 'pointer' }}>
+          <input type="checkbox" checked={brush.edgeFeather !== false}
+            onChange={(e) => update({ edgeFeather: e.target.checked })} style={{ accentColor: 'var(--accent)' }} />
+          边缘羽化
+        </label>
+      </div>
+
       {/* ---- Fountain-only: ink speed (fast = thin, slow = full ink) ---- */}
       {brushType === 'fountain' && (
         <div style={sectionStyle}>

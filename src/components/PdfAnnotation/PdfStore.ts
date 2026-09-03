@@ -37,6 +37,7 @@ export const DEFAULT_PDF_BRUSH: PdfBrush = {
   smoothing: 0.1,
   inkSpeed: 0.5,
   pressureOpacity: false,
+  edgeFeather: true,
   quickSizes: [8, 20, 40],
 };
 

@@ -300,23 +300,27 @@ describe('drawAnnotatedStroke — marker union single-fill (explicit nonzero)', 
     expect(calls(c, 'arc').length).toBeGreaterThan(0);
   });
 
-  it('requests a short world-space blur for a soft ink edge on a normal-width stroke', () => {
-    const c = makeCtx();
+  it('feather toggle: ON (default) blurs edges, OFF leaves a crisp edge', () => {
+    const pts = [
+      { x: 0, y: 0, pressure: 1, t: 0 },
+      { x: 60, y: 20, pressure: 1, t: 16 },
+      { x: 130, y: -5, pressure: 1, t: 32 },
+    ];
+    // Default (edgeFeather undefined) → feather ON → blur filter is set.
+    const on = makeCtx();
+    drawAnnotatedStroke(ctx2d(on), makeStroke(pts, { size: 8, opacity: 1, pressureOpacity: false }));
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    expect(String((on.ctx as any).filter)).toContain('blur(');
+
+    // edgeFeather=false → no filter (crisp).
+    const off = makeCtx();
     drawAnnotatedStroke(
-      ctx2d(c),
-      makeStroke(
-        [
-          { x: 0, y: 0, pressure: 1, t: 0 },
-          { x: 60, y: 20, pressure: 1, t: 16 },
-          { x: 130, y: -5, pressure: 1, t: 32 },
-        ],
-        { size: 8, opacity: 1, pressureOpacity: false },
-      ),
+      ctx2d(off),
+      makeStroke(pts, { size: 8, opacity: 1, pressureOpacity: false, edgeFeather: false }),
     );
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const f = (c.ctx as any).filter as string | undefined;
-    expect(f).toBeDefined();
-    expect(f).toMatch(/^blur\([\d.]+px\)$/);
+    const fOff = (off.ctx as any).filter as string | undefined;
+    expect(fOff === undefined || fOff === '' || fOff === 'none').toBe(true);
   });
 
   it('subdivides a fast far-apart pair into many small quads + discs (no giant facet)', () => {

@@ -343,6 +343,7 @@ export function drawVariableRibbon(
   composite: PdfStroke['compositeOperation'],
   dx = 0,
   dy = 0,
+  feather = true,
 ): void {
   const n = points.length;
   if (n === 0) return;
@@ -358,16 +359,15 @@ export function drawVariableRibbon(
   ctx.globalAlpha = clamp01(alpha);
   ctx.fillStyle = color;
 
-  // Soft ink edge: a SHORT outward fade at the silhouette (like ink bleeding into
-  // paper). Applied as a world-space gaussian to the single union fill, so the
-  // "one fill / no alpha stacking" invariant and translucency rules are untouched.
-  // Hairlines skip it (the fade would swallow them); contexts without ctx.filter
-  // (headless/jsdom, older engines) fall back to a crisp edge — deterministic.
-  {
+  // Optional soft ink edge (default ON): a SHORT feather that scales WITH the
+  // stroke width (×0.25) but is capped (~0.6 world px), so thin strokes keep a
+  // subtle edge and thick strokes never grow a big blurry halo. Applies to the
+  // single union fill; hairline-slim strokes get a tiny radius.
+  if (feather) {
     let sum = 0;
     for (const w of widths) sum += Number.isFinite(w) ? w : 0;
     const avgWidth = widths.length ? sum / widths.length : 0;
-    const softWorld = Math.min(1, avgWidth * 0.25); // ≤1 world px fade, scaled with line
+    const softWorld = Math.min(0.6, avgWidth * 0.25);
     if (softWorld > 0.05) {
       let scale = 1;
       try {
@@ -384,7 +384,6 @@ export function drawVariableRibbon(
       }
     }
   }
-
   ctx.beginPath();
 
   if (n === 1) {
@@ -518,7 +517,9 @@ export interface InkRibbon {
   color: string;
   alpha: number;
   composite: PdfStroke['compositeOperation'];
-  /** world margin around a tile: half of the widest local width (+ soft-edge slack). */
+  /** soft-edge feather flag captured at draw time (defaults to ON). */
+  edge: boolean;
+  /** world margin around a tile: half of the widest local width (+ small slack). */
   pad: number;
 }
 
@@ -557,7 +558,8 @@ export function prepareInkRibbon(stroke: PdfStroke): InkRibbon | null {
     color: stroke.color,
     alpha,
     composite: stroke.compositeOperation,
-    pad: maxW * 0.5 + 2, // ≥ widest half width; +2 covers the ≤1px soft blur bleed
+    edge: stroke.edgeFeather !== false,
+    pad: maxW * 0.5 + 2, // ≥ widest half width + small safety margin
   };
 }
 
@@ -593,7 +595,7 @@ export function drawInkRibbonSlice(
 
   const slicePoints = lo === 0 && hi === n - 1 ? points : points.slice(lo, hi + 1);
   const sliceWidths = lo === 0 && hi === n - 1 ? widths : widths.slice(lo, hi + 1);
-  drawVariableRibbon(ctx, slicePoints, sliceWidths, ribbon.color, ribbon.alpha, ribbon.composite);
+  drawVariableRibbon(ctx, slicePoints, sliceWidths, ribbon.color, ribbon.alpha, ribbon.composite, 0, 0, ribbon.edge);
 }
 
 // ---- Marker (default brush) ----------------------------------------------------
@@ -614,7 +616,7 @@ function drawMarker(ctx: CanvasRenderingContext2D, stroke: PdfStroke, dx = 0, dy
       ? clamp01(stroke.opacity * (0.45 + 0.55 * averagePressure(pts)))
       : stroke.opacity;
 
-  drawVariableRibbon(ctx, ribbon.points, ribbon.widths, stroke.color, alpha, stroke.compositeOperation, dx, dy);
+  drawVariableRibbon(ctx, ribbon.points, ribbon.widths, stroke.color, alpha, stroke.compositeOperation, dx, dy, stroke.edgeFeather !== false);
 }
 
 // ---- Fountain pen --------------------------------------------------------------
@@ -626,7 +628,7 @@ function drawFountain(ctx: CanvasRenderingContext2D, stroke: PdfStroke, dx = 0, 
   const inkSpeed = stroke.inkSpeed ?? 0.5;
   const ribbon = buildRibbonData(pts, (fp) => computeFountainWidths(fp, stroke.size, inkSpeed));
 
-  drawVariableRibbon(ctx, ribbon.points, ribbon.widths, stroke.color, stroke.opacity, stroke.compositeOperation, dx, dy);
+  drawVariableRibbon(ctx, ribbon.points, ribbon.widths, stroke.color, stroke.opacity, stroke.compositeOperation, dx, dy, stroke.edgeFeather !== false);
 }
 
 // ---- Pencil (hard lead core + deterministic grain) ------------------------------
@@ -645,7 +647,7 @@ function drawPencil(ctx: CanvasRenderingContext2D, stroke: PdfStroke, dx = 0, dy
   if (pts.length === 0) return;
 
   const core = buildRibbonData(pts, (fp) => computePencilCoreWidths(fp, stroke.size));
-  drawVariableRibbon(ctx, core.points, core.widths, stroke.color, clamp01(stroke.opacity * 0.85), stroke.compositeOperation, dx, dy);
+  drawVariableRibbon(ctx, core.points, core.widths, stroke.color, clamp01(stroke.opacity * 0.85), stroke.compositeOperation, dx, dy, stroke.edgeFeather !== false);
 
   drawPencilGrain(ctx, core.points, stroke, dx, dy);
 }
