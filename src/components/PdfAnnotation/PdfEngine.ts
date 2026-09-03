@@ -38,6 +38,14 @@ export function getPressure(e: { pointerType: string; pressure: number }): numbe
 
 // ---- Raw sampling -------------------------------------------------------------
 
+/**
+ * Adaptive capture decimation: samples closer than ~0.3 world px add no geometry
+ * (rendering re-resamples at ≥1px anyway) but DO add per-frame cost when a very
+ * long/slow stroke piles them up. Dropping only sub-0.3px points keeps the shape
+ * identical while stopping slow-writing points from exploding.
+ */
+export const RAW_SAMPLE_MIN_DIST = 0.3;
+
 export function addRawPoint(
   stroke: PdfStroke,
   x: number,
@@ -46,7 +54,7 @@ export function addRawPoint(
   t: number,
 ): void {
   const last = stroke.points[stroke.points.length - 1];
-  if (last && Math.hypot(x - last.x, y - last.y) < 0.01) return;
+  if (last && Math.hypot(x - last.x, y - last.y) < RAW_SAMPLE_MIN_DIST) return;
   stroke.points.push({ x, y, pressure, t });
 }
 

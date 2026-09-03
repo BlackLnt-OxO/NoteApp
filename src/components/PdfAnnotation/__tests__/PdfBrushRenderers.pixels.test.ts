@@ -14,7 +14,7 @@
 import { describe, it, expect } from 'vitest';
 import { createCanvas } from '@napi-rs/canvas';
 
-import { drawAnnotatedStroke } from '../PdfBrushRenderers';
+import { drawAnnotatedStroke, prepareInkRibbon, drawInkRibbonSlice } from '../PdfBrushRenderers';
 import type { PdfStroke } from '../PdfTypes';
 
 function makeStroke(
@@ -144,6 +144,47 @@ describe('self-overlap must be OPAQUE (no winding-0 holes) — real pixels', () 
     const a = rasterize(stroke, 220, 80);
     const b = rasterize(stroke, 220, 80);
     expect(Array.from(a.data)).toEqual(Array.from(b.data));
+  });
+
+  it('tile slice is pixel-identical to the whole stroke inside the tile', () => {
+    const W = 340, H = 90;
+    const stroke = makeStroke(
+      [
+        { x: 20, y: 45, pressure: 1, t: 0 },
+        { x: 90, y: 44, pressure: 0.6, t: 16 },
+        { x: 180, y: 46, pressure: 1, t: 32 },
+        { x: 300, y: 45, pressure: 0.8, t: 48 },
+      ],
+      { size: 14, pressureOpacity: false },
+    );
+
+    // Whole-stroke reference (what the old stampStroke produced).
+    const ref = rasterize(stroke, W, H);
+
+    // "Tile" that intersects the middle of the stroke: rect x[110,150] y[30,60].
+    const canvas = createCanvas(W, H);
+    const ctx = canvas.getContext('2d') as unknown as CanvasRenderingContext2D;
+    ctx.beginPath();
+    ctx.rect(110, 30, 40, 30);
+    ctx.clip();
+    const ribbon = prepareInkRibbon(stroke);
+    expect(ribbon).not.toBeNull();
+    if (ribbon) drawInkRibbonSlice(ctx, ribbon, 110, 30, 150, 60);
+    const sliced = ctx.getImageData(0, 0, W, H).data;
+
+    // Compare the stroke's SOLID interior well inside the rect (away from blur /
+    // clip margins) — the slice must be pixel-identical there (no gap, no seam).
+    let opaque = 0;
+    for (let y = 41; y < 49; y++) {
+      for (let x = 118; x < 142; x++) {
+        const i = (y * W + x) * 4;
+        if (sliced[i + 3] > 200) opaque++;
+        for (let c = 0; c < 4; c++) {
+          expect(sliced[i + c]).toBe(ref.data[i + c]);
+        }
+      }
+    }
+    expect(opaque).toBeGreaterThan((142 - 118) * (49 - 41) * 0.8); // real ink, not empty
   });
 });
 

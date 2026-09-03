@@ -13,7 +13,11 @@
 
 import type { Camera, Stroke } from './types';
 import { screenToWorld, worldToScreen } from './constants';
-import { drawAnnotatedStroke } from '../PdfAnnotation/PdfBrushRenderers';
+import {
+  drawAnnotatedStroke,
+  prepareInkRibbon,
+  drawInkRibbonSlice,
+} from '../PdfAnnotation/PdfBrushRenderers';
 import {
   drawEraserSegment,
   drawEraserDot,
@@ -43,16 +47,25 @@ function tileCtx(tiles: Map<string, HTMLCanvasElement>, tx: number, ty: number):
   return getTile(tiles, tx, ty).getContext('2d')!;
 }
 
-/** Draw a stroke into whichever tiles it intersects. */
+/** Draw a stroke into whichever tiles it intersects. For ribbon pens the ribbon
+ *  is prepared once, then each tile stamps only the slice overlapping it — the
+ *  pixels are identical (no re-smoothing, no seams) but cost scales with the
+ *  tile instead of re-rasterizing the WHOLE stroke per tile. Eraser / pencil
+ *  keep the whole-stroke path. */
 export function stampStroke(tiles: Map<string, HTMLCanvasElement>, stroke: Stroke): void {
   const b = getStrokeBounds(stroke);
   const tx0 = Math.floor(b.minX / TILE), tx1 = Math.floor(b.maxX / TILE);
   const ty0 = Math.floor(b.minY / TILE), ty1 = Math.floor(b.maxY / TILE);
+  const ribbon = prepareInkRibbon(stroke);
   for (let ty = ty0; ty <= ty1; ty++) {
     for (let tx = tx0; tx <= tx1; tx++) {
       const ctx = tileCtx(tiles, tx, ty);
       ctx.setTransform(SCALE, 0, 0, SCALE, -tx * TILE * SCALE, -ty * TILE * SCALE);
-      drawAnnotatedStroke(ctx, stroke);
+      if (ribbon) {
+        drawInkRibbonSlice(ctx, ribbon, tx * TILE, ty * TILE, (tx + 1) * TILE, (ty + 1) * TILE);
+      } else {
+        drawAnnotatedStroke(ctx, stroke);
+      }
     }
   }
 }

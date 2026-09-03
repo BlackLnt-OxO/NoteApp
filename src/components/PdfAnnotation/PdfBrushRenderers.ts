@@ -510,6 +510,92 @@ function buildRibbonData(
   return { points: resampled.points, widths: smoothWidths(resampled.widths) };
 }
 
+// ---- Tile-stamping helper ---------------------------------------------------------
+
+export interface InkRibbon {
+  points: ResamplePoint[];
+  widths: number[];
+  color: string;
+  alpha: number;
+  composite: PdfStroke['compositeOperation'];
+  /** world margin around a tile: half of the widest local width (+ soft-edge slack). */
+  pad: number;
+}
+
+/** Rasterize a pen stroke's final ribbon ONCE (smoothing + width + resample) so
+ *  tiles can be stamped from slices instead of re-processing + re-filling the WHOLE
+ *  stroke into every tile it touches. Returns null for eraser / pencil — eraser
+ *  keeps PdfEngine.drawStrokePath, and pencil grain is not sliceable, so those
+ *  stay on the whole-stroke path. */
+export function prepareInkRibbon(stroke: PdfStroke): InkRibbon | null {
+  if (stroke.compositeOperation === 'destination-out') return null;
+  if (stroke.style === 'pencil') return null;
+
+  const pts = preparePoints(stroke);
+  if (pts.length === 0) return null;
+
+  let ribbon: ResampleOut;
+  let alpha: number;
+  if (stroke.style === 'fountain') {
+    const inkSpeed = stroke.inkSpeed ?? 0.5;
+    ribbon = buildRibbonData(pts, (fp) => computeFountainWidths(fp, stroke.size, inkSpeed));
+    alpha = stroke.opacity;
+  } else {
+    ribbon = buildRibbonData(pts, (fp) => computeMarkerWidths(fp, stroke.size));
+    alpha =
+      stroke.pressureOpacity === true
+        ? clamp01(stroke.opacity * (0.45 + 0.55 * averagePressure(pts)))
+        : stroke.opacity;
+  }
+  if (ribbon.points.length === 0) return null;
+
+  let maxW = 0;
+  for (const w of ribbon.widths) if (Number.isFinite(w) && w > maxW) maxW = w;
+  return {
+    points: ribbon.points,
+    widths: ribbon.widths,
+    color: stroke.color,
+    alpha,
+    composite: stroke.compositeOperation,
+    pad: maxW * 0.5 + 2, // ≥ widest half width; +2 covers the ≤1px soft blur bleed
+  };
+}
+
+/**
+ * Stamp a prepared ribbon into a context already in world coordinates, drawing
+ * ONLY the contiguous point range whose envelope can reach the world rect
+ * [minX..maxX]×[minY..maxY] (points/widths are already final, so a slice renders
+ * pixel-identical to the full ribbon inside the rect — no re-smoothing, no seams
+ * — while per-tile raster cost scales with the tile, not the whole stroke). */
+export function drawInkRibbonSlice(
+  ctx: CanvasRenderingContext2D,
+  ribbon: InkRibbon,
+  minX: number,
+  minY: number,
+  maxX: number,
+  maxY: number,
+): void {
+  const { points, widths } = ribbon;
+  const n = points.length;
+  if (n === 0) return;
+  const p = ribbon.pad;
+
+  let lo = -1;
+  let hi = -1;
+  for (let i = 0; i < n; i++) {
+    const q = points[i];
+    if (q.x >= minX - p && q.x <= maxX + p && q.y >= minY - p && q.y <= maxY + p) {
+      if (lo === -1) lo = i;
+      hi = i;
+    }
+  }
+  if (lo === -1) return;
+
+  const slicePoints = lo === 0 && hi === n - 1 ? points : points.slice(lo, hi + 1);
+  const sliceWidths = lo === 0 && hi === n - 1 ? widths : widths.slice(lo, hi + 1);
+  drawVariableRibbon(ctx, slicePoints, sliceWidths, ribbon.color, ribbon.alpha, ribbon.composite);
+}
+
 // ---- Marker (default brush) ----------------------------------------------------
 
 function drawMarker(ctx: CanvasRenderingContext2D, stroke: PdfStroke, dx = 0, dy = 0): void {
@@ -518,9 +604,6 @@ function drawMarker(ctx: CanvasRenderingContext2D, stroke: PdfStroke, dx = 0, dy
 
   const ribbon = buildRibbonData(pts, (fp) => computeMarkerWidths(fp, stroke.size));
 
-  // Whole-stroke alpha: if the "pressure opacity" toggle is on, the stroke's ink
-  // depth follows how hard you press (AVERAGE pressure) — still a single fill,
-  // so it never stacks. Toggle off / legacy strokes stay at constant opacity.
   // Whole-stroke alpha: if the "pressure opacity" toggle is on, ink depth still
   // follows how hard you press (AVERAGE pressure, one fill → never stacks), but
   // the curve is GENTLE (0.45..1) so a light stroke stays clearly visible instead
