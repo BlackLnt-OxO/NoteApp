@@ -2,6 +2,7 @@ import React, { useRef, useEffect, useCallback, useState } from 'react';
 import type { TextNodeData, Camera } from './types';
 import { worldToScreen } from './constants';
 import { useCanvasStore } from './useCanvasStore';
+import { useNoteStore } from '../../store';
 
 interface Props {
   node: TextNodeData;
@@ -12,13 +13,17 @@ const TextNode: React.FC<Props> = ({ node, camera }) => {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const { updateTextNode, deleteTextNode, setEditingTextId, pushHistory } = useCanvasStore();
+  const uiScale = useNoteStore((s) => s.uiScale);
   const [content, setContent] = useState(node.content);
 
   // Convert world → screen position. The box keeps the node's (world) width so
-  // re-editing a resized box wraps the same as its committed card.
+  // re-editing a resized box wraps the same as its committed card. worldToScreen
+  // returns VISUAL px; App is CSS-scaled by uiScale → divide geometry by uiScale.
   const screen = worldToScreen(node.x, node.y, camera);
-  const screenW = Math.max(120, node.width * camera.zoom);
-  const fontSizePx = Math.max(12, node.fontSize * camera.zoom);
+  const screenX = screen.x / uiScale;
+  const screenY = screen.y / uiScale;
+  const screenW = Math.max(120, node.width * camera.zoom) / uiScale;
+  const fontSizePx = Math.max(12, node.fontSize * camera.zoom) / uiScale;
 
   // Commit current content and close the editor. Even an EMPTY box is kept (it
   // becomes a visible placeholder card) so a tap/click that places a box never
@@ -28,14 +33,17 @@ const TextNode: React.FC<Props> = ({ node, camera }) => {
     if (finishedRef.current) return;
     finishedRef.current = true;
     const el = containerRef.current;
+    // offsetWidth/offsetHeight are LAYOUT px → visual px = ×uiScale → world = ÷zoom.
+    const cssW = el?.offsetWidth ?? (node.width * camera.zoom) / uiScale;
+    const cssH = el?.offsetHeight ?? 44;
     pushHistory();
     updateTextNode(node.id, {
       content,
-      width: Math.max(60, (el?.offsetWidth ?? node.width * camera.zoom) / camera.zoom),
-      height: Math.max(20, (el?.offsetHeight ?? 40) / camera.zoom),
+      width: Math.max(60, (cssW * uiScale) / camera.zoom),
+      height: Math.max(20, (cssH * uiScale) / camera.zoom),
     });
     setEditingTextId(null);
-  }, [content, node.id, camera.zoom, updateTextNode, pushHistory, setEditingTextId]);
+  }, [content, node.id, camera.zoom, uiScale, updateTextNode, pushHistory, setEditingTextId]);
 
   // Escape = explicit cancel: only deletes the node when it is still empty.
   const cancel = useCallback(() => {
@@ -97,8 +105,8 @@ const TextNode: React.FC<Props> = ({ node, camera }) => {
       ref={containerRef}
       style={{
         position: 'absolute',
-        left: screen.x,
-        top: screen.y,
+        left: screenX,
+        top: screenY,
         width: screenW,
         boxSizing: 'border-box',
         zIndex: 10,

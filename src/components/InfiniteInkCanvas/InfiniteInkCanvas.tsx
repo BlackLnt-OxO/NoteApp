@@ -364,17 +364,28 @@ const InfiniteInkCanvas: React.FC = () => {
 
     const world = screenToWorld(sx, sy, state.camera);
 
+    // While a text box is being edited, clicking empty canvas = END the edit
+    // (commit via the textarea blur) instead of spawning another box.
+    const endEditIfActive = () => {
+      if (state.editingTextId == null) return false;
+      const ae = document.activeElement;
+      if (ae && ae instanceof HTMLTextAreaElement) ae.blur();
+      return true;
+    };
+
     if (state.activeTool === 'insert') {
       if (state.insertMode === 'image') {
         // Click once to pick an image → it lands at the clicked world point.
         insertWorldRef.current = world;
         fileInputRef.current?.click();
       } else {
+        if (endEditIfActive()) return;
         state.addTextNode(world.x, world.y);
       }
       return;
     }
     if (state.activeTool === 'text') {
+      if (endEditIfActive()) return;
       state.addTextNode(world.x, world.y);
       return;
     }

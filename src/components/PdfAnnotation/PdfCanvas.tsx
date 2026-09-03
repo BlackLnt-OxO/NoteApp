@@ -291,6 +291,7 @@ const PdfCanvas: React.FC = () => {
   const camera = usePdfStore((s) => s.camera);
   const isDraggingToolbar = usePdfToolbarStore((s) => s.isDragging);
   const theme = useNoteStore((s) => s.settings.theme);
+  const uiScale = useNoteStore((s) => s.uiScale);
   const [cursorScreen, setCursorScreen] = useState<{ x: number; y: number } | null>(null);
   const ringRef = useRef<HTMLDivElement>(null);
 
@@ -302,14 +303,20 @@ const PdfCanvas: React.FC = () => {
     if (!canvas || !container) return;
     const dpr = window.devicePixelRatio || 1;
     dprRef.current = dpr;
-    const rect = container.getBoundingClientRect();
-    canvas.width = rect.width * dpr;
-    canvas.height = rect.height * dpr;
-    canvas.style.width = rect.width + 'px';
-    canvas.style.height = rect.height + 'px';
+    // Layout (untransformed) size — unaffected by the App-root CSS scale, so the
+    // canvas fills its container at EVERY uiScale. (getBoundingClientRect returns
+    // the scaled visual size; using it made the canvas spill past / mis-map.)
+    const lw = container.offsetWidth;
+    const lh = container.offsetHeight;
+    // Backing store sized for the VISUAL size (layout × scale) × dpr → sharp.
+    canvas.width = Math.max(1, Math.round(lw * uiScale * dpr));
+    canvas.height = Math.max(1, Math.round(lh * uiScale * dpr));
+    // Element CSS size = layout px; the CSS scale renders it at the visual size.
+    canvas.style.width = lw + 'px';
+    canvas.style.height = lh + 'px';
     dirtyRef.current = true;
     scheduleRender();
-  }, []);
+  }, [uiScale]);
 
   useEffect(() => {
     resizeCanvas();
@@ -317,6 +324,11 @@ const PdfCanvas: React.FC = () => {
     if (containerRef.current) ro.observe(containerRef.current);
     return () => ro.disconnect();
   }, [resizeCanvas]);
+
+  // transform: scale doesn't fire ResizeObserver → re-size on uiScale changes.
+  useEffect(() => {
+    resizeCanvas();
+  }, [uiScale, resizeCanvas]);
 
   // ---- Render loop ------------------------------------------------------------
 
@@ -468,8 +480,9 @@ const PdfCanvas: React.FC = () => {
     const token = ++pageLoadTokenRef.current;
     const pageNum = currentPage;
     const container = containerRef.current;
-    const vw = container?.clientWidth ?? window.innerWidth;
-    const vh = container?.clientHeight ?? window.innerHeight;
+    // clientWidth is LAYOUT px; the canvas/user space is VISUAL px (layout × uiScale).
+    const vw = container ? container.clientWidth * uiScale : window.innerWidth;
+    const vh = container ? container.clientHeight * uiScale : window.innerHeight;
 
     const finish = (bg: HTMLCanvasElement) => {
       const st = usePdfStore.getState();
@@ -612,7 +625,7 @@ const PdfCanvas: React.FC = () => {
     if (!canvas) return;
     const st = usePdfStore.getState();
     const { sx, sy } = getCanvasPos(e);
-    setCursorScreen({ x: e.clientX, y: e.clientY });
+    setCursorScreen({ x: sx, y: sy });
     updateRingColor(e.clientX, e.clientY);
 
     if (e.button === 1 || (e.button === 0 && spaceDownRef.current)) {
@@ -723,7 +736,7 @@ const PdfCanvas: React.FC = () => {
     if (!canvas) return;
     const { sx, sy } = getCanvasPos(e);
     const st = usePdfStore.getState();
-    setCursorScreen({ x: e.clientX, y: e.clientY });
+    setCursorScreen({ x: sx, y: sy });
     updateRingColor(e.clientX, e.clientY);
 
     if (panAnchorRef.current) {
@@ -945,7 +958,8 @@ const PdfCanvas: React.FC = () => {
         <div
           ref={ringRef}
           style={{
-            position: 'fixed', left: cursorScreen.x, top: cursorScreen.y, width: cs, height: cs,
+            position: 'absolute', left: cursorScreen.x / uiScale, top: cursorScreen.y / uiScale,
+            width: cs / uiScale, height: cs / uiScale,
             borderRadius: '50%', border: '1.5px solid rgba(255,255,255,0.7)',
             background: activeTool === 'eraser' ? 'rgba(255,255,255,0.12)' : 'rgba(255,255,255,0.06)',
             pointerEvents: 'none', zIndex: 9999, transform: 'translate(-50%, -50%)',

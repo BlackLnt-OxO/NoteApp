@@ -17,6 +17,7 @@ import React, { useRef, useState, useCallback } from 'react';
 import type { TextNodeData, Camera } from './types';
 import { worldToScreen } from './constants';
 import { useCanvasStore } from './useCanvasStore';
+import { useNoteStore } from '../../store';
 
 interface Props {
   node: TextNodeData;
@@ -26,6 +27,7 @@ interface Props {
 
 const TextObject: React.FC<Props> = ({ node, camera, interactive }) => {
   const { updateTextNode, deleteTextNode, setEditingTextId, pushHistory } = useCanvasStore();
+  const uiScale = useNoteStore((s) => s.uiScale);
   const [hover, setHover] = useState(false);
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
   const [dragD, setDragD] = useState<{ x: number; y: number } | null>(null);
@@ -34,15 +36,20 @@ const TextObject: React.FC<Props> = ({ node, camera, interactive }) => {
 
   const hasContent = !!node.content && !!node.content.trim();
 
+  // worldToScreen returns VISUAL px; the App root is CSS-scaled by uiScale, so DOM
+  // overlay geometry must be converted to layout px by dividing by uiScale.
   const screen = worldToScreen(node.x, node.y, camera);
-  const left = screen.x + (dragD ? dragD.x : 0);
-  const top = screen.y + (dragD ? dragD.y : 0);
+  const left = (screen.x + (dragD ? dragD.x : 0)) / uiScale;
+  const top = (screen.y + (dragD ? dragD.y : 0)) / uiScale;
   const widthWorld = node.width + (rzW ?? 0);
-  const screenW = Math.max(60, widthWorld * camera.zoom);
-  const screenH = Math.max(28, node.height * camera.zoom);
-  const fontSize = Math.max(10, node.fontSize * camera.zoom);
+  const screenW = Math.max(60, widthWorld * camera.zoom) / uiScale;
+  const screenH = Math.max(28, node.height * camera.zoom) / uiScale;
+  const fontSize = Math.max(10, node.fontSize * camera.zoom) / uiScale;
 
   const openEdit = useCallback(() => {
+    // Commit any currently-active text edit before switching target.
+    const ae = document.activeElement;
+    if (ae && ae instanceof HTMLTextAreaElement) ae.blur();
     setMenu(null);
     setDragD(null);
     setRzW(null);
@@ -115,10 +122,11 @@ const TextObject: React.FC<Props> = ({ node, camera, interactive }) => {
     const el = boxRef.current;
     updateTextNode(node.id, {
       width: w,
-      height: Math.max(20, (el ? el.offsetHeight / camera.zoom : node.height)),
+      // offsetHeight is layout px → visual px = ×uiScale → world = ÷zoom.
+      height: Math.max(20, (el ? el.offsetHeight * uiScale : node.height * camera.zoom) / camera.zoom),
     });
     setRzW(null);
-  }, [node.id, camera.zoom, node.height, updateTextNode]);
+  }, [node.id, camera.zoom, uiScale, node.height, updateTextNode]);
 
   const onContext = useCallback((e: React.MouseEvent) => {
     if (!interactive) return;
@@ -215,7 +223,7 @@ const TextObject: React.FC<Props> = ({ node, camera, interactive }) => {
       {menu && interactive && (
         <div
           style={{
-            position: 'fixed', left: menu.x, top: menu.y, zIndex: 10002,
+            position: 'fixed', left: menu.x / uiScale, top: menu.y / uiScale, zIndex: 10002,
             background: 'var(--dropdown-bg, #1f2230)', border: '1px solid rgba(255,255,255,0.18)',
             borderRadius: 8, padding: 4, minWidth: 120, color: 'var(--text-primary, #e0e0e0)',
             fontSize: 13, boxShadow: '0 8px 24px rgba(0,0,0,0.35)',

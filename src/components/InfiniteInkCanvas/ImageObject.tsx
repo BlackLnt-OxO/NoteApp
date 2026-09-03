@@ -9,6 +9,7 @@ import React, { useRef, useState, useCallback } from 'react';
 import type { ImageObject as ImageObj, Camera } from './types';
 import { worldToScreen } from './constants';
 import { useCanvasStore } from './useCanvasStore';
+import { useNoteStore } from '../../store';
 
 interface Props {
   obj: ImageObj;
@@ -17,12 +18,16 @@ interface Props {
 
 const ImageObject: React.FC<Props> = ({ obj, camera }) => {
   const { updateImageObject, deleteObject, pushHistory } = useCanvasStore();
+  const uiScale = useNoteStore((s) => s.uiScale);
   const [hover, setHover] = useState(false);
   const [lightbox, setLightbox] = useState(false);
 
+  // worldToScreen is VISUAL px; App is CSS-scaled by uiScale → layout px = /uiScale.
   const screen = worldToScreen(obj.x, obj.y, camera);
-  const screenW = obj.width * camera.zoom;
-  const screenH = obj.height * camera.zoom;
+  const screenX = screen.x / uiScale;
+  const screenY = screen.y / uiScale;
+  const screenW = (obj.width * camera.zoom) / uiScale;
+  const screenH = (obj.height * camera.zoom) / uiScale;
 
   // ---- drag to move (world delta = screen delta / zoom) ----------------------
   const dragRef = useRef<{ startX: number; startY: number; ox: number; oy: number } | null>(null);
@@ -76,8 +81,8 @@ const ImageObject: React.FC<Props> = ({ obj, camera }) => {
         onMouseLeave={() => setHover(false)}
         style={{
           position: 'absolute',
-          left: screen.x,
-          top: screen.y,
+          left: screenX,
+          top: screenY,
           width: screenW,
           height: screenH,
           cursor: 'grabbing',
