@@ -17,6 +17,7 @@ declare global {
       updateAllFloatingFontSize: (fontSize: number) => Promise<boolean>;
       loadFloatState: (noteId: string) => Promise<any>;
       saveFloatState: (noteId: string, state: any) => Promise<boolean>;
+      resetFloatState: (noteId: string) => Promise<boolean>;
       updateFloatContent: (noteId: string, content: string) => Promise<boolean>;
       setFloatIgnoreMouse: (noteId: string, ignore: boolean) => Promise<boolean>;
       onFloatContentUpdated: (callback: (data: any) => void) => void;
@@ -55,6 +56,7 @@ declare global {
       saveStore: (data: any) => Promise<boolean>;
       loadStore: () => Promise<any>;
       loadStoreSync: () => any;
+      updateShortcuts: (settings: any) => Promise<void>;
       saveCanvasData?: (data: any) => Promise<boolean>;
       loadCanvasData?: () => Promise<any>;
     };

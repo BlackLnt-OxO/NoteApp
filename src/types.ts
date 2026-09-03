@@ -53,6 +53,8 @@ export interface AppSettings {
   shortcutPenetrate: string;
   shortcutCloseAll: string;
   shortcutTransparent: string;
+  floatCloseKey?: string;
+  floatPenetrateKey?: string;
 }
 
 export interface MindMapState {

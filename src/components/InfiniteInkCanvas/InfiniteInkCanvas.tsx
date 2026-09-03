@@ -31,11 +31,10 @@ interface LaserSegment {
 }
 const LASER_LIFETIME = 1800; // ms — how long a laser trail stays visible
 
-/** Draw a laser segment; it stays fully visible while writing (no `end` yet),
- *  then fades linearly from the pen-up time. */
-function drawLaser(ctx: CanvasRenderingContext2D, seg: LaserSegment, now: number): void {
-  const age = seg.end === undefined ? 0 : now - seg.end;
-  const alpha = age >= LASER_LIFETIME ? 0 : 1 - age / LASER_LIFETIME;
+/** Draw a laser segment at the given alpha. The caller decides alpha (uniform
+ *  while writing so every trail stays lit, then a group fade from the last pen
+ *  activity). */
+function drawLaser(ctx: CanvasRenderingContext2D, seg: LaserSegment, alpha: number): void {
   if (alpha <= 0 || seg.points.length === 0) return;
 
   ctx.save();
@@ -80,6 +79,10 @@ const InfiniteInkCanvas: React.FC = () => {
   const dirtyRef = useRef(false);
   const laserRef = useRef<LaserSegment[]>([]);
   const laserRafRef = useRef(0);
+  /** Timestamp of the most recent laser pen-down / move / pen-up — when a stroke
+   *  is being drawn, all trails stay lit; once idle they all fade together from
+   *  this instant. */
+  const laserActiveRef = useRef(0);
 
   const objects = useCanvasStore((s) => s.objects);
   const camera = useCanvasStore((s) => s.camera);
@@ -205,9 +208,18 @@ const InfiniteInkCanvas: React.FC = () => {
       drawAnnotatedStroke(ctx, currentStrokeRef.current);
     }
 
-    // Transient laser-pointer strokes (drawn on top of everything, fading out).
+    // Transient laser-pointer strokes. While any stroke is being drawn, all
+    // trails stop fading and stay lit (so writing a new stroke re-lights earlier
+    // ones); when idle they fade together from the last pen activity.
     const now = performance.now();
-    for (const seg of laserRef.current) drawLaser(ctx, seg, now);
+    const holding = laserRef.current.some((s) => s.end === undefined);
+    if (holding) {
+      for (const seg of laserRef.current) drawLaser(ctx, seg, 1);
+    } else {
+      const gAge = now - laserActiveRef.current;
+      const gAlpha = gAge >= LASER_LIFETIME ? 0 : 1 - gAge / LASER_LIFETIME;
+      for (const seg of laserRef.current) drawLaser(ctx, seg, gAlpha);
+    }
 
     ctx.restore();
     dirtyRef.current = false;
@@ -227,8 +239,10 @@ const InfiniteInkCanvas: React.FC = () => {
   const tickLaser = useCallback(() => {
     laserRafRef.current = 0;
     const now = performance.now();
-    // Keep in-progress segments (no `end`) alive; drop finished ones past expiry.
-    laserRef.current = laserRef.current.filter((s) => s.end === undefined || now - s.end < LASER_LIFETIME);
+    // While writing, keep ALL trails lit (earlier strokes stay until the last
+    // one lifts). Once idle, clear the whole group after it fades past lifetime.
+    const holding = laserRef.current.some((s) => s.end === undefined);
+    if (!holding && now - laserActiveRef.current >= LASER_LIFETIME) laserRef.current = [];
     if (laserRef.current.length) {
       dirtyRef.current = true;
       doRender();
@@ -407,6 +421,7 @@ const InfiniteInkCanvas: React.FC = () => {
       };
       addRawPoint(seg as any, world.x, world.y, getPressure(e), e.timeStamp);
       laserRef.current.push(seg);
+      laserActiveRef.current = performance.now();
       startLaser();
       dirtyRef.current = true;
       scheduleRender();
@@ -494,6 +509,7 @@ const InfiniteInkCanvas: React.FC = () => {
           }
         }
       }
+      laserActiveRef.current = performance.now();
       startLaser();
       dirtyRef.current = true;
       scheduleRender();
@@ -563,11 +579,12 @@ const InfiniteInkCanvas: React.FC = () => {
       return;
     }
 
-    // Laser pointer — stop feeding points and start the fade clock from pen-up.
-    // Never addStroke/stampStroke.
+    // Laser pointer — stop feeding points; the group fade clock starts from this
+    // pen-up. Never addStroke/stampStroke.
     if (isDrawingRef.current && useCanvasStore.getState().brush === 'laser') {
       const seg = laserRef.current[laserRef.current.length - 1];
       if (seg && seg.end === undefined) seg.end = performance.now();
+      laserActiveRef.current = performance.now();
       isDrawingRef.current = false;
       dirtyRef.current = true;
       scheduleRender();

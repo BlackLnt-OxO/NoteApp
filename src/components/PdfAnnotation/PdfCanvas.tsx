@@ -56,9 +56,7 @@ const LASER_LIFETIME = 1800; // ms — how long a laser trail stays visible
 
 /** Draw a laser segment; it stays fully visible while writing (no `end` yet),
  *  then fades linearly from the pen-up time. */
-function drawLaser(ctx: CanvasRenderingContext2D, seg: LaserSegment, now: number): void {
-  const age = seg.end === undefined ? 0 : now - seg.end;
-  const alpha = age >= LASER_LIFETIME ? 0 : 1 - age / LASER_LIFETIME;
+function drawLaser(ctx: CanvasRenderingContext2D, seg: LaserSegment, alpha: number): void {
   if (alpha <= 0 || seg.points.length === 0) return;
 
   ctx.save();
@@ -250,6 +248,9 @@ const PdfCanvas: React.FC = () => {
   const panAnchorRef = useRef<{ sx: number; sy: number; camX: number; camY: number } | null>(null);
   const spaceDownRef = useRef(false);
   const laserRef = useRef<LaserSegment[]>([]);
+  /** Timestamp of the most recent laser pen-down / move / pen-up — all trails
+   *  stay lit while writing, then fade together from this instant. */
+  const laserActiveRef = useRef(0);
   const laserRafRef = useRef(0);
 
   const selectAnchorRef = useRef<{ x: number; y: number } | null>(null);
@@ -366,9 +367,18 @@ const PdfCanvas: React.FC = () => {
         drawAnnotatedStroke(ctx, currentStrokeRef.current);
       }
 
-      // Transient laser-pointer strokes (drawn on top of everything, fading out).
+      // Transient laser-pointer strokes. While writing, all trails stay lit
+      // (a new stroke re-lights earlier ones); when idle they fade together from
+      // the last pen activity.
       const now = performance.now();
-      for (const seg of laserRef.current) drawLaser(ctx, seg, now);
+      const holding = laserRef.current.some((s) => s.end === undefined);
+      if (holding) {
+        for (const seg of laserRef.current) drawLaser(ctx, seg, 1);
+      } else {
+        const gAge = now - laserActiveRef.current;
+        const gAlpha = gAge >= LASER_LIFETIME ? 0 : 1 - gAge / LASER_LIFETIME;
+        for (const seg of laserRef.current) drawLaser(ctx, seg, gAlpha);
+      }
       ctx.restore();
     }
 
@@ -387,8 +397,9 @@ const PdfCanvas: React.FC = () => {
   const tickLaser = useCallback(() => {
     laserRafRef.current = 0;
     const now = performance.now();
-    // Keep in-progress segments (no `end`) alive; drop finished ones past expiry.
-    laserRef.current = laserRef.current.filter((s) => s.end === undefined || now - s.end < LASER_LIFETIME);
+    // While writing, keep ALL trails lit; once idle, clear the group after fade.
+    const holding = laserRef.current.some((s) => s.end === undefined);
+    if (!holding && now - laserActiveRef.current >= LASER_LIFETIME) laserRef.current = [];
     if (laserRef.current.length) {
       dirtyRef.current = true;
       doRender();
@@ -650,6 +661,7 @@ const PdfCanvas: React.FC = () => {
       };
       addRawPoint(seg as any, world.x, world.y, getPressure(e), e.timeStamp);
       laserRef.current.push(seg);
+      laserActiveRef.current = performance.now();
       startLaser();
       dirtyRef.current = true;
       scheduleRender();
@@ -736,6 +748,7 @@ const PdfCanvas: React.FC = () => {
           addRawPoint(seg as any, w.x, w.y, getPressure(ce), ce.timeStamp);
         }
       }
+      laserActiveRef.current = performance.now();
       startLaser();
       dirtyRef.current = true;
       scheduleRender();
@@ -821,11 +834,12 @@ const PdfCanvas: React.FC = () => {
       return;
     }
 
-    // Laser pointer — stop feeding points and start the fade clock from pen-up.
+    // Laser pointer — stop feeding points; group fade starts from this pen-up.
     // Never commitStroke/stampStroke.
     if (isDrawingRef.current && usePdfStore.getState().brushType === 'laser') {
       const seg = laserRef.current[laserRef.current.length - 1];
       if (seg && seg.end === undefined) seg.end = performance.now();
+      laserActiveRef.current = performance.now();
       isDrawingRef.current = false;
       dirtyRef.current = true;
       scheduleRender();

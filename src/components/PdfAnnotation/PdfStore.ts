@@ -37,6 +37,7 @@ export const DEFAULT_PDF_BRUSH: PdfBrush = {
   smoothing: 0.35,
   inkSpeed: 0.5,
   pressureOpacity: true,
+  quickSizes: [8, 20, 40],
 };
 
 export interface PdfStore {

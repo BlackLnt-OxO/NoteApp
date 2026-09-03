@@ -11,6 +11,7 @@ export const DEFAULT_BRUSH: BrushSettings = {
   smoothing: 0.35,
   inkSpeed: 0.5,
   pressureOpacity: true,
+  quickSizes: [8, 20, 40],
 };
 
 export const MIN_ZOOM = 0.1;

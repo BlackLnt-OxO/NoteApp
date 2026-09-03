@@ -25,6 +25,8 @@ export interface BrushSettings {
   inkSpeed: number;
   /** Marker only: enable pressure-driven opacity (0 → light ink, 1 → full). */
   pressureOpacity: boolean;
+  /** Three quick-size presets (default 8 / 20 / 40). */
+  quickSizes: number[];
 }
 
 // ---- Stroke ------------------------------------------------------------------

@@ -6,7 +6,7 @@
  * inside the shared ToolbarShell (dock / drag / resize / collapse).
  */
 
-import React, { useState } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useNoteStore } from "../../store";
 import { fs } from "../../utils";
 import { usePdfStore } from './PdfStore';
@@ -170,6 +170,66 @@ const labelStyle = (gfs: number): React.CSSProperties => ({ fontSize: fs(10, gfs
 const sectionStyle: React.CSSProperties = { marginBottom: '10px' };
 const trackStyle: React.CSSProperties = { width: '100%', height: '4px', WebkitAppearance: 'none', appearance: 'none' as any, background: 'var(--glass-bg-light)', borderRadius: '2px', outline: 'none', cursor: 'pointer', margin: '2px 0 6px 0' };
 
+// ---- Quick-size preset button ------------------------------------------------
+function QuickSizeButton({
+  idx, value, onSelect, onChange, open, setOpen, isLight,
+}: {
+  idx: number; value: number; onSelect: (v: number) => void; onChange: (i: number, v: number) => void;
+  open: boolean; setOpen: (i: number) => void; isLight: boolean;
+}) {
+  const gfs = useNoteStore((s) => s.settings.fontSize);
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const longRef = useRef(false);
+  const downRef = useRef<{ x: number; y: number } | null>(null);
+
+  const clearTimer = () => { if (timerRef.current) { clearTimeout(timerRef.current); timerRef.current = null; } };
+  const onDown = (e: React.PointerEvent) => {
+    longRef.current = false;
+    downRef.current = { x: e.clientX, y: e.clientY };
+    clearTimer();
+    timerRef.current = setTimeout(() => { longRef.current = true; setOpen(idx); }, 500);
+  };
+  const onMove = (e: React.PointerEvent) => {
+    if (downRef.current && timerRef.current && Math.hypot(e.clientX - downRef.current.x, e.clientY - downRef.current.y) > 6) {
+      clearTimer();
+      downRef.current = null;
+    }
+  };
+  const onUp = () => {
+    clearTimer();
+    if (!longRef.current && downRef.current) onSelect(value);
+    longRef.current = false;
+    downRef.current = null;
+  };
+
+  const dot = Math.min(32, Math.max(6, value));
+  const dotColor = isLight ? '#000' : '#fff';
+
+  return (
+    <div className="quick-size" style={{ position: 'relative', flex: '1 1 auto', minWidth: 32, display: 'flex' }}>
+      <button
+        onPointerDown={onDown} onPointerMove={onMove} onPointerUp={onUp}
+        onPointerLeave={() => { clearTimer(); downRef.current = null; }}
+        className="hover-ring-light"
+        title={`设为 ${value}px 粗细（长按调整）`}
+        style={{ flex: 1, padding: '7px 4px', background: 'var(--glass-bg-light)',
+          border: '1px solid var(--glass-border)', borderRadius: '6px', cursor: 'pointer',
+          display: 'flex', alignItems: 'center', justifyContent: 'center', color: dotColor }}>
+        <span style={{ width: dot, height: dot, borderRadius: '50%', background: dotColor, boxShadow: '0 0 0 1px var(--glass-border)' }} />
+      </button>
+      {open && (
+        <div style={{ position: 'absolute', top: 'calc(100% + 4px)', left: 0, zIndex: 200,
+          background: 'var(--dropdown-bg, rgba(30,30,50,0.98))', border: '1px solid var(--glass-border)',
+          borderRadius: '8px', padding: '6px 8px', boxShadow: 'var(--glass-shadow)',
+          display: 'flex', flexDirection: 'column', gap: '2px', width: '120px' }}>
+          <div style={{ fontSize: fs(9, gfs), color: 'var(--text-secondary)' }}>粗细 {value}px</div>
+          <input type="range" min={1} max={100} value={value} onChange={(e) => onChange(idx, Number(e.target.value))} style={trackStyle} />
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ---- Component ---------------------------------------------------------------
 
 const PdfToolbar: React.FC = () => {
@@ -182,6 +242,20 @@ const PdfToolbar: React.FC = () => {
   const canUndo = (history[currentPage]?.length ?? 0) > 0;
   const canRedo = (redoStack[currentPage]?.length ?? 0) > 0;
   const update = (p: Partial<typeof brush>) => setBrush(p);
+
+  const theme = useNoteStore((s) => s.settings.theme);
+  const isLight = theme === 'light';
+  const quick = brush.quickSizes ?? [8, 20, 40];
+  const [openQuickIdx, setOpenQuickIdx] = useState<number | null>(null);
+  useEffect(() => {
+    if (openQuickIdx === null) return;
+    const h = (e: PointerEvent) => {
+      if (!(e.target as HTMLElement)?.closest?.('.quick-size')) setOpenQuickIdx(null);
+    };
+    document.addEventListener('pointerdown', h);
+    return () => document.removeEventListener('pointerdown', h);
+  }, [openQuickIdx]);
+  const setQuickSize = (i: number, v: number) => update({ quickSizes: quick.map((x, xi) => (xi === i ? v : x)) });
 
   return (
     <div style={{ padding: '10px 14px 12px', color: 'var(--text-primary)' }}>
@@ -233,6 +307,20 @@ const PdfToolbar: React.FC = () => {
         <input type="color" value={brush.color.startsWith('#') ? brush.color : '#ffffff'}
           onChange={(e) => update({ color: e.target.value })}
           style={{ width: '100%', height: '22px', border: 'none', borderRadius: '4px', cursor: 'pointer', background: 'transparent', padding: 0 }} />
+      </div>
+
+      {/* ---- Quick sizes (tap = apply, long-press = adjust preset) ---- */}
+      <div style={{ display: 'flex', gap: '4px', ...sectionStyle }}>
+        {quick.map((v, i) => (
+          <QuickSizeButton
+            key={i} idx={i} value={v}
+            onSelect={(val) => update({ size: val })}
+            onChange={setQuickSize}
+            open={openQuickIdx === i}
+            setOpen={(i2) => setOpenQuickIdx(i2)}
+            isLight={isLight}
+          />
+        ))}
       </div>
 
       {/* ---- Brush Size ---- */}
