@@ -1,15 +1,19 @@
 /**
  * PdfStore — Zustand store for the PDF annotation view.
  *
- * - Strokes are stored per page (`strokes[pageNumber]`), only the active page
- *   is ever touched by the canvas.
- * - History uses REFERENCE sharing (never `structuredClone`): strokes are
+ * - Page content is stored per page (`items[pageNumber]`) and can be either ink
+ *   strokes (PdfStroke, rasterized into tiles) or insert objects (text cards /
+ *   images, rendered as DOM overlays). Only the active page is ever touched.
+ * - History uses REFERENCE sharing (never `structuredClone`): items are
  *   immutable, so an undo snapshot is just the previous array reference — the
- *   memory cost is effectively zero no matter how many pages / strokes exist.
+ *   memory cost is effectively zero no matter how many pages / items exist.
  * - `renderEpoch` is bumped ONLY by structural ops (undo / redo / delete /
- *   move / clear) so the canvas knows when to rebuild its inkLayer from the
- *   vector source of truth. `commitStroke` is additive — the canvas already
- *   rasterized the stroke incrementally, so it must NOT trigger a rebuild.
+ *   clear / commitStrokesPoints / moveStrokes) so the canvas knows when to
+ *   rebuild its inkLayer from the vector source of truth. Additive stroke
+ *   commits and text/image object edits do NOT bump it — the canvas already
+ *   rasterized strokes incrementally, and objects are DOM-only.
+ * - PDF default color is FIXED (PDF_ANNOTATION_BLUE) and never theme-flipped;
+ *   only the canvas default brush follows the theme.
  */
 
 import { create } from 'zustand';
@@ -17,14 +21,19 @@ import type {
   PdfBrush,
   PdfCamera,
   PdfEraserMode,
+  PdfImageObject,
+  PdfInsertMode,
+  PdfItem,
   PdfPageSize,
   PdfPoint,
   PdfSelectionMode,
   PdfStroke,
+  PdfTextObject,
   PdfTool,
   PdfBrushType,
 } from './PdfTypes';
 import { loadPdfDocument, type PdfJsDocument } from './PdfLoader';
+import { PDF_ANNOTATION_BLUE } from '../../themeColors';
 
 const MAX_HISTORY = 50;
 /** Hard cap on how many pages can be anchored at once. */
@@ -33,13 +42,28 @@ export const MAX_ANCHOR_PAGES = 7;
 export const DEFAULT_PDF_BRUSH: PdfBrush = {
   size: 8,
   opacity: 1,
-  color: 'rgba(255,255,255,0.95)',
+  /** Fixed PDF default ink — does NOT follow the app theme. */
+  color: PDF_ANNOTATION_BLUE,
   smoothing: 0.05,
   inkSpeed: 0.5,
   pressureOpacity: false,
   edgeFeather: true,
   quickSizes: [8, 20, 40],
 };
+
+/** Defaults for a newly inserted PDF text card. bg is fixed light (a PDF page is
+ *  always light) so blue text stays readable even in a dark app theme. */
+export const PDF_TEXT_DEFAULTS = {
+  fontSize: 16,
+  minWidth: 100,
+  minHeight: 40,
+  color: PDF_ANNOTATION_BLUE,
+  backgroundColor: 'rgba(255,255,255,0.9)',
+};
+
+function makePdfId(prefix: string): string {
+  return `${prefix}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+}
 
 export interface PdfStore {
   // PDF document
@@ -59,15 +83,15 @@ export interface PdfStore {
   /** Human-readable import error, shown on the import screen. */
   error: string | null;
 
-  // Vector source of truth, per page
-  strokes: Record<number, PdfStroke[]>;
+  // Vector source of truth, per page: strokes + inserted objects
+  items: Record<number, PdfItem[]>;
 
   /** True when there are unsaved annotation changes (since last save/load). */
   dirty: boolean;
 
   // Reference-sharing undo stacks, per page
-  history: Record<number, PdfStroke[][]>;
-  redoStack: Record<number, PdfStroke[][]>;
+  history: Record<number, PdfItem[][]>;
+  redoStack: Record<number, PdfItem[][]>;
 
   // Bumped on structural changes → canvas rebuilds inkLayer
   renderEpoch: number;
@@ -82,6 +106,13 @@ export interface PdfStore {
   selectedIds: string[];
   /** Dot-grid overlay behind the annotations (independent of the canvas, default off). */
   showDotGrid: boolean;
+
+  // Insert tool
+  insertMode: PdfInsertMode;
+  /** Id of the text card currently open in its editor (null = none). */
+  editingTextId: string | null;
+  /** One-shot raster dropped from an external screenshot, centered on viewport. */
+  pendingImageInsert: { dataUrl: string; width: number; height: number } | null;
 
   // Camera (per current page)
   camera: PdfCamera;
@@ -128,6 +159,34 @@ export interface PdfStore {
   clearSelection: () => void;
   toggleSelected: (id: string) => void;
   setShowDotGrid: (show: boolean) => void;
+
+  // Insert-object actions (page-scoped; text/image are DOM-only, no epoch bump)
+  setInsertMode: (m: PdfInsertMode) => void;
+  setEditingTextId: (id: string | null) => void;
+  /** Place an empty text card at (x,y); opens it in its editor immediately. */
+  addTextNode: (page: number, x: number, y: number) => string;
+  /** Merge content/geometry into a text card. Caller pushes history first. */
+  updateTextNode: (page: number, id: string, data: Partial<PdfTextObject>) => void;
+  moveTextNode: (page: number, id: string, x: number, y: number) => void;
+  deleteTextNode: (page: number, id: string) => void;
+  /** Stage a raster (external screenshot) to be dropped at the viewport center. */
+  queueImageInsert: (dataUrl: string, width: number, height: number) => void;
+  /** Append an image object. `recordHistory` false when batching after one push. */
+  addImageObject: (
+    page: number,
+    data: { dataUrl: string; x: number; y: number; width: number; height: number },
+    recordHistory?: boolean,
+  ) => void;
+  updateImageObject: (
+    page: number,
+    id: string,
+    patch: Partial<Pick<PdfImageObject, 'x' | 'y' | 'width' | 'height'>>,
+  ) => void;
+  /** Remove any item (stroke or object) by id. Bumps epoch (may be a stroke). */
+  deleteObject: (page: number, id: string) => void;
+  /** Live group-drag of text/image objects (no history, no epoch). */
+  moveObjectsLive: (page: number, ids: string[], dx: number, dy: number) => void;
+
   /** Batch-replace stroke points (drag-move drop). Structural → rebuilds inkLayer. */
   commitStrokesPoints: (page: number, entries: { id: string; points: PdfPoint[] }[]) => void;
 
@@ -155,17 +214,17 @@ export interface PdfStore {
 // ---- Helpers -----------------------------------------------------------------
 
 function pushHistoryEntry(
-  history: Record<number, PdfStroke[][]>,
+  history: Record<number, PdfItem[][]>,
   page: number,
-  cur: PdfStroke[],
-): Record<number, PdfStroke[][]> {
+  cur: PdfItem[],
+): Record<number, PdfItem[][]> {
   const pageHist = history[page] ?? [];
   pageHist.push(cur);
   if (pageHist.length > MAX_HISTORY) pageHist.shift();
   return { ...history, [page]: pageHist };
 }
 
-function emptyHistoryRecord(): Record<number, PdfStroke[][]> {
+function emptyHistoryRecord(): Record<number, PdfItem[][]> {
   return {};
 }
 
@@ -183,7 +242,7 @@ export const usePdfStore = create<PdfStore>((set, get) => ({
   loadingPhase: null,
   error: null,
 
-  strokes: {},
+  items: {},
   dirty: false,
   history: {},
   redoStack: {},
@@ -197,6 +256,10 @@ export const usePdfStore = create<PdfStore>((set, get) => ({
   selectionMode: 'box',
   selectedIds: [],
   showDotGrid: false,
+
+  insertMode: 'text',
+  editingTextId: null,
+  pendingImageInsert: null,
 
   camera: { x: 0, y: 0, zoom: 1 },
 
@@ -221,12 +284,13 @@ export const usePdfStore = create<PdfStore>((set, get) => ({
         pageSizes: { 1: firstPage },
         currentItemId: resume?.itemId ?? null,
         pendingResumeCamera: resume?.camera ?? null,
-        strokes: {},
+        items: {},
         dirty: false,
         history: emptyHistoryRecord(),
         redoStack: emptyHistoryRecord(),
         renderEpoch: 0,
         selectedIds: [],
+        editingTextId: null,
         showDotGrid: resume?.showDotGrid ?? false,
         // The thumbnail rail ALWAYS opens when a PDF opens (user preference) —
         // it is not restored from the remembered sidebar state.
@@ -254,12 +318,13 @@ export const usePdfStore = create<PdfStore>((set, get) => ({
       pageSizes: {},
       currentItemId: null,
       pendingResumeCamera: null,
-      strokes: {},
+      items: {},
       dirty: false,
       history: emptyHistoryRecord(),
       redoStack: emptyHistoryRecord(),
       renderEpoch: 0,
       selectedIds: [],
+      editingTextId: null,
       camera: { x: 0, y: 0, zoom: 1 },
       anchorPages: [],
       sidebarScrollTarget: null,
@@ -278,7 +343,7 @@ export const usePdfStore = create<PdfStore>((set, get) => ({
     // NOTE: the camera is intentionally left untouched here — PdfCanvas resets
     // it (fit/resume) once the new page's background is ready. Zeroing it now
     // would let a mid-render frame paint old bg + a default camera → visible flash.
-    set((s) => ({ currentPage: clamped, selectedIds: [] }));
+    set((s) => ({ currentPage: clamped, selectedIds: [], editingTextId: null }));
   },
 
   nextPage: () => {
@@ -337,13 +402,140 @@ export const usePdfStore = create<PdfStore>((set, get) => ({
 
   setShowDotGrid: (show) => set({ showDotGrid: show }),
 
+  // --- insert objects ------------------------------------------------------
+
+  setInsertMode: (m) => set({ insertMode: m }),
+
+  setEditingTextId: (id) => set({ editingTextId: id }),
+
+  addTextNode: (page, x, y) => {
+    const id = makePdfId('text');
+    const node: PdfTextObject = {
+      id,
+      type: 'text',
+      x,
+      y,
+      width: PDF_TEXT_DEFAULTS.minWidth,
+      height: PDF_TEXT_DEFAULTS.minHeight,
+      content: '',
+      fontSize: PDF_TEXT_DEFAULTS.fontSize,
+      color: PDF_TEXT_DEFAULTS.color,
+      backgroundColor: PDF_TEXT_DEFAULTS.backgroundColor,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    };
+    const cur = get().items[page] ?? [];
+    set((s) => ({
+      items: { ...s.items, [page]: [...cur, node] },
+      history: pushHistoryEntry(s.history, page, cur),
+      redoStack: { ...s.redoStack, [page]: [] },
+      editingTextId: id,
+      dirty: true,
+    }));
+    return id;
+  },
+
+  updateTextNode: (page, id, data) => {
+    set((s) => ({
+      items: {
+        ...s.items,
+        [page]: (s.items[page] ?? []).map((o) =>
+          o.type === 'text' && o.id === id
+            ? { ...o, ...data, updatedAt: Date.now() } as PdfTextObject
+            : o,
+        ),
+      },
+      dirty: true,
+    }));
+  },
+
+  moveTextNode: (page, id, x, y) => get().updateTextNode(page, id, { x, y }),
+
+  deleteTextNode: (page, id) => {
+    const cur = get().items[page] ?? [];
+    set((s) => ({
+      items: { ...s.items, [page]: cur.filter((o) => !(o.type === 'text' && o.id === id)) },
+      history: pushHistoryEntry(s.history, page, cur),
+      redoStack: { ...s.redoStack, [page]: [] },
+      editingTextId: s.editingTextId === id ? null : s.editingTextId,
+      dirty: true,
+    }));
+  },
+
+  queueImageInsert: (dataUrl, width, height) =>
+    set({ pendingImageInsert: { dataUrl, width, height } }),
+
+  addImageObject: (page, data, recordHistory = true) => {
+    const obj: PdfImageObject = {
+      id: makePdfId('img'),
+      type: 'image',
+      x: data.x,
+      y: data.y,
+      width: data.width,
+      height: data.height,
+      dataUrl: data.dataUrl,
+      createdAt: Date.now(),
+    };
+    if (recordHistory) get().pushHistory(page);
+    set((s) => ({
+      items: { ...s.items, [page]: [...(s.items[page] ?? []), obj] },
+      pendingImageInsert: null,
+      dirty: true,
+    }));
+  },
+
+  updateImageObject: (page, id, patch) => {
+    set((s) => ({
+      items: {
+        ...s.items,
+        [page]: (s.items[page] ?? []).map((o) =>
+          o.type === 'image' && o.id === id ? { ...o, ...patch } as PdfImageObject : o,
+        ),
+      },
+      dirty: true,
+    }));
+  },
+
+  deleteObject: (page, id) => {
+    const cur = get().items[page] ?? [];
+    const next = cur.filter((o) => o.id !== id);
+    if (next.length === cur.length) return;
+    set((s) => ({
+      items: { ...s.items, [page]: next },
+      history: pushHistoryEntry(s.history, page, cur),
+      redoStack: { ...s.redoStack, [page]: [] },
+      selectedIds: s.selectedIds.filter((x) => x !== id),
+      editingTextId: s.editingTextId === id ? null : s.editingTextId,
+      renderEpoch: get().renderEpoch + 1,
+      dirty: true,
+    }));
+  },
+
+  moveObjectsLive: (page, ids, dx, dy) => {
+    if (dx === 0 && dy === 0) return;
+    const setIds = new Set(ids);
+    if (setIds.size === 0) return;
+    set((s) => ({
+      items: {
+        ...s.items,
+        [page]: (s.items[page] ?? []).map((o) => {
+          if (!setIds.has(o.id)) return o;
+          if (o.type === 'text') return { ...o, x: o.x + dx, y: o.y + dy, updatedAt: Date.now() } as PdfTextObject;
+          if (o.type === 'image') return { ...o, x: o.x + dx, y: o.y + dy } as PdfImageObject;
+          return o;
+        }),
+      },
+      dirty: true,
+    }));
+  },
+
   commitStrokesPoints: (page, entries) => {
     if (entries.length === 0) return;
     const map = new Map(entries.map((e) => [e.id, e.points]));
-    const cur = get().strokes[page] ?? [];
-    const next = cur.map((o) => (map.has(o.id) ? { ...o, points: map.get(o.id)! } : o));
+    const cur = get().items[page] ?? [];
+    const next = cur.map((o) => (o.type === 'stroke' && map.has(o.id) ? { ...o, points: map.get(o.id)! } as PdfStroke : o));
     set((s) => ({
-      strokes: { ...s.strokes, [page]: next },
+      items: { ...s.items, [page]: next },
       redoStack: { ...s.redoStack, [page]: [] },
       renderEpoch: get().renderEpoch + 1,
       dirty: true,
@@ -353,9 +545,9 @@ export const usePdfStore = create<PdfStore>((set, get) => ({
   // --- editing -------------------------------------------------------------
 
   commitStroke: (page, stroke) => {
-    const cur = get().strokes[page] ?? [];
+    const cur = get().items[page] ?? [];
     set((s) => ({
-      strokes: { ...s.strokes, [page]: [...cur, stroke] },
+      items: { ...s.items, [page]: [...cur, stroke] },
       history: pushHistoryEntry(s.history, page, cur),
       redoStack: { ...s.redoStack, [page]: [] },
       dirty: true,
@@ -363,11 +555,11 @@ export const usePdfStore = create<PdfStore>((set, get) => ({
   },
 
   removeStroke: (page, id) => {
-    const cur = get().strokes[page] ?? [];
-    const next = cur.filter((s) => s.id !== id);
+    const cur = get().items[page] ?? [];
+    const next = cur.filter((o) => !(o.type === 'stroke' && o.id === id));
     if (next.length === cur.length) return;
     set((s) => ({
-      strokes: { ...s.strokes, [page]: next },
+      items: { ...s.items, [page]: next },
       history: pushHistoryEntry(s.history, page, cur),
       redoStack: { ...s.redoStack, [page]: [] },
       selectedIds: s.selectedIds.filter((x) => x !== id),
@@ -378,7 +570,7 @@ export const usePdfStore = create<PdfStore>((set, get) => ({
 
   pushHistory: (page) =>
     set((s) => ({
-      history: pushHistoryEntry(s.history, page, s.strokes[page] ?? []),
+      history: pushHistoryEntry(s.history, page, s.items[page] ?? []),
       redoStack: { ...s.redoStack, [page]: [] },
     })),
 
@@ -386,14 +578,14 @@ export const usePdfStore = create<PdfStore>((set, get) => ({
     if (dx === 0 && dy === 0) return;
     const setIds = new Set(ids);
     if (setIds.size === 0) return;
-    const cur = get().strokes[page] ?? [];
-    const next = cur.map((s) =>
-      setIds.has(s.id)
-        ? { ...s, points: s.points.map((p) => ({ ...p, x: p.x + dx, y: p.y + dy })) }
-        : s,
+    const cur = get().items[page] ?? [];
+    const next = cur.map((o) =>
+      o.type === 'stroke' && setIds.has(o.id)
+        ? { ...o, points: o.points.map((p) => ({ ...p, x: p.x + dx, y: p.y + dy })) } as PdfStroke
+        : o,
     );
     set((s) => ({
-      strokes: { ...s.strokes, [page]: next },
+      items: { ...s.items, [page]: next },
       renderEpoch: get().renderEpoch + 1,
       dirty: true,
     }));
@@ -403,13 +595,14 @@ export const usePdfStore = create<PdfStore>((set, get) => ({
     const page = get().currentPage;
     const hist = get().history[page] ?? [];
     if (hist.length === 0) return;
-    const cur = get().strokes[page] ?? [];
+    const cur = get().items[page] ?? [];
     const prev = hist[hist.length - 1];
     set((s) => ({
       history: { ...s.history, [page]: hist.slice(0, -1) },
       redoStack: { ...s.redoStack, [page]: [...(s.redoStack[page] ?? []), cur] },
-      strokes: { ...s.strokes, [page]: prev },
+      items: { ...s.items, [page]: prev },
       selectedIds: [],
+      editingTextId: null,
       renderEpoch: get().renderEpoch + 1,
       dirty: true,
     }));
@@ -419,13 +612,14 @@ export const usePdfStore = create<PdfStore>((set, get) => ({
     const page = get().currentPage;
     const rs = get().redoStack[page] ?? [];
     if (rs.length === 0) return;
-    const cur = get().strokes[page] ?? [];
+    const cur = get().items[page] ?? [];
     const next = rs[rs.length - 1];
     set((s) => ({
       redoStack: { ...s.redoStack, [page]: rs.slice(0, -1) },
       history: pushHistoryEntry(s.history, page, cur),
-      strokes: { ...s.strokes, [page]: next },
+      items: { ...s.items, [page]: next },
       selectedIds: [],
+      editingTextId: null,
       renderEpoch: get().renderEpoch + 1,
       dirty: true,
     }));
@@ -435,14 +629,15 @@ export const usePdfStore = create<PdfStore>((set, get) => ({
     const page = get().currentPage;
     const ids = new Set(get().selectedIds);
     if (ids.size === 0) return;
-    const cur = get().strokes[page] ?? [];
-    const next = cur.filter((s) => !ids.has(s.id));
+    const cur = get().items[page] ?? [];
+    const next = cur.filter((o) => !ids.has(o.id));
     if (next.length === cur.length) return;
     set((s) => ({
-      strokes: { ...s.strokes, [page]: next },
+      items: { ...s.items, [page]: next },
       history: pushHistoryEntry(s.history, page, cur),
       redoStack: { ...s.redoStack, [page]: [] },
       selectedIds: [],
+      editingTextId: null,
       renderEpoch: get().renderEpoch + 1,
       dirty: true,
     }));
@@ -452,14 +647,14 @@ export const usePdfStore = create<PdfStore>((set, get) => ({
     if (dx === 0 && dy === 0) return;
     const setIds = new Set(ids);
     if (setIds.size === 0) return;
-    const cur = get().strokes[page] ?? [];
-    const next = cur.map((s) =>
-      setIds.has(s.id)
-        ? { ...s, points: s.points.map((p) => ({ ...p, x: p.x + dx, y: p.y + dy })) }
-        : s,
+    const cur = get().items[page] ?? [];
+    const next = cur.map((o) =>
+      o.type === 'stroke' && setIds.has(o.id)
+        ? { ...o, points: o.points.map((p) => ({ ...p, x: p.x + dx, y: p.y + dy })) } as PdfStroke
+        : o,
     );
     set((s) => ({
-      strokes: { ...s.strokes, [page]: next },
+      items: { ...s.items, [page]: next },
       history: pushHistoryEntry(s.history, page, cur),
       redoStack: { ...s.redoStack, [page]: [] },
       renderEpoch: get().renderEpoch + 1,
@@ -469,22 +664,23 @@ export const usePdfStore = create<PdfStore>((set, get) => ({
 
   clearPage: () => {
     const page = get().currentPage;
-    const cur = get().strokes[page] ?? [];
+    const cur = get().items[page] ?? [];
     if (cur.length === 0) return;
     set((s) => ({
-      strokes: { ...s.strokes, [page]: [] },
+      items: { ...s.items, [page]: [] },
       history: pushHistoryEntry(s.history, page, cur),
       redoStack: { ...s.redoStack, [page]: [] },
       selectedIds: [],
+      editingTextId: null,
       renderEpoch: get().renderEpoch + 1,
       dirty: true,
     }));
   },
 
   saveAnnotations: async () => {
-    const { currentItemId, strokes } = get();
+    const { currentItemId, items } = get();
     if (!currentItemId) return { ok: false };
-    const data = { strokes, savedAt: Date.now() };
+    const data = { items, savedAt: Date.now() };
     try {
       if (window.electronAPI?.savePdfAnnotation) {
         await window.electronAPI.savePdfAnnotation(currentItemId, data);
@@ -512,12 +708,19 @@ export const usePdfStore = create<PdfStore>((set, get) => ({
       console.error('Load annotations failed:', e);
       data = null;
     }
-    if (data?.strokes) {
-      const strokes: Record<number, PdfStroke[]> = {};
-      for (const [k, v] of Object.entries(data.strokes)) {
-        strokes[Number(k)] = v as PdfStroke[];
+    if (data?.items) {
+      const items: Record<number, PdfItem[]> = {};
+      for (const [k, v] of Object.entries(data.items)) {
+        items[Number(k)] = v as PdfItem[];
       }
-      set({ strokes, dirty: false, renderEpoch: get().renderEpoch + 1 });
+      set({ items, dirty: false, renderEpoch: get().renderEpoch + 1 });
+    } else if (data?.strokes) {
+      // Legacy schema (strokes only, pre-"insert") — wrap each page into PdfItem[].
+      const items: Record<number, PdfItem[]> = {};
+      for (const [k, v] of Object.entries(data.strokes)) {
+        items[Number(k)] = v as PdfItem[];
+      }
+      set({ items, dirty: false, renderEpoch: get().renderEpoch + 1 });
     }
   },
 
@@ -530,7 +733,7 @@ export const usePdfStore = create<PdfStore>((set, get) => ({
       pageSizes: {},
       currentItemId: null,
       pendingResumeCamera: null,
-      strokes: {},
+      items: {},
       dirty: false,
       history: {},
       redoStack: {},
@@ -542,6 +745,9 @@ export const usePdfStore = create<PdfStore>((set, get) => ({
       selectionMode: 'box',
       selectedIds: [],
       showDotGrid: false,
+      insertMode: 'text',
+      editingTextId: null,
+      pendingImageInsert: null,
       camera: { x: 0, y: 0, zoom: 1 },
       sidebarOpen: true,
       railScrollTop: 0,

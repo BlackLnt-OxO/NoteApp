@@ -23,6 +23,14 @@ export function isDefaultBrushColor(color: string): boolean {
   return color === DEFAULT_BRUSH_DARK || color === DEFAULT_BRUSH_LIGHT;
 }
 
+/**
+ * PDF annotation default ink + text-card color. FIXED regardless of app theme
+ * (blue-600: clearly visible on a white PDF page, but not deep). Change here to
+ * retint PDF annotations; the canvas default color still follows the theme.
+ * Also inserted as a shared palette swatch (see Toolbar / PdfToolbar).
+ */
+export const PDF_ANNOTATION_BLUE = '#2563eb';
+
 export function themeCanvasColors(theme: ThemeName): {
   background: string;
   dotColor: string;

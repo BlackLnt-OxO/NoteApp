@@ -44,7 +44,15 @@ import {
   drawInkRibbonSlice,
 } from './PdfBrushRenderers';
 import { renderPageToCanvas, getPageSize, cleanupPage } from './PdfLoader';
-import type { PdfPoint, PdfStroke } from './PdfTypes';
+import type { PdfItem, PdfPoint, PdfStroke, PdfTextObject as PdfTextObjectData } from './PdfTypes';
+import PdfTextNode from './PdfTextNode';
+import PdfTextObject from './PdfTextObject';
+import PdfImageObject from './PdfImageObject';
+
+/** Subset of page items that are ink strokes (the rest are DOM-only objects). */
+function strokesOnly(items: PdfItem[]): PdfStroke[] {
+  return items.filter((o): o is PdfStroke => o.type === 'stroke');
+}
 
 /** Transient laser-pointer stroke segment (never committed / persisted). */
 interface LaserSegment {
@@ -280,6 +288,10 @@ const PdfCanvas: React.FC = () => {
   const pageLoadTokenRef = useRef(0);
   const prevPageRef = useRef(0);
 
+  // Insert-tool state: where the user clicked (image mode) + hidden file picker.
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const insertWorldRef = useRef<{ x: number; y: number } | null>(null);
+
   // React-level subscriptions
   const pdfDoc = usePdfStore((s) => s.pdfDoc);
   const currentPage = usePdfStore((s) => s.currentPage);
@@ -289,6 +301,10 @@ const PdfCanvas: React.FC = () => {
   const brush = usePdfStore((s) => s.brush);
   const showDotGrid = usePdfStore((s) => s.showDotGrid);
   const camera = usePdfStore((s) => s.camera);
+  const currentItems = usePdfStore((s) => s.items[s.currentPage] ?? []);
+  const editingTextId = usePdfStore((s) => s.editingTextId);
+  const insertMode = usePdfStore((s) => s.insertMode);
+  const pendingImageInsert = usePdfStore((s) => s.pendingImageInsert);
   const isDraggingToolbar = usePdfToolbarStore((s) => s.isDragging);
   const theme = useNoteStore((s) => s.settings.theme);
   const uiScale = useNoteStore((s) => s.uiScale);
@@ -365,7 +381,7 @@ const PdfCanvas: React.FC = () => {
 
       drawVisibleTiles(ctx, inkTilesRef.current, cam, vw, vh, dpr);
 
-      const strokes = st.strokes[st.currentPage] ?? [];
+      const strokes = strokesOnly(st.items[st.currentPage] ?? []);
 
       // Live drag-move: selected strokes are excluded from tiles and drawn here
       // at their snapped positions (snapshot + delta), so they track the cursor.
@@ -444,7 +460,7 @@ const PdfCanvas: React.FC = () => {
 
   const rebuildInk = useCallback((excludeIds?: Set<string>) => {
     const st = usePdfStore.getState();
-    const strokes = st.strokes[st.currentPage] ?? [];
+    const strokes = strokesOnly(st.items[st.currentPage] ?? []);
     const tiles = new Map<string, HTMLCanvasElement>();
     for (const s of strokes) {
       if (excludeIds?.has(s.id)) continue;
@@ -639,10 +655,25 @@ const PdfCanvas: React.FC = () => {
 
     const world = screenToWorld(sx, sy, st.camera);
 
+    // Insert tool: text card placed at the click point (opens its editor) /
+    // image mode remembers the point and opens the file picker.
+    if (st.activeTool === 'insert') {
+      if (st.insertMode === 'image') {
+        insertWorldRef.current = world;
+        fileInputRef.current?.click();
+      } else {
+        // Commit any currently-open text editor before placing a new one.
+        const ae = document.activeElement;
+        if (ae && ae instanceof HTMLTextAreaElement) ae.blur();
+        st.addTextNode(st.currentPage, world.x, world.y);
+      }
+      return;
+    }
+
     // Selection tool
     if (st.activeTool === 'select') {
       canvas.setPointerCapture(e.pointerId);
-      const strokes = st.strokes[st.currentPage] ?? [];
+      const strokes = strokesOnly(st.items[st.currentPage] ?? []);
       const hit = [...strokes].reverse().find((o) => hitTestStroke(o, world.x, world.y));
 
       if (hit) {
@@ -674,7 +705,7 @@ const PdfCanvas: React.FC = () => {
 
     // Stroke eraser (click a stroke to delete it)
     if (st.activeTool === 'eraser' && st.eraserMode === 'stroke') {
-      const strokes = st.strokes[st.currentPage] ?? [];
+      const strokes = strokesOnly(st.items[st.currentPage] ?? []);
       const hit = [...strokes].reverse().find((o) => hitTestStroke(o, world.x, world.y));
       if (hit) st.removeStroke(st.currentPage, hit.id);
       return;
@@ -839,7 +870,7 @@ const PdfCanvas: React.FC = () => {
     if (selectAnchorRef.current && selectionRectRef.current) {
       const r = selectionRectRef.current;
       const st = usePdfStore.getState();
-      const strokes = st.strokes[st.currentPage] ?? [];
+      const strokes = strokesOnly(st.items[st.currentPage] ?? []);
       const ids = strokes
         .filter((o) => boundsIntersectRect(getStrokeBounds(o), r.x1, r.y1, r.x2, r.y2))
         .map((o) => o.id);
@@ -927,6 +958,78 @@ const PdfCanvas: React.FC = () => {
     scheduleRender();
   }, [getCanvasPos, scheduleRender]);
 
+  // ---- Insert: pick image files, downscale + place page-scaled at the click -----
+  const downscaleImage = useCallback(
+    (file: File) =>
+      new Promise<{ dataUrl: string; width: number; height: number }>((resolve) => {
+        const reader = new FileReader();
+        reader.onload = () => {
+          const img = new Image();
+          img.onload = () => {
+            const MAX = 1280;
+            let w = img.width;
+            let h = img.height;
+            if (w > MAX) { h = Math.round((h * MAX) / w); w = MAX; }
+            const c = document.createElement('canvas');
+            c.width = w;
+            c.height = h;
+            c.getContext('2d')!.drawImage(img, 0, 0, w, h);
+            resolve({ dataUrl: c.toDataURL('image/png'), width: w, height: h });
+          };
+          img.src = reader.result as string;
+        };
+        reader.readAsDataURL(file);
+      }),
+    [],
+  );
+
+  const onPickImages = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(e.target.files ?? []);
+    e.target.value = '';
+    if (files.length === 0) return;
+    const page = usePdfStore.getState().currentPage;
+    const target = insertWorldRef.current;
+    insertWorldRef.current = null;
+    const rasters: { dataUrl: string; width: number; height: number }[] = [];
+    for (const f of files) rasters.push(await downscaleImage(f));
+    if (rasters.length === 0) return;
+    const st = usePdfStore.getState();
+    const size = st.pageSizes[page];
+    const pageW = size ? size.width : 595;
+    st.pushHistory(page);
+    rasters.forEach((r, i) => {
+      const worldW = Math.min(r.width, pageW * 0.7);
+      const worldH = (worldW * r.height) / r.width;
+      const cx = target ? target.x + i * 48 : pageW / 2;
+      const cy = target ? target.y + i * 48 : 0;
+      st.addImageObject(page, { dataUrl: r.dataUrl, x: cx - worldW / 2, y: cy - worldH / 2, width: worldW, height: worldH }, false);
+    });
+    // After a multi-image import return to the pen tool (matches the canvas).
+    st.setActiveTool('pen');
+  }, [downscaleImage]);
+
+  // External screenshot queued (queueImageInsert) → drop it centered on the viewport.
+  useEffect(() => {
+    if (!pendingImageInsert) return;
+    const page = usePdfStore.getState().currentPage;
+    const size = usePdfStore.getState().pageSizes[page];
+    const pageW = size ? size.width : 595;
+    const worldW = Math.min(pendingImageInsert.width, pageW * 0.7);
+    const worldH = (worldW * pendingImageInsert.height) / pendingImageInsert.width;
+    const cam = usePdfStore.getState().camera;
+    const container = containerRef.current;
+    const vw = container ? container.clientWidth * uiScale : 800;
+    const vh = container ? container.clientHeight * uiScale : 600;
+    const center = screenToWorld(vw / 2, vh / 2, cam);
+    usePdfStore.getState().addImageObject(page, {
+      dataUrl: pendingImageInsert.dataUrl,
+      x: center.x - worldW / 2,
+      y: center.y - worldH / 2,
+      width: worldW,
+      height: worldH,
+    });
+  }, [pendingImageInsert, uiScale]);
+
   // ---- Cursor -----------------------------------------------------------------
 
   // Pen AND the eraser (both free & whole-stroke modes) share the round brush
@@ -934,12 +1037,16 @@ const PdfCanvas: React.FC = () => {
   const cursorStyle = (activeTool === 'pen' || activeTool === 'eraser')
     ? 'none'
     : activeTool === 'select' ? 'crosshair'
+    : activeTool === 'insert' ? (insertMode === 'text' ? 'text' : 'crosshair')
     : 'default';
+  const textInteractive = activeTool === 'select' || (activeTool === 'insert' && insertMode === 'text');
+  const imageInteractive = activeTool === 'select';
   const showCursor = (activeTool === 'pen' || activeTool === 'eraser') && cursorScreen && !isDraggingToolbar;
   const laserSize = Math.max(1.5, brush.size * 0.4);
   const cs = (activeTool === 'eraser'
     ? PDF_ERASER_RADIUS
     : brushType === 'laser' ? laserSize : brush.size) * camera.zoom;
+  const editingTextNode = currentItems.find((o): o is PdfTextObjectData => o.type === 'text' && o.id === editingTextId);
 
   return (
     <div ref={containerRef} style={{ position: 'absolute', inset: 0, overflow: 'hidden', background: 'var(--page-bg)' }}>
@@ -954,6 +1061,32 @@ const PdfCanvas: React.FC = () => {
         onPointerLeave={() => setCursorScreen(null)}
         onWheel={handleWheel}
       />
+
+      {/* Insert tool: hidden image picker (opened on an insert-image click). */}
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept="image/*"
+        multiple
+        style={{ display: 'none' }}
+        onChange={onPickImages}
+      />
+
+      {/* DOM overlays for inserted objects (text cards / images), above the canvas
+          but gated to pointer-events none unless the tool makes them interactive. */}
+      {currentItems.map((o) => {
+        if (o.type === 'text') {
+          if (o.id === editingTextId) return null; // editor overlay handles it below
+          return <PdfTextObject key={o.id} node={o} page={currentPage} camera={camera} interactive={textInteractive} />;
+        }
+        if (o.type === 'image') {
+          return <PdfImageObject key={o.id} obj={o} page={currentPage} camera={camera} interactive={imageInteractive} />;
+        }
+        return null;
+      })}
+      {editingTextNode && (
+        <PdfTextNode key={editingTextNode.id} node={editingTextNode} page={currentPage} camera={camera} />
+      )}
 
       {showCursor && cursorScreen && (
         <div

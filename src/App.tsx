@@ -74,10 +74,8 @@ const App: React.FC = () => {
     if (isDefaultBrushColor(cs.brushSettings.color)) {
       cs.setBrushSettings({ color: colors.defaultBrush });
     }
-    const ps = usePdfStore.getState();
-    if (isDefaultBrushColor(ps.brush.color)) {
-      ps.setBrush({ color: colors.defaultBrush });
-    }
+    // PDF annotations use a FIXED default color (PDF_ANNOTATION_BLUE) that does
+    // NOT follow the app theme — intentionally no PDF branch here.
   }, [settings.theme, settings.fontFamily, settings.fontSize, settings.backgroundOpacity]);
 
   // Ctrl+Scroll font zoom (throttled)

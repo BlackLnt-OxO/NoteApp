@@ -41,10 +41,48 @@ export type PdfCommittedStrokeStyle = 'marker' | 'fountain' | 'pencil';
 
 export type PdfBrushType = PdfCommittedStrokeStyle | 'laser';
 
-export type PdfTool = 'pen' | 'eraser' | 'select';
+export type PdfTool = 'pen' | 'eraser' | 'select' | 'insert';
 
 export type PdfEraserMode = 'free' | 'stroke';
 export type PdfSelectionMode = 'box' | 'click';
+export type PdfInsertMode = 'text' | 'image';
+
+// ---- Insertable objects (text card / image) --------------------------------
+
+/** A committed text card placed on the PDF page (page world coordinates). */
+export interface PdfTextObject {
+  id: string;
+  type: 'text';
+  /** Page world units; box top-left. */
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  content: string;
+  fontSize: number;
+  /** Fixed PDF_ANNOTATION_BLUE by default (never theme-adaptive). */
+  color: string;
+  backgroundColor: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
+/** A raster image placed on the PDF page (page world coordinates). */
+export interface PdfImageObject {
+  id: string;
+  type: 'image';
+  x: number;
+  y: number;
+  /** World-space width/height (pre-zoom). */
+  width: number;
+  height: number;
+  /** Inline PNG data URL (downscaled ≤ 1280 px wide on insert). */
+  dataUrl: string;
+  createdAt: number;
+}
+
+/** Anything drawn / placed on one PDF page: ink strokes or insert objects. */
+export type PdfItem = PdfStroke | PdfTextObject | PdfImageObject;
 
 export interface PdfBrush {
   size: number;

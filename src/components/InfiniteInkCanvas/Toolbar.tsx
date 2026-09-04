@@ -8,6 +8,7 @@ import { useNoteStore } from "../../store";
 import { fs } from "../../utils";
 import { useCanvasStore } from './useCanvasStore';
 import { askConfirm } from '../ConfirmDialog';
+import { PDF_ANNOTATION_BLUE } from '../../themeColors';
 import type { ToolType } from './types';
 
 // ---- SVG Icons ---------------------------------------------------------------
@@ -60,7 +61,7 @@ const TrashIcon: React.FC = () => (
 const PRESET_COLORS = [
   '#ffffff', '#e0e0e0', '#cccccc', '#ff6b6b', '#f06595', '#e64980',
   '#ff922b', '#fcc419', '#ffd43b', '#51cf66', '#20c997', '#38d9a9',
-  '#339af0', '#5c7cfa', '#7950f2', '#845ef7', '#6b5ce7', '#111111',
+  '#339af0', PDF_ANNOTATION_BLUE, '#5c7cfa', '#7950f2', '#845ef7', '#6b5ce7', '#111111',
 ];
 
 // ---- Expandable tool button (PS-style small triangle) -------------------------

@@ -11,7 +11,7 @@
  *   main canvas      = drawImage(bg) + drawImage(ink) + live stroke
  */
 
-import type { PdfCamera, PdfStroke } from './PdfTypes';
+import type { PdfCamera, PdfItem, PdfStroke } from './PdfTypes';
 
 // ---- Constants ----------------------------------------------------------------
 
@@ -241,6 +241,18 @@ export function hitTestStroke(stroke: PdfStroke, x: number, y: number): boolean 
     if (distToSegment(x, y, pts[i - 1].x, pts[i - 1].y, pts[i].x, pts[i].y) <= threshold) return true;
   }
   return false;
+}
+
+/** World-space bounding box of any page item (stroke → its path bounds). */
+export function getItemBounds(item: PdfItem): Bounds {
+  if (item.type === 'stroke') return getStrokeBounds(item);
+  return { minX: item.x, minY: item.y, maxX: item.x + item.width, maxY: item.y + item.height };
+}
+
+/** Point hit-test over any page item (stroke → proximity; object → its rect). */
+export function hitTestItem(item: PdfItem, x: number, y: number): boolean {
+  if (item.type === 'stroke') return hitTestStroke(item, x, y);
+  return x >= item.x && x <= item.x + item.width && y >= item.y && y <= item.y + item.height;
 }
 
 export function boundsIntersectRect(b: Bounds, x1: number, y1: number, x2: number, y2: number): boolean {

@@ -11,7 +11,7 @@ import { useNoteStore } from "../../store";
 import { fs } from "../../utils";
 import { usePdfStore } from './PdfStore';
 import { askConfirm } from '../ConfirmDialog';
-import type { PdfTool } from './PdfTypes';
+import { PDF_ANNOTATION_BLUE } from '../../themeColors';
 
 // ---- SVG Icons ---------------------------------------------------------------
 
@@ -32,6 +32,12 @@ const SelectIcon: React.FC = () => (
   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
     <polygon points="22 3 11 14 8 8 2 2" />
     <polygon points="22 3 14 3 11 14 8 8" opacity="0.4" />
+  </svg>
+);
+
+const TextIcon: React.FC = () => (
+  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M4 6V4h16v2" /><line x1="12" x2="12" y1="4" y2="20" /><line x1="9" x2="15" y1="20" y2="20" />
   </svg>
 );
 
@@ -57,7 +63,7 @@ const TrashIcon: React.FC = () => (
 const PRESET_COLORS = [
   '#ffffff', '#e0e0e0', '#cccccc', '#ff6b6b', '#f06595', '#e64980',
   '#ff922b', '#fcc419', '#ffd43b', '#51cf66', '#20c997', '#38d9a9',
-  '#339af0', '#5c7cfa', '#7950f2', '#845ef7', '#6b5ce7', '#111111',
+  '#339af0', PDF_ANNOTATION_BLUE, '#5c7cfa', '#7950f2', '#845ef7', '#6b5ce7', '#111111',
 ];
 
 // ---- Expandable tool button (PS-style small triangle) -------------------------
@@ -238,7 +244,8 @@ const PdfToolbar: React.FC = () => {
   const gfs = useNoteStore((s) => s.settings.fontSize);
   const {
     activeTool, brushType, brush, eraserMode, selectionMode, history, redoStack, currentPage, showDotGrid,
-    setActiveTool, setBrushType, setBrush, setEraserMode, setSelectionMode, setShowDotGrid, undo, redo, clearPage,
+    insertMode, setActiveTool, setBrushType, setBrush, setEraserMode, setSelectionMode, setShowDotGrid,
+    setInsertMode, undo, redo, clearPage,
   } = usePdfStore();
 
   const canUndo = (history[currentPage]?.length ?? 0) > 0;
@@ -311,6 +318,15 @@ const PdfToolbar: React.FC = () => {
           options={[
             { label: '自由擦除', active: eraserMode === 'free', onClick: () => { setActiveTool('eraser'); setEraserMode('free'); } },
             { label: '擦除笔画', active: eraserMode === 'stroke', onClick: () => { setActiveTool('eraser'); setEraserMode('stroke'); } },
+          ]}
+        />
+        <ExpandableToolButton
+          label="插入" Icon={TextIcon}
+          active={activeTool === 'insert'}
+          onMain={() => { setActiveTool('insert'); setInsertMode('text'); }}
+          options={[
+            { label: '文本框', active: insertMode === 'text', onClick: () => { setActiveTool('insert'); setInsertMode('text'); } },
+            { label: '图片', active: insertMode === 'image', onClick: () => { setActiveTool('insert'); setInsertMode('image'); } },
           ]}
         />
       </div>
