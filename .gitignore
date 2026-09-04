@@ -11,3 +11,6 @@ __pycache__/
 
 # PDF annotation data (dev: project dir / packaged: userData)
 pdf-annotations/
+
+# Electron runtime userData (dev: project root) — notes, caches, prefs
+DataLocation/
