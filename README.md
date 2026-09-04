@@ -108,3 +108,5 @@ NoteApp/
 - 便笺正文、窗口状态、设置等以 JSON 存入**用户数据目录**（`userData`），可在设置中更改数据目录
 - dev 模式下 `userData` 指向项目根的 `DataLocation/`，`pdf-annotations/` 存标注层数据 —— 两者均已被 `.gitignore` 排除，**不进入版本库**
 - 打包后 `userData` 落到系统默认的 `appData/sticky-notes`，同样与仓库隔离
+  
+## AI Generated
