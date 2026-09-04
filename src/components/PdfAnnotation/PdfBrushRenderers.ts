@@ -553,7 +553,7 @@ export function prepareInkRibbon(stroke: PdfStroke): InkRibbon | null {
   if (stroke.style === 'fountain') {
     const inkSpeed = stroke.inkSpeed ?? 0.5;
     ribbon = buildRibbonData(pts, (fp) => computeFountainWidths(fp, stroke.size, inkSpeed));
-    alpha = stroke.opacity;
+    alpha = markerStrokeAlpha(stroke.opacity, averagePressure(pts), stroke.pressureOpacity === true);
   } else {
     ribbon = buildRibbonData(pts, (fp) => computeMarkerWidths(fp, stroke.size));
     alpha = markerStrokeAlpha(stroke.opacity, averagePressure(pts), stroke.pressureOpacity === true);
@@ -633,7 +633,10 @@ function drawFountain(ctx: CanvasRenderingContext2D, stroke: PdfStroke, dx = 0, 
   const inkSpeed = stroke.inkSpeed ?? 0.5;
   const ribbon = buildRibbonData(pts, (fp) => computeFountainWidths(fp, stroke.size, inkSpeed));
 
-  drawVariableRibbon(ctx, ribbon.points, ribbon.widths, stroke.color, stroke.opacity, stroke.compositeOperation, dx, dy, stroke.edgeFeather !== false);
+  // Fountain supports the same pressure→opacity band (±10pp around the slider)
+  // as marker when the toggle is ON.
+  const alpha = markerStrokeAlpha(stroke.opacity, averagePressure(pts), stroke.pressureOpacity === true);
+  drawVariableRibbon(ctx, ribbon.points, ribbon.widths, stroke.color, alpha, stroke.compositeOperation, dx, dy, stroke.edgeFeather !== false);
 }
 
 // ---- Pencil (hard lead core + deterministic grain) ------------------------------

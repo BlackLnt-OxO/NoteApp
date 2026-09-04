@@ -190,7 +190,8 @@ function QuickSizeButton({
     timerRef.current = setTimeout(() => { longRef.current = true; setOpen(idx); }, 500);
   };
   const onMove = (e: React.PointerEvent) => {
-    if (downRef.current && timerRef.current && Math.hypot(e.clientX - downRef.current.x, e.clientY - downRef.current.y) > 6) {
+    // Allow a bit of pen jitter (≤12px) before treating the press as a drag/cancel.
+    if (downRef.current && timerRef.current && Math.hypot(e.clientX - downRef.current.x, e.clientY - downRef.current.y) > 12) {
       clearTimer();
       downRef.current = null;
     }
@@ -257,8 +258,26 @@ const PdfToolbar: React.FC = () => {
   }, [openQuickIdx]);
   const setQuickSize = (i: number, v: number) => update({ quickSizes: quick.map((x, xi) => (xi === i ? v : x)) });
 
+  // Stylus/mouse micro-move tolerance: pressing a button and drifting a few px
+  // (common with a pen) shouldn't swallow the tap. If the release lands off the
+  // button but within 12px of the press, still trigger that button's click.
+  const pressRef = useRef<{ x: number; y: number; el: HTMLElement | null } | null>(null);
+  const onRootDown = (e: React.PointerEvent) => {
+    const t = (e.target as HTMLElement | null)?.closest?.('button');
+    if (t) pressRef.current = { x: e.clientX, y: e.clientY, el: t as HTMLElement };
+  };
+  const onRootUp = (e: React.PointerEvent) => {
+    const p = pressRef.current;
+    pressRef.current = null;
+    if (!p?.el) return;
+    const at = document.elementFromPoint(e.clientX, e.clientY);
+    if (at && (at as HTMLElement).closest?.('button')) return; // native click handles it
+    if (Math.hypot(e.clientX - p.x, e.clientY - p.y) <= 12) p.el.click();
+  };
+
   return (
-    <div style={{ padding: '10px 14px 12px', color: 'var(--text-primary)' }}>
+    <div style={{ padding: '10px 14px 12px', color: 'var(--text-primary)', touchAction: 'none' }}
+      onPointerDown={onRootDown} onPointerUp={onRootUp} onPointerCancel={() => (pressRef.current = null)}>
       {/* ---- Tool selector ---- */}
       <div style={{ display: 'flex', gap: '4px', ...sectionStyle }}>
         <ExpandableToolButton
@@ -335,10 +354,10 @@ const PdfToolbar: React.FC = () => {
         <input type="range" min={1} max={100} value={Math.round(brush.opacity * 100)} onChange={(e) => update({ opacity: Number(e.target.value) / 100 })} style={trackStyle} />
       </div>
 
-      {/* ---- Smoothing ---- */}
+      {/* ---- Smoothing (0–20%) ---- */}
       <div style={sectionStyle}>
         <div style={labelStyle(gfs)}><span>平滑</span><span>{Math.round(brush.smoothing * 100)}%</span></div>
-        <input type="range" min={0} max={100} value={Math.round(brush.smoothing * 100)} onChange={(e) => update({ smoothing: Number(e.target.value) / 100 })} style={trackStyle} />
+        <input type="range" min={0} max={20} value={Math.round(brush.smoothing * 100)} onChange={(e) => update({ smoothing: Number(e.target.value) / 100 })} style={trackStyle} />
       </div>
 
       {/* ---- Soft edge feather toggle ---- */}
@@ -358,8 +377,8 @@ const PdfToolbar: React.FC = () => {
         </div>
       )}
 
-      {/* ---- Marker-only: pressure → opacity toggle ---- */}
-      {brushType === 'marker' && (
+      {/* ---- Marker/Fountain: pressure → opacity toggle ---- */}
+      {(brushType === 'marker' || brushType === 'fountain') && (
         <div style={sectionStyle}>
           <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: fs(11, gfs), color: 'var(--text-secondary)', cursor: 'pointer' }}>
             <input type="checkbox" checked={brush.pressureOpacity} onChange={(e) => update({ pressureOpacity: e.target.checked })} style={{ accentColor: 'var(--accent)' }} />
