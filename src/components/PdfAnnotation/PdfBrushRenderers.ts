@@ -70,6 +70,19 @@ export function averagePressure(pts: { p: number }[]): number {
   return sum / pts.length;
 }
 
+/** Marker alpha: with "pressure controls opacity" ON, the whole stroke's alpha
+ *  swings with AVERAGE pressure inside a narrow band around the opacity slider
+ *  (±10 PERCENTAGE POINTS, clamped to 0..1) — light pressure → lower bound, full
+ *  pressure → upper bound, mid pressure ≈ the slider value. Toggle OFF keeps the
+ *  exact slider opacity. */
+export function markerStrokeAlpha(opacity: number, avgPressure: number, pressureOpacityEnabled: boolean): number {
+  const op = clamp01(opacity);
+  if (!pressureOpacityEnabled) return op;
+  const lo = Math.max(0, op - 0.1);
+  const hi = Math.min(1, op + 0.1);
+  return lo + (hi - lo) * clamp01(avgPressure);
+}
+
 // ---- Pressure + width computation -------------------------------------------------
 
 /** Forward EMA (+ light backward pass) over the pressure samples so a single
@@ -543,10 +556,7 @@ export function prepareInkRibbon(stroke: PdfStroke): InkRibbon | null {
     alpha = stroke.opacity;
   } else {
     ribbon = buildRibbonData(pts, (fp) => computeMarkerWidths(fp, stroke.size));
-    alpha =
-      stroke.pressureOpacity === true
-        ? clamp01(stroke.opacity * (0.45 + 0.55 * averagePressure(pts)))
-        : stroke.opacity;
+    alpha = markerStrokeAlpha(stroke.opacity, averagePressure(pts), stroke.pressureOpacity === true);
   }
   if (ribbon.points.length === 0) return null;
 
@@ -606,15 +616,10 @@ function drawMarker(ctx: CanvasRenderingContext2D, stroke: PdfStroke, dx = 0, dy
 
   const ribbon = buildRibbonData(pts, (fp) => computeMarkerWidths(fp, stroke.size));
 
-  // Whole-stroke alpha: if the "pressure opacity" toggle is on, ink depth still
-  // follows how hard you press (AVERAGE pressure, one fill → never stacks), but
-  // the curve is GENTLE (0.45..1) so a light stroke stays clearly visible instead
-  // of almost disappearing (width and opacity should not both collapse at low
-  // pressure). Toggle off / legacy strokes stay at constant opacity.
-  const alpha =
-    stroke.pressureOpacity === true
-      ? clamp01(stroke.opacity * (0.45 + 0.55 * averagePressure(pts)))
-      : stroke.opacity;
+  // Whole-stroke alpha: with "pressure opacity" ON, alpha swings with AVERAGE
+  // pressure inside a narrow band around the opacity slider (±10 percentage
+  // points, clamped to 0..1) — it can never exceed the slider's bounds.
+  const alpha = markerStrokeAlpha(stroke.opacity, averagePressure(pts), stroke.pressureOpacity === true);
 
   drawVariableRibbon(ctx, ribbon.points, ribbon.widths, stroke.color, alpha, stroke.compositeOperation, dx, dy, stroke.edgeFeather !== false);
 }

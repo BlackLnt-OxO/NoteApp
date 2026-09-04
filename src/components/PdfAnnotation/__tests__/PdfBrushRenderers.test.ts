@@ -19,6 +19,7 @@ import {
   resampleSpacing,
   smoothWidths,
   averagePressure,
+  markerStrokeAlpha,
   sanitizePoints,
 } from '../PdfBrushRenderers';
 import type { PdfStroke } from '../PdfTypes';
@@ -256,6 +257,17 @@ describe('helpers', () => {
   it('averagePressure treats non-finite samples as neutral 0.5', () => {
     expect(averagePressure([{ p: 0.2 }, { p: 0.6 }, { p: NaN }])).toBeCloseTo((0.2 + 0.6 + 0.5) / 3, 5);
   });
+  it('markerStrokeAlpha clamps pressure-alpha inside opacity ±10pp (0..1)', () => {
+    // OFF → exactly the slider opacity.
+    expect(markerStrokeAlpha(0.7, 0.9, false)).toBeCloseTo(0.7, 6);
+    // ON → band [0.6, 0.8] around 0.7.
+    expect(markerStrokeAlpha(0.7, 0, true)).toBeCloseTo(0.6, 6);
+    expect(markerStrokeAlpha(0.7, 1, true)).toBeCloseTo(0.8, 6);
+    expect(markerStrokeAlpha(0.7, 0.5, true)).toBeCloseTo(0.7, 6);
+    // Near the edges the band is clamped to 0..1.
+    expect(markerStrokeAlpha(0.05, 1, true)).toBeCloseTo(0.15, 6); // upper 0.15, not 0.05
+    expect(markerStrokeAlpha(0.05, 0, true)).toBeCloseTo(0, 6); // lower clamps to 0
+  });
   it('smoothWidths preserves length and bounds', () => {
     const w = smoothWidths([8, 2, 8, 8]);
     expect(w).toHaveLength(4);
@@ -351,7 +363,7 @@ describe('drawAnnotatedStroke — marker union single-fill (explicit nonzero)', 
     expect(fills[0].args).toContain('nonzero');
   });
 
-  it('pressure→opacity toggle ON scales whole-stroke alpha by average pressure', () => {
+  it('pressure→opacity toggle ON keeps alpha inside opacity ±10pp (clamped 0..1)', () => {
     const c = makeCtx();
     drawAnnotatedStroke(
       ctx2d(c),
@@ -364,8 +376,9 @@ describe('drawAnnotatedStroke — marker union single-fill (explicit nonzero)', 
         { opacity: 1, pressureOpacity: true },
       ),
     );
+    // opacity=1 → band [0.9, 1.0]; avg pressure 0.3 → 0.9 + 0.1*0.3 = 0.93
     const alphas = setValues(c, 'globalAlpha');
-    expect(alphas[alphas.length - 1] as number).toBeCloseTo(0.45 + 0.55 * 0.3, 5); // gentle pressure-alpha
+    expect(alphas[alphas.length - 1] as number).toBeCloseTo(0.93, 5);
   });
 });
 
