@@ -112,10 +112,11 @@ const ExpandableToolButton: React.FC<ExpandableToolButtonProps> = ({ label, Icon
         onClick={() => setOpen(v => !v)}
         title="更多选项"
         style={{
-          position: 'absolute', right: 2, bottom: 2, width: 12, height: 10,
+          position: 'absolute', right: 0, bottom: 0, width: 18, height: 15,
           padding: 0, border: 0, background: 'transparent', cursor: 'pointer',
           color: active ? '#fff' : 'var(--text-muted)', fontSize: 7,
           display: 'flex', alignItems: 'center', justifyContent: 'center',
+          touchAction: 'none',
         }}
       >
         ▼
@@ -271,7 +272,10 @@ const PdfToolbar: React.FC = () => {
     pressRef.current = null;
     if (!p?.el) return;
     const at = document.elementFromPoint(e.clientX, e.clientY);
-    if (at && (at as HTMLElement).closest?.('button')) return; // native click handles it
+    const atBtn = at ? (at as HTMLElement).closest?.('button') : null;
+    if (atBtn && atBtn === p.el) return; // same button → native click fires
+    // Release drifted off the pressed button (stylus micro-move) — even onto a
+    // DIFFERENT button: replay the press on the ORIGINAL button instead.
     if (Math.hypot(e.clientX - p.x, e.clientY - p.y) <= 12) p.el.click();
   };
 
