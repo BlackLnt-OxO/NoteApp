@@ -321,6 +321,14 @@ class CaptureDaemon:
 # ── Entry point ──────────────────────────────────────────────
 
 def main() -> None:
+    # Windows pipes decode with the locale ANSI codepage by default; cum_path may
+    # contain non-ASCII (e.g. Windows username in %TEMP%). Force UTF-8 so the
+    # JSON-lines protocol decodes identically in dev and in the frozen engine.
+    for _s in (sys.stdin, sys.stdout):
+        try:
+            _s.reconfigure(encoding="utf-8")
+        except Exception:
+            pass
     daemon = CaptureDaemon()
     # Signal readiness to parent process
     print(json.dumps({"ok": True, "ready": True}), flush=True)

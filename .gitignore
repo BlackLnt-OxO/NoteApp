@@ -14,3 +14,7 @@ pdf-annotations/
 
 # Electron runtime userData (dev: project root) — notes, caches, prefs
 DataLocation/
+
+# PyInstaller engine build outputs — commit engine/cap-engine.spec only
+engine/build/
+engine/dist/

@@ -44,14 +44,19 @@ npm run dev
 ## 常用命令
 
 ```bash
-npm run dev       # 开发模式（Vite + Electron）
-npm test          # 运行全部单测（vitest run）
-npx vitest run    # 同上
-npx tsc --noEmit  # TypeScript 类型检查
-npm run build     # 生产构建（vite build → electron-builder，portable exe 输出到 dist-electron/）
+npm run dev          # 开发模式（Vite + Electron）
+npm run build:engine # 冻结长截图 Python 引擎为独立 exe（仅打包机需要 Python+PyInstaller）
+npm test             # 运行全部单测（vitest run）
+npx vitest run       # 同上
+npx tsc --noEmit     # TypeScript 类型检查
+npm run build        # 发布构建（自动先 build:engine → vite build → electron-builder，portable exe 输出到 dist-electron/）
 ```
 
 当前测试基线：**14 个测试文件 / 225 个用例全绿**，类型检查 0 错误。
+
+### 长截图 Python 引擎（打包说明）
+
+主进程跑长截图用的是 [electron/longshot/capture_daemon.py](electron/longshot/capture_daemon.py)（stdin/stdout 换行 JSON 协议：`configure`/`tick`/`finish`/`shutdown`）。发布时由 [engine/cap-engine.spec](engine/cap-engine.spec) 用 PyInstaller 冻成独立 `cap-engine.exe`（内嵌 Python + cv2 + numpy + mss），随 electron-builder 打进 `resources/engine`——**端机无需安装 Python**。`npm run build` 已自动先跑 `npm run build:engine`。开发时 `npm run dev` 仍直接调本机 Python 跑源码（永远最新，不受引擎影响）；只有打包的 exe 走冻结引擎。
 
 ## 目录结构
 
@@ -92,6 +97,8 @@ NoteApp/
 │           └── __tests__/           # 引擎 / 笔刷 / loader / library / store 测试
 ├── DataLocation/                    # 运行时用户数据（dev：项目根）——已 gitignore，不入库
 ├── pdf-annotations/                 # PDF 标注数据（dev：项目根）——已 gitignore，不入库
+├── engine/                          # 长截图 Python 引擎（PyInstaller 冻结）
+│   └── cap-engine.spec              # 冻结配置（产物 engine/dist、engine/build 已 gitignore）
 ├── package.json / package-lock.json
 ├── tsconfig.json / vite.config.ts / vitest.config.ts / .gitignore
 ```

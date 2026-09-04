@@ -5,7 +5,8 @@
   "main": "electron/main.js",
   "scripts": {
     "dev": "concurrently \"vite\" \"wait-on http://localhost:5173 && electron .\"",
-    "build": "vite build && electron-builder",
+    "build": "npm run build:engine && vite build && electron-builder",
+    "build:engine": "python -m PyInstaller --noconfirm --clean --distpath engine/dist --workpath engine/build engine/cap-engine.spec",
     "vite:dev": "vite",
     "electron:dev": "electron .",
     "test": "vitest run",
@@ -49,8 +50,8 @@
     ],
     "extraResources": [
       {
-        "from": "electron/longshot",
-        "to": "longshot"
+        "from": "engine/dist/cap-engine",
+        "to": "engine"
       }
     ],
     "win": {

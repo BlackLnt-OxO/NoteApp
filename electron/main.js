@@ -216,23 +216,52 @@ let capDaemon = null;
 let capDaemonBuffer = '';
 let capDaemonPending = [];  // queue of resolve callbacks
 
-function spawnCapDaemon() {
-  const daemonSrc = path.join(__dirname, 'longshot', 'capture_daemon.py');
-  const mssSrc = path.join(__dirname, 'mss');
-  const tmpDir = path.join(app.getPath('temp'), 'sticky-notes-py');
-  if (!fs.existsSync(tmpDir)) fs.mkdirSync(tmpDir, { recursive: true });
-  const daemonDst = path.join(tmpDir, 'capture_daemon.py');
-  const mssDst = path.join(tmpDir, 'mss');
-  fs.copyFileSync(daemonSrc, daemonDst);
-  // Copy bundled mss library so Python can import it (cannot read from asar)
-  try { fs.cpSync(mssSrc, mssDst, { recursive: true }); } catch(e) {
-    // If mss is already there from a previous run, that's fine
-    if (e.code !== 'ERR_FS_CP_EEXIST') console.error('[cap-daemon] mss copy warning:', e.message);
+// Resolve the frozen capture engine (cap-engine.exe) → absolute path, or null.
+// Packaged: shipped via electron-builder extraResources → resources/engine/cap-engine.exe.
+// Dev: engine only when explicitly opted in (NOTEAPP_USE_ENGINE=1) — dev normally runs the
+// Python source so you always test the latest capture_daemon.py (never a stale engine).
+function resolveCapEnginePath() {
+  if (!isDev) {
+    const p = path.join(process.resourcesPath, 'engine', 'cap-engine.exe');
+    if (fs.existsSync(p)) return p;
+    return null;
   }
+  if (process.env.NOTEAPP_USE_ENGINE === '1') {
+    const p = path.join(__dirname, '..', 'engine', 'dist', 'cap-engine', 'cap-engine.exe');
+    if (fs.existsSync(p)) return p;
+  }
+  return null;
+}
 
-  capDaemon = require('child_process').spawn('python', [daemonDst], {
-    stdio: ['pipe', 'pipe', 'pipe'],
-  });
+function spawnCapDaemon() {
+  const engineExe = resolveCapEnginePath();
+
+  if (engineExe) {
+    // Frozen engine (bundles Python + cv2 + mss) — no system Python required.
+    capDaemon = require('child_process').spawn(engineExe, [], {
+      stdio: ['pipe', 'pipe', 'pipe'],
+      windowsHide: true, // no console flash for the console-subsystem exe
+    });
+  } else {
+    // Legacy path: run capture_daemon.py with a system Python. Dev default; also the
+    // fallback for a packaged build shipped without an engine. Needs Python installed.
+    const daemonSrc = path.join(__dirname, 'longshot', 'capture_daemon.py');
+    const mssSrc = path.join(__dirname, 'mss');
+    const tmpDir = path.join(app.getPath('temp'), 'sticky-notes-py');
+    if (!fs.existsSync(tmpDir)) fs.mkdirSync(tmpDir, { recursive: true });
+    const daemonDst = path.join(tmpDir, 'capture_daemon.py');
+    const mssDst = path.join(tmpDir, 'mss');
+    fs.copyFileSync(daemonSrc, daemonDst);
+    // Copy bundled mss library so Python can import it (cannot read from asar)
+    try { fs.cpSync(mssSrc, mssDst, { recursive: true }); } catch(e) {
+      // If mss is already there from a previous run, that's fine
+      if (e.code !== 'ERR_FS_CP_EEXIST') console.error('[cap-daemon] mss copy warning:', e.message);
+    }
+    capDaemon = require('child_process').spawn('python', [daemonDst], {
+      stdio: ['pipe', 'pipe', 'pipe'],
+      windowsHide: true,
+    });
+  }
 
   capDaemonBuffer = '';
   capDaemonPending = [];
