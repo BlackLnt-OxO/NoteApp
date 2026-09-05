@@ -56,6 +56,45 @@ function strokesOnly(items: PdfItem[]): PdfStroke[] {
   return items.filter((o): o is PdfStroke => o.type === 'stroke');
 }
 
+// ---- Whole-stroke-eraser spatial hash -------------------------------------
+// Strokes are hashed once per wipe gesture into cells the size of an ink tile.
+// The drag hit-scan and the tile re-stamp then only touch strokes in cells near
+// the cursor, so erase cost is independent of how many strokes the page holds.
+
+/** Insert a stroke into the wipe hash (into every cell its bounds overlap). */
+function addStrokeToGrid(grid: Map<string, PdfStroke[]>, s: PdfStroke, b: Bounds): void {
+  const tx0 = Math.floor(b.minX / TILE), tx1 = Math.floor(b.maxX / TILE);
+  const ty0 = Math.floor(b.minY / TILE), ty1 = Math.floor(b.maxY / TILE);
+  for (let ty = ty0; ty <= ty1; ty++) {
+    for (let tx = tx0; tx <= tx1; tx++) {
+      const key = tx + ':' + ty;
+      let arr = grid.get(key);
+      if (!arr) { arr = []; grid.set(key, arr); }
+      arr.push(s);
+    }
+  }
+}
+
+/** Collect the distinct strokes whose grid cells overlap the given rect. */
+function collectGridStrokes(
+  grid: Map<string, PdfStroke[]>,
+  x1: number, y1: number, x2: number, y2: number,
+  out: PdfStroke[],
+): void {
+  const cx0 = Math.floor(Math.min(x1, x2) / TILE), cx1 = Math.floor(Math.max(x1, x2) / TILE);
+  const cy0 = Math.floor(Math.min(y1, y2) / TILE), cy1 = Math.floor(Math.max(y1, y2) / TILE);
+  const seen = new Set<string>();
+  for (let cy = cy0; cy <= cy1; cy++) {
+    for (let cx = cx0; cx <= cx1; cx++) {
+      const arr = grid.get(cx + ':' + cy);
+      if (!arr) continue;
+      for (const s of arr) {
+        if (!seen.has(s.id)) { seen.add(s.id); out.push(s); }
+      }
+    }
+  }
+}
+
 /** Transient laser-pointer stroke segment (never committed / persisted). */
 interface LaserSegment {
   points: PdfPoint[];
@@ -149,21 +188,22 @@ function stampStroke(tiles: Map<string, HTMLCanvasElement>, stroke: PdfStroke): 
 
 /**
  * Whole-stroke eraser live removal: clear the removed stroke(s) out of the
- * shared ink-tile map WITHOUT a page-wide rebuild. Affected tiles are cleared,
- * then only remaining strokes overlapping them are re-stamped in order (so
- * destination-out eraser carves keep the same z-relationship a full rebuild
- * would produce). Empty tiles are dropped; other tiles are never re-rasterized.
+ * shared ink-tile map. Affected tiles are cleared, then only the strokes listed
+ * in those tiles' wipe-grid cells are re-stamped (the grid was built once per
+ * wipe gesture and cell size == tile size, so cost scales with the strokes near
+ * the removed one, never with the total page stroke count). Destination-out
+ * eraser carves are re-stamped in order so the z-relationship matches a full
+ * rebuild. Empty tiles are dropped.
  */
 function removeStrokesFromInk(
   tiles: Map<string, HTMLCanvasElement>,
-  remainingStrokes: PdfStroke[],
+  grid: Map<string, PdfStroke[]>,
+  skipIds: Set<string>,
   removed: PdfStroke[],
   cachedBounds?: Map<string, Bounds>,
 ): void {
   if (removed.length === 0) return;
 
-  // Reuse the wipe gesture's per-stroke bounds cache (strokes are immutable
-  // here) so a per-frame removal is O(stroke count), not O(total points).
   const boundsOf = (s: PdfStroke): Bounds => {
     const b = cachedBounds?.get(s.id);
     if (b) return b;
@@ -194,42 +234,27 @@ function removeStrokesFromInk(
     ctx.clearRect(0, 0, c.width, c.height);
   }
 
-  // Re-stamp remaining strokes that overlap a cleared tile. Clamp each stroke's
-  // tile range to the cleared region first so strokes far from the removed one
-  // cost O(1) instead of iterating their whole tile area.
-  let minTx = Infinity, maxTx = -Infinity, minTy = Infinity, maxTy = -Infinity;
-  for (const key of cleared) {
-    const idx = key.indexOf(':');
-    const tx = Number(key.slice(0, idx)), ty = Number(key.slice(idx + 1));
-    if (tx < minTx) minTx = tx;
-    if (tx > maxTx) maxTx = tx;
-    if (ty < minTy) minTy = ty;
-    if (ty > maxTy) maxTy = ty;
-  }
+  // Re-stamp, per cleared tile, only the strokes the wipe grid lists for that
+  // cell (except the ones erased this gesture). Mirrors stampStroke exactly.
   const stillNeeded = new Set<string>();
-  for (const s of remainingStrokes) {
-    const sb = boundsOf(s);
-    const tx0 = Math.max(Math.floor(sb.minX / TILE), minTx);
-    const tx1 = Math.min(Math.floor(sb.maxX / TILE), maxTx);
-    const ty0 = Math.max(Math.floor(sb.minY / TILE), minTy);
-    const ty1 = Math.min(Math.floor(sb.maxY / TILE), maxTy);
-    if (tx0 > tx1 || ty0 > ty1) continue;
-    const ribbon = prepareInkRibbon(s);
-    for (let ty = ty0; ty <= ty1; ty++) {
-      for (let tx = tx0; tx <= tx1; tx++) {
-        const key = tileKey(tx, ty);
-        if (!cleared.has(key)) continue;
-        const c = tiles.get(key);
-        const ctx = c && c.getContext('2d');
-        if (!c || !ctx) continue;
-        ctx.setTransform(SCALE, 0, 0, SCALE, -tx * TILE * SCALE, -ty * TILE * SCALE);
-        if (ribbon) {
-          drawInkRibbonSlice(ctx, ribbon, tx * TILE, ty * TILE, (tx + 1) * TILE, (ty + 1) * TILE);
-        } else {
-          drawAnnotatedStroke(ctx, s);
-        }
-        stillNeeded.add(key);
+  for (const key of cleared) {
+    const c = tiles.get(key);
+    const ctx = c && c.getContext('2d');
+    if (!c || !ctx) continue;
+    const list = grid.get(key);
+    if (!list) continue;
+    const sep = key.indexOf(':');
+    const tx = Number(key.slice(0, sep)), ty = Number(key.slice(sep + 1));
+    for (const s of list) {
+      if (skipIds.has(s.id)) continue;
+      ctx.setTransform(SCALE, 0, 0, SCALE, -tx * TILE * SCALE, -ty * TILE * SCALE);
+      const ribbon = prepareInkRibbon(s);
+      if (ribbon) {
+        drawInkRibbonSlice(ctx, ribbon, tx * TILE, ty * TILE, (tx + 1) * TILE, (ty + 1) * TILE);
+      } else {
+        drawAnnotatedStroke(ctx, s);
       }
+      stillNeeded.add(key);
     }
   }
   for (const key of cleared) {
@@ -392,7 +417,11 @@ const PdfCanvas: React.FC = () => {
      *  store — the store commit happens once on pointer-up (no per-frame React
      *  churn, mirroring how pen/select-drag avoid mid-gesture store writes). */
     pendingIds: Set<string>;
+    /** Per-stroke bounds, cached for the whole gesture. */
     bounds: Map<string, Bounds>;
+    /** Spatial hash (cell == ink tile) so erase cost doesn't scale with the
+     *  total stroke count on the page. Built once when the gesture starts. */
+    grid: Map<string, PdfStroke[]>;
   } | null>(null);
 
   const pageLoadTokenRef = useRef(0);
@@ -749,46 +778,21 @@ const PdfCanvas: React.FC = () => {
   /**
    * Whole-stroke eraser core. Only INK strokes (source-over) may be erased —
    * destination-out "eraser carve" strokes are never hit (see PdfEngine notes),
-   * so erasing a partially-erased stroke deletes the whole ink stroke instead of
-   * deleting the carve and resurrecting the full original underneath. Each erase
-   * is one history snapshot per gesture, a cheap vector-list removal (NO
-   * renderEpoch bump → no page-wide rebuild) plus a LOCAL clearing of just those
-   * strokes out of the shared ink tiles. Pointerwork is coalesced to one flush
-   * per animation frame.
-   */
-  const commitStrokeErase = useCallback((targets: PdfStroke[]) => {
-    if (targets.length === 0) return;
-    const wipe = strokeEraseRef.current;
-    if (!wipe) return;
-    const st = usePdfStore.getState();
-    if (!wipe.started) {
-      st.beginStrokeErase(wipe.page);
-      wipe.started = true;
-    }
-    st.eraseStrokesLive(wipe.page, targets.map((s) => s.id));
-    const remaining = strokesOnly(usePdfStore.getState().items[wipe.page] ?? []);
-    removeStrokesFromInk(inkTilesRef.current, remaining, targets, wipe.bounds);
-    dirtyRef.current = true;
-    scheduleRender();
-  }, [scheduleRender]);
-
-  /**
-   * Erase strokes VISUALLY during a drag WITHOUT touching the store (no React
-   * re-render / no per-frame store write — mirroring pen & select-drag). The
-   * strokes are cleared out of the ink tiles immediately and queued in
-   * `pendingIds`; the whole drag commits to the store once on pointer-up.
+   * so erasing a partially-erased stroke removes the whole ink stroke instead of
+   * deleting the carve and resurrecting the full original.
+   *
+   * Erasing is VISUAL first: strokes are cleared out of the shared ink tiles
+   * immediately and queued in `pendingIds`; the STORE commit happens once on
+   * pointer-up (one history snapshot, no per-frame React churn). The spatial
+   * hash (`grid`) built once per gesture means every frame only touches strokes
+   * near the cursor — cost is independent of the page's total stroke count.
    */
   const applyVisualErase = useCallback((targets: PdfStroke[]) => {
     if (targets.length === 0) return;
     const wipe = strokeEraseRef.current;
     if (!wipe) return;
     for (const t of targets) wipe.pendingIds.add(t.id);
-    const st = usePdfStore.getState();
-    // Strokes that are still VISIBLE: store strokes minus every erased-this-drag
-    // stroke (they are already gone from the tiles in prior frames).
-    const remaining = strokesOnly(st.items[wipe.page] ?? [])
-      .filter((s) => !wipe.pendingIds.has(s.id));
-    removeStrokesFromInk(inkTilesRef.current, remaining, targets, wipe.bounds);
+    removeStrokesFromInk(inkTilesRef.current, wipe.grid, wipe.pendingIds, targets, wipe.bounds);
     dirtyRef.current = true;
     scheduleRender();
   }, [scheduleRender]);
@@ -799,22 +803,21 @@ const PdfCanvas: React.FC = () => {
     if (!wipe) return;
     const st = usePdfStore.getState();
     const ink = strokesOnly(st.items[wipe.page] ?? [])
-      .filter((s) => s.compositeOperation !== 'destination-out');
+      .filter((s) => s.compositeOperation !== 'destination-out' && !wipe.pendingIds.has(s.id));
     const half = PDF_ERASER_RADIUS / 2;
     for (let i = ink.length - 1; i >= 0; i--) {
       const s = ink[i];
-      let bnd = wipe.bounds.get(s.id);
-      if (!bnd) { bnd = getStrokeBounds(s); wipe.bounds.set(s.id, bnd); }
+      const bnd = wipe.bounds.get(s.id) ?? getStrokeBounds(s);
       if (!boundsIntersectRect(bnd, x - half, y - half, x + half, y + half)) continue;
-      if (hitTestStrokeBySegment(s, x, y, x, y)) { commitStrokeErase([s]); return; }
+      if (hitTestStrokeBySegment(s, x, y, x, y)) { applyVisualErase([s]); return; }
     }
-  }, [commitStrokeErase]);
+  }, [applyVisualErase]);
 
   /**
-   * Run the drag-wipe accumulated since the last frame: hit-test the travelled
-   * segments against every ink stroke (bbox-cached, so O(1) per stroke) and erase
-   * every crossed stroke VISUALLY (local tiles only — the store commit happens
-   * once on pointer-up). Destination-out eraser carves are never hit.
+   * Run the drag-wipe accumulated since the last frame. One spatial-hash query
+   * over the travelled bounding box (expanded by the eraser disc half-width),
+   * then exact segment hit-tests on those strokes only. Erases VISUALLY; the
+   * store commit happens once on pointer-up.
    */
   const flushStrokeWipe = useCallback(() => {
     const wipe = strokeEraseRef.current;
@@ -831,22 +834,25 @@ const PdfCanvas: React.FC = () => {
     }
     wipe.last = all[all.length - 1];
     if (all.length < 2) return;
-    const st = usePdfStore.getState();
-    const ink = strokesOnly(st.items[wipe.page] ?? [])
-      .filter((s) => s.compositeOperation !== 'destination-out' && !wipe.pendingIds.has(s.id));
-    const targets: PdfStroke[] = [];
-    const seen = new Set<string>();
     const half = PDF_ERASER_RADIUS / 2;
-    for (let i = 1; i < all.length; i++) {
-      const a = all[i - 1], b = all[i];
-      const sx1 = Math.min(a.x, b.x) - half, sy1 = Math.min(a.y, b.y) - half;
-      const sx2 = Math.max(a.x, b.x) + half, sy2 = Math.max(a.y, b.y) + half;
-      for (const s of ink) {
-        if (seen.has(s.id)) continue;
-        let bnd = wipe.bounds.get(s.id);
-        if (!bnd) { bnd = getStrokeBounds(s); wipe.bounds.set(s.id, bnd); }
-        if (!boundsIntersectRect(bnd, sx1, sy1, sx2, sy2)) continue;
-        if (hitTestStrokeBySegment(s, a.x, a.y, b.x, b.y)) { targets.push(s); seen.add(s.id); }
+    let bx1 = Infinity, by1 = Infinity, bx2 = -Infinity, by2 = -Infinity;
+    for (const p of all) {
+      if (p.x < bx1) bx1 = p.x;
+      if (p.y < by1) by1 = p.y;
+      if (p.x > bx2) bx2 = p.x;
+      if (p.y > by2) by2 = p.y;
+    }
+    const candidates: PdfStroke[] = [];
+    collectGridStrokes(wipe.grid, bx1 - half, by1 - half, bx2 + half, by2 + half, candidates);
+    const targets: PdfStroke[] = [];
+    for (const s of candidates) {
+      if (wipe.pendingIds.has(s.id)) continue;
+      if (s.compositeOperation === 'destination-out') continue;
+      for (let i = 1; i < all.length; i++) {
+        if (hitTestStrokeBySegment(s, all[i - 1].x, all[i - 1].y, all[i].x, all[i].y)) {
+          targets.push(s);
+          break;
+        }
       }
     }
     applyVisualErase(targets);
@@ -941,8 +947,22 @@ const PdfCanvas: React.FC = () => {
       canvas.setPointerCapture(e.pointerId);
       strokeEraseRef.current = {
         page: st.currentPage, started: false, raf: 0,
-        last: { x: world.x, y: world.y }, pending: [], pendingIds: new Set(), bounds: new Map(),
+        last: { x: world.x, y: world.y }, pending: [], pendingIds: new Set(),
+        bounds: new Map(), grid: new Map(),
       };
+      // Hash every stroke once per gesture; erase cost then stays local to the
+      // cells under the cursor no matter how many strokes the page holds.
+      {
+        const w = strokeEraseRef.current!;
+        const cur = st.items[st.currentPage] ?? [];
+        for (const o of cur) {
+          if (o.type !== 'stroke') continue;
+          const s = o as PdfStroke;
+          const b = getStrokeBounds(s);
+          w.bounds.set(s.id, b);
+          addStrokeToGrid(w.grid, s, b);
+        }
+      }
       eraseTopmostAt(world.x, world.y);
       return;
     }

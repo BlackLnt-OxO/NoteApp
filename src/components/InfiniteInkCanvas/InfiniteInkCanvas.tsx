@@ -33,6 +33,48 @@ interface LaserSegment {
 }
 const LASER_LIFETIME = 1800; // ms — how long a laser trail stays visible
 
+// ---- Whole-stroke-eraser spatial hash -------------------------------------
+// Strokes are hashed once per wipe gesture into cells the size of an ink tile.
+// The drag hit-scan and the tile re-stamp then only touch strokes in cells near
+// the cursor, so erase cost is independent of how many strokes the page holds.
+
+const WIPE_CELL = 512; // world units (== ink tile size, so grid keys == tile keys)
+
+/** Insert a stroke into the wipe hash (into every cell its bounds overlap). */
+function addStrokeToGrid(grid: Map<string, Stroke[]>, s: Stroke, b: Bounds): void {
+  const tx0 = Math.floor(b.minX / WIPE_CELL), tx1 = Math.floor(b.maxX / WIPE_CELL);
+  const ty0 = Math.floor(b.minY / WIPE_CELL), ty1 = Math.floor(b.maxY / WIPE_CELL);
+  for (let ty = ty0; ty <= ty1; ty++) {
+    for (let tx = tx0; tx <= tx1; tx++) {
+      const key = tx + ':' + ty;
+      let arr = grid.get(key);
+      if (!arr) { arr = []; grid.set(key, arr); }
+      arr.push(s);
+    }
+  }
+}
+
+/** Collect the distinct strokes whose grid cells overlap the given rect. */
+function collectGridStrokes(
+  grid: Map<string, Stroke[]>,
+  x1: number, y1: number, x2: number, y2: number,
+  out: Stroke[],
+): void {
+  const cx0 = Math.floor(Math.min(x1, x2) / WIPE_CELL), cx1 = Math.floor(Math.max(x1, x2) / WIPE_CELL);
+  const cy0 = Math.floor(Math.min(y1, y2) / WIPE_CELL), cy1 = Math.floor(Math.max(y1, y2) / WIPE_CELL);
+  const seen = new Set<string>();
+  for (let cy = cy0; cy <= cy1; cy++) {
+    for (let cx = cx0; cx <= cx1; cx++) {
+      const arr = grid.get(cx + ':' + cy);
+      if (!arr) continue;
+      for (const s of arr) {
+        if (!seen.has(s.id)) { seen.add(s.id); out.push(s); }
+      }
+    }
+  }
+}
+
+
 /** Draw a laser segment at the given alpha. The caller decides alpha (uniform
  *  while writing so every trail stays lit, then a group fade from the last pen
  *  activity). */
@@ -100,7 +142,11 @@ const InfiniteInkCanvas: React.FC = () => {
      *  store — the store commit happens once on pointer-up (no per-frame React
      *  churn, mirroring how pen/select-drag avoid mid-gesture store writes). */
     pendingIds: Set<string>;
+    /** Per-stroke bounds, cached for the whole gesture. */
     bounds: Map<string, Bounds>;
+    /** Spatial hash (cell == ink tile) so erase cost doesn't scale with the
+     *  total stroke count on the page. Built once when the gesture starts. */
+    grid: Map<string, Stroke[]>;
   } | null>(null);
 
   const objects = useCanvasStore((s) => s.objects);
@@ -281,47 +327,18 @@ const InfiniteInkCanvas: React.FC = () => {
    * so erasing a partially-erased stroke removes the whole ink stroke instead of
    * deleting the carve and resurrecting the full original.
    *
-   * Erasing commits: one history snapshot per gesture (undo restores everything
-   * a single drag removed), a cheap vector-list removal (NO renderEpoch bump, so
-   * no page-wide rebuild), then a LOCAL clearing of just those strokes out of the
-   * shared ink tiles. Pointerwork is coalesced to one flush per animation frame.
-   */
-  const commitStrokeErase = useCallback((targets: Stroke[]) => {
-    if (targets.length === 0) return;
-    const wipe = strokeEraseRef.current;
-    if (!wipe) return;
-    const st = useCanvasStore.getState();
-    if (!wipe.started) {
-      st.beginEraseGesture();
-      wipe.started = true;
-    }
-    st.eraseStrokesLive(targets.map((s) => s.id));
-    const remaining = useCanvasStore.getState().objects.filter(
-      (o): o is Stroke => o.type === 'stroke',
-    );
-    removeStrokesFromTiles(inkTilesRef.current, remaining, targets, wipe.bounds);
-    dirtyRef.current = true;
-    scheduleRender();
-  }, [scheduleRender]);
-
-  /**
-   * Erase strokes VISUALLY during a drag WITHOUT touching the store (no React
-   * re-render / no per-frame store write — mirroring pen & select-drag). The
-   * strokes are cleared out of the ink tiles immediately and queued in
-   * `pendingIds`; the whole drag commits to the store once on pointer-up.
+   * Erasing is VISUAL first: strokes are cleared out of the shared ink tiles
+   * immediately and queued in `pendingIds`; the STORE commit happens once on
+   * pointer-up (one history snapshot, no per-frame React churn). The spatial
+   * hash (`grid`) built once per gesture means every frame only touches strokes
+   * near the cursor — cost is independent of the page's total stroke count.
    */
   const applyVisualErase = useCallback((targets: Stroke[]) => {
     if (targets.length === 0) return;
     const wipe = strokeEraseRef.current;
     if (!wipe) return;
     for (const t of targets) wipe.pendingIds.add(t.id);
-    const st = useCanvasStore.getState();
-    // Strokes that are still VISIBLE: store strokes minus every erased-this-drag
-    // stroke (they are already gone from the tiles in prior frames).
-    const remaining = st.objects.filter(
-      (o): o is Stroke => o.type === 'stroke' && !wipe.pendingIds.has(o.id),
-    );
-    removeStrokesFromTiles(inkTilesRef.current, remaining, targets, wipe.bounds);
+    removeStrokesFromTiles(inkTilesRef.current, wipe.grid, wipe.pendingIds, targets, wipe.bounds);
     dirtyRef.current = true;
     scheduleRender();
   }, [scheduleRender]);
@@ -332,23 +349,23 @@ const InfiniteInkCanvas: React.FC = () => {
     if (!wipe) return;
     const st = useCanvasStore.getState();
     const ink = st.objects.filter(
-      (o): o is Stroke => o.type === 'stroke' && o.compositeOperation !== 'destination-out',
+      (o): o is Stroke =>
+        o.type === 'stroke' && o.compositeOperation !== 'destination-out' && !wipe.pendingIds.has(o.id),
     );
     const half = ERASER_RADIUS / 2;
     for (let i = ink.length - 1; i >= 0; i--) {
       const s = ink[i];
-      let bnd = wipe.bounds.get(s.id);
-      if (!bnd) { bnd = getStrokeBounds(s); wipe.bounds.set(s.id, bnd); }
+      const bnd = wipe.bounds.get(s.id) ?? getStrokeBounds(s);
       if (!boundsIntersectRect(bnd, x - half, y - half, x + half, y + half)) continue;
-      if (hitTestStrokeBySegment(s, x, y, x, y)) { commitStrokeErase([s]); return; }
+      if (hitTestStrokeBySegment(s, x, y, x, y)) { applyVisualErase([s]); return; }
     }
-  }, [commitStrokeErase]);
+  }, [applyVisualErase]);
 
   /**
-   * Run the drag-wipe accumulated since the last frame: hit-test the travelled
-   * segments against every ink stroke (bbox-cached, so O(1) per stroke) and erase
-   * every crossed stroke VISUALLY (local tiles only — the store commit happens
-   * once on pointer-up). Destination-out eraser carves are never hit.
+   * Run the drag-wipe accumulated since the last frame. One spatial-hash query
+   * over the travelled bounding box (expanded by the eraser disc half-width),
+   * then exact segment hit-tests on those strokes only. Erases VISUALLY; the
+   * store commit happens once on pointer-up.
    */
   const flushStrokeWipe = useCallback(() => {
     const wipe = strokeEraseRef.current;
@@ -365,24 +382,25 @@ const InfiniteInkCanvas: React.FC = () => {
     }
     wipe.last = all[all.length - 1];
     if (all.length < 2) return;
-    const st = useCanvasStore.getState();
-    const ink = st.objects.filter(
-      (o): o is Stroke =>
-        o.type === 'stroke' && o.compositeOperation !== 'destination-out' && !wipe.pendingIds.has(o.id),
-    );
-    const targets: Stroke[] = [];
-    const seen = new Set<string>();
     const half = ERASER_RADIUS / 2;
-    for (let i = 1; i < all.length; i++) {
-      const a = all[i - 1], b = all[i];
-      const sx1 = Math.min(a.x, b.x) - half, sy1 = Math.min(a.y, b.y) - half;
-      const sx2 = Math.max(a.x, b.x) + half, sy2 = Math.max(a.y, b.y) + half;
-      for (const s of ink) {
-        if (seen.has(s.id)) continue;
-        let bnd = wipe.bounds.get(s.id);
-        if (!bnd) { bnd = getStrokeBounds(s); wipe.bounds.set(s.id, bnd); }
-        if (!boundsIntersectRect(bnd, sx1, sy1, sx2, sy2)) continue;
-        if (hitTestStrokeBySegment(s, a.x, a.y, b.x, b.y)) { targets.push(s); seen.add(s.id); }
+    let bx1 = Infinity, by1 = Infinity, bx2 = -Infinity, by2 = -Infinity;
+    for (const p of all) {
+      if (p.x < bx1) bx1 = p.x;
+      if (p.y < by1) by1 = p.y;
+      if (p.x > bx2) bx2 = p.x;
+      if (p.y > by2) by2 = p.y;
+    }
+    const candidates: Stroke[] = [];
+    collectGridStrokes(wipe.grid, bx1 - half, by1 - half, bx2 + half, by2 + half, candidates);
+    const targets: Stroke[] = [];
+    for (const s of candidates) {
+      if (wipe.pendingIds.has(s.id)) continue;
+      if (s.compositeOperation === 'destination-out') continue;
+      for (let i = 1; i < all.length; i++) {
+        if (hitTestStrokeBySegment(s, all[i - 1].x, all[i - 1].y, all[i].x, all[i].y)) {
+          targets.push(s);
+          break;
+        }
       }
     }
     applyVisualErase(targets);
@@ -562,8 +580,21 @@ const InfiniteInkCanvas: React.FC = () => {
       canvas.setPointerCapture(e.pointerId);
       strokeEraseRef.current = {
         started: false, raf: 0, last: { x: world.x, y: world.y },
-        pending: [], pendingIds: new Set(), bounds: new Map(),
+        pending: [], pendingIds: new Set(), bounds: new Map(), grid: new Map(),
       };
+      // Hash every stroke once per gesture; erase cost then stays local to the
+      // cells under the cursor no matter how many strokes the page holds.
+      {
+        const w = strokeEraseRef.current!;
+        const stt = useCanvasStore.getState();
+        for (const o of stt.objects) {
+          if (o.type !== 'stroke') continue;
+          const s = o as Stroke;
+          const b = getStrokeBounds(s);
+          w.bounds.set(s.id, b);
+          addStrokeToGrid(w.grid, s, b);
+        }
+      }
       eraseTopmostAt(world.x, world.y);
       return;
     }

@@ -167,24 +167,25 @@ export function rebuildTiles(
 
 /**
  * Whole-stroke eraser live removal: clear the pixels of the removed stroke(s)
- * out of the SHARED ink-tile map without re-rasterizing strokes that do not
- * overlap them. The affected tiles are cleared, then only the remaining strokes
- * whose bounds intersect those tiles are re-stamped IN ORDER (so destination-out
- * eraser carves keep the same z-relationship a full rebuild would produce).
- * Tiles left empty are dropped. Strokes elsewhere are never re-rasterized —
- * that is what keeps a drag-wipe from freezing on large canvases (a full
- * rebuild happens only once per gesture on undo, via renderEpoch).
+ * out of the SHARED ink-tile map. Affected tiles are cleared, then only the
+ * strokes listed in those tiles' wipe-grid cells are re-stamped (the grid was
+ * built once per wipe gesture and cell size == tile size, so this never scans
+ * the whole page — cost scales with the strokes near the removed one, not with
+ * the total stroke count). Destination-out eraser carves are re-stamped in their
+ * original order so the z-relationship matches a full rebuild. Tiles left empty
+ * are dropped.
  */
 export function removeStrokesFromTiles(
   tiles: Map<string, HTMLCanvasElement>,
-  remainingStrokes: Stroke[],
+  grid: Map<string, Stroke[]>,
+  skipIds: Set<string>,
   removed: Stroke[],
   cachedBounds?: Map<string, Bounds>,
 ): void {
   if (removed.length === 0) return;
 
   // Reuse the wipe gesture's per-stroke bounds cache (strokes are immutable
-  // here) so a per-frame removal is O(stroke count), not O(total points).
+  // here) so removal cost is O(strokes near the erased one), not O(total points).
   const boundsOf = (s: Stroke): Bounds => {
     const b = cachedBounds?.get(s.id);
     if (b) return b;
@@ -216,43 +217,27 @@ export function removeStrokesFromTiles(
     ctx.clearRect(0, 0, c.width, c.height);
   }
 
-  // Re-stamp remaining strokes that overlap a cleared tile, restricted to those
-  // tiles, mirroring stampStroke's drawing exactly (ribbon slice or full path).
-  // Clamp each stroke's tile range to the cleared region first so strokes far
-  // from the removed one cost O(1) instead of iterating their whole tile area.
-  let minTx = Infinity, maxTx = -Infinity, minTy = Infinity, maxTy = -Infinity;
-  for (const key of cleared) {
-    const idx = key.indexOf(':');
-    const tx = Number(key.slice(0, idx)), ty = Number(key.slice(idx + 1));
-    if (tx < minTx) minTx = tx;
-    if (tx > maxTx) maxTx = tx;
-    if (ty < minTy) minTy = ty;
-    if (ty > maxTy) maxTy = ty;
-  }
+  // Re-stamp, per cleared tile, only the strokes that the wipe grid lists for
+  // that cell (except the ones erased this gesture). Mirrors stampStroke exactly.
   const stillNeeded = new Set<string>();
-  for (const s of remainingStrokes) {
-    const sb = boundsOf(s);
-    const tx0 = Math.max(Math.floor(sb.minX / TILE), minTx);
-    const tx1 = Math.min(Math.floor(sb.maxX / TILE), maxTx);
-    const ty0 = Math.max(Math.floor(sb.minY / TILE), minTy);
-    const ty1 = Math.min(Math.floor(sb.maxY / TILE), maxTy);
-    if (tx0 > tx1 || ty0 > ty1) continue;
-    const ribbon = prepareInkRibbon(s);
-    for (let ty = ty0; ty <= ty1; ty++) {
-      for (let tx = tx0; tx <= tx1; tx++) {
-        const key = tileKey(tx, ty);
-        if (!cleared.has(key)) continue;
-        const c = tiles.get(key);
-        const ctx = c && c.getContext('2d');
-        if (!c || !ctx) continue;
-        ctx.setTransform(SCALE, 0, 0, SCALE, -tx * TILE * SCALE, -ty * TILE * SCALE);
-        if (ribbon) {
-          drawInkRibbonSlice(ctx, ribbon, tx * TILE, ty * TILE, (tx + 1) * TILE, (ty + 1) * TILE);
-        } else {
-          drawAnnotatedStroke(ctx, s);
-        }
-        stillNeeded.add(key);
+  for (const key of cleared) {
+    const c = tiles.get(key);
+    const ctx = c && c.getContext('2d');
+    if (!c || !ctx) continue;
+    const list = grid.get(key);
+    if (!list) continue;
+    const sep = key.indexOf(':');
+    const tx = Number(key.slice(0, sep)), ty = Number(key.slice(sep + 1));
+    for (const s of list) {
+      if (skipIds.has(s.id)) continue;
+      ctx.setTransform(SCALE, 0, 0, SCALE, -tx * TILE * SCALE, -ty * TILE * SCALE);
+      const ribbon = prepareInkRibbon(s);
+      if (ribbon) {
+        drawInkRibbonSlice(ctx, ribbon, tx * TILE, ty * TILE, (tx + 1) * TILE, (ty + 1) * TILE);
+      } else {
+        drawAnnotatedStroke(ctx, s);
       }
+      stillNeeded.add(key);
     }
   }
   for (const key of cleared) {
