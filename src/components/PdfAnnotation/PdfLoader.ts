@@ -31,6 +31,19 @@ async function getLib(): Promise<PdfJsModule> {
   return pdfjs;
 }
 
+let activeLoadAbort: (() => void) | null = null;
+
+/**
+ * Best-effort abort of the currently in-flight pdf.js document load (if any).
+ * Used by the "中断" button shown after a PDF import has been spinning 10s —
+ * destroys the loading task so a stuck getDocument() rejects and unwinds.
+ */
+export function abortActivePdfLoad(): void {
+  const a = activeLoadAbort;
+  activeLoadAbort = null;
+  if (a) { try { a(); } catch { /* ignore */ } }
+}
+
 /** Parse a PDF from an ArrayBuffer. Returns the pdf.js document + page 1 size. */
 export async function loadPdfDocument(
   buffer: ArrayBuffer,
@@ -38,12 +51,19 @@ export async function loadPdfDocument(
   const lib = await getLib();
   // pdf.js v6+ requires a TypedArray, not a bare ArrayBuffer.
   const loadingTask = lib.getDocument({ data: new Uint8Array(buffer) });
-  const doc = await loadingTask.promise;
-  const page = await doc.getPage(1);
-  const vp = page.getViewport({ scale: 1 });
-  const firstPage: PdfPageSize = { width: vp.width, height: vp.height };
-  page.cleanup();
-  return { doc: doc as unknown as PdfJsDocument, numPages: doc.numPages, firstPage };
+  activeLoadAbort = () => { try { (loadingTask as any).destroy(); } catch { /* ignore */ } };
+  try {
+    const doc = await loadingTask.promise;
+    activeLoadAbort = null;
+    const page = await doc.getPage(1);
+    const vp = page.getViewport({ scale: 1 });
+    const firstPage: PdfPageSize = { width: vp.width, height: vp.height };
+    page.cleanup();
+    return { doc: doc as unknown as PdfJsDocument, numPages: doc.numPages, firstPage };
+  } catch (e) {
+    activeLoadAbort = null;
+    throw e;
+  }
 }
 
 /** Render a single page to the given offscreen canvas at a scale factor. */

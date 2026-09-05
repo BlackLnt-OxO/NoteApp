@@ -45,6 +45,14 @@ const ImportScreen: React.FC = () => {
   const gfs = useNoteStore((s) => s.settings.fontSize);
   const loading = usePdfStore((s) => s.loading);
   const error = usePdfStore((s) => s.error);
+  // After 10s of a stuck first import, show an "中断" button beside the text.
+  const [showAbort, setShowAbort] = useState(false);
+  useEffect(() => {
+    if (!loading) { setShowAbort(false); return; }
+    setShowAbort(false);
+    const t = setTimeout(() => setShowAbort(true), 10000);
+    return () => clearTimeout(t);
+  }, [loading]);
   return (
     <div style={{
       position: 'absolute', inset: 0,
@@ -63,8 +71,22 @@ const ImportScreen: React.FC = () => {
         单页书本式浏览 · 每页独立笔迹 · 支持大型文档<br />导入后出现在左侧 PDF 库中
       </div>
       {loading ? (
-        <div style={{ marginTop: 8, padding: '10px 22px', fontSize: fs(13, gfs), color: 'var(--text-secondary)' }}>
-          正在加载 PDF…
+        <div style={{ marginTop: 8, display: 'flex', alignItems: 'center', gap: 10 }}>
+          <span style={{ padding: '10px 22px', fontSize: fs(13, gfs), color: 'var(--text-secondary)' }}>
+            正在加载 PDF…
+          </span>
+          {showAbort && (
+            <button
+              onClick={() => usePdfStore.getState().abortPdfLoad()}
+              style={{
+                padding: '5px 14px', borderRadius: 6, cursor: 'pointer', fontFamily: 'inherit',
+                fontSize: 12, fontWeight: 600, color: '#fff', border: 'none',
+                background: 'rgba(231,76,60,0.9)',
+              }}
+            >
+              中断
+            </button>
+          )}
         </div>
       ) : (
         <button

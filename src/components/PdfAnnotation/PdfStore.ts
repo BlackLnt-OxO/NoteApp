@@ -32,8 +32,16 @@ import type {
   PdfTool,
   PdfBrushType,
 } from './PdfTypes';
-import { loadPdfDocument, type PdfJsDocument } from './PdfLoader';
+import { loadPdfDocument, type PdfJsDocument, abortActivePdfLoad } from './PdfLoader';
 import { PDF_ANNOTATION_BLUE } from '../../themeColors';
+
+/**
+ * Monotonic load-generation counter. Every loadPdfFromBuffer captures the value
+ * at its start; abortPdfLoad bumps it so a load that resolves AFTER the user hit
+ * "中断" is discarded instead of hijacking the UI. Restarting the app resets the
+ * rare pdf.js hang the user described — this gives an in-app escape hatch.
+ */
+let pdfLoadEpoch = 0;
 
 const MAX_HISTORY = 50;
 /** Hard cap on how many pages can be anchored at once. */
@@ -139,6 +147,8 @@ export interface PdfStore {
     showDotGrid?: boolean;
     sidebarOpen?: boolean;
   }) => Promise<void>;
+  /** Abort a stuck import / resume: destroys the pdf.js load, resets to home. */
+  abortPdfLoad: () => void;
   closePdf: () => void;
   setPageSize: (page: number, size: PdfPageSize) => void;
   setCurrentPage: (page: number) => void;
@@ -277,9 +287,15 @@ export const usePdfStore = create<PdfStore>((set, get) => ({
   // --- document ------------------------------------------------------------
 
   loadPdfFromBuffer: async (buffer: ArrayBuffer, name: string, resume) => {
+    const startEpoch = ++pdfLoadEpoch;
     try {
       set({ loading: true, loadingPhase: '解析', error: null });
       const { doc, numPages, firstPage } = await loadPdfDocument(buffer);
+      // User hit "中断" while pdf.js was still parsing → discard this result.
+      if (pdfLoadEpoch !== startEpoch) {
+        try { (doc as any)?.destroy?.(); } catch { /* ignore */ }
+        return;
+      }
       set({ loading: true, loadingPhase: '渲染页面 1', error: null });
       const lastPage = Math.min(numPages, Math.max(1, resume?.lastPage ?? 1));
       set({
@@ -297,6 +313,7 @@ export const usePdfStore = create<PdfStore>((set, get) => ({
         renderEpoch: 0,
         selectedIds: [],
         editingTextId: null,
+        textCommitReturnTool: null,
         showDotGrid: resume?.showDotGrid ?? false,
         // The thumbnail rail ALWAYS opens when a PDF opens (user preference) —
         // it is not restored from the remembered sidebar state.
@@ -310,9 +327,26 @@ export const usePdfStore = create<PdfStore>((set, get) => ({
         loadingPhase: null,
       });
     } catch (e) {
+      if (pdfLoadEpoch !== startEpoch) {
+        // Aborted — unwind quietly, do NOT surface a scary "failed" banner.
+        set({ loading: false, loadingPhase: null });
+        return;
+      }
       console.error('PDF import failed:', e);
       set({ loading: false, loadingPhase: null, error: e instanceof Error ? e.message : String(e) });
     }
+  },
+
+  abortPdfLoad: () => {
+    // Invalidate any in-flight load AND destroy the live pdf.js task so a stuck
+    // parse/render stops burning CPU.
+    pdfLoadEpoch++;
+    abortActivePdfLoad();
+    const doc = get().pdfDoc as any;
+    if (doc && typeof doc.destroy === 'function') {
+      try { doc.destroy(); } catch { /* ignore */ }
+    }
+    get().reset();
   },
 
   closePdf: () => {

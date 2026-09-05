@@ -57,6 +57,14 @@ const LibraryHome: React.FC = () => {
   const loading = usePdfStore((s) => s.loading);
   const loadingPhase = usePdfStore((s) => s.loadingPhase);
   const openingRef = useRef(false);
+  // After 10s of a stuck import/resume, surface an "中断" button beside the text.
+  const [showAbort, setShowAbort] = useState(false);
+  useEffect(() => {
+    if (!loading) { setShowAbort(false); return; }
+    setShowAbort(false);
+    const t = setTimeout(() => setShowAbort(true), 10000);
+    return () => clearTimeout(t);
+  }, [loading]);
   const [selectedCategory, setSelectedCategory] = useState<string | null>(null); // null = all
   const [cardMenu, setCardMenu] = useState<(MenuState & { item: PdfLibraryItem }) | null>(null);
   const [categoryMenu, setCategoryMenu] = useState<(MenuState & { category: PdfCategory }) | null>(null);
@@ -488,8 +496,22 @@ const LibraryHome: React.FC = () => {
             border: '3px solid rgba(255,255,255,0.25)', borderTopColor: 'var(--accent)',
             animation: 'spin 0.8s linear infinite',
           }} />
-          <div style={{ fontSize: 13, color: '#fff', fontWeight: 600 }}>
-            {loadingPhase ? `正在打开 PDF · ${loadingPhase}…` : '正在打开 PDF…'}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+            <div style={{ fontSize: 13, color: '#fff', fontWeight: 600 }}>
+              {loadingPhase ? `正在打开 PDF · ${loadingPhase}…` : '正在打开 PDF…'}
+            </div>
+            {showAbort && (
+              <button
+                onClick={() => usePdfStore.getState().abortPdfLoad()}
+                style={{
+                  padding: '5px 14px', borderRadius: 6, cursor: 'pointer', fontFamily: 'inherit',
+                  fontSize: 12, fontWeight: 600, color: '#fff', border: 'none',
+                  background: 'rgba(231,76,60,0.9)',
+                }}
+              >
+                中断
+              </button>
+            )}
           </div>
         </div>
       )}
