@@ -196,15 +196,36 @@ const App: React.FC = () => {
       transform: `scale(${uiScale})`,
       transformOrigin: 'top left',
       display: 'flex', flexDirection: 'column',
-      backgroundImage: settings.backgroundImage
-        ? `linear-gradient(rgba(var(--app-overlay),${(1 - settings.backgroundOpacity).toFixed(2)}), rgba(var(--app-overlay),${(1 - settings.backgroundOpacity).toFixed(2)})), url(${settings.backgroundImage})`
-        : 'none',
-      backgroundSize: 'cover', backgroundPosition: 'center',
+      position: 'relative',
       backgroundColor: 'var(--page-bg)',
       borderRadius: '12px', overflow: 'hidden',
     }}>
 
+      {/* Background image via <img>, NOT CSS url(data:) — Chromium drops very large
+          base64 data URLs in CSS, which is why the background never painted even
+          though the renderer held the data. <img> renders any size reliably. */}
+      {settings.backgroundImage && (
+        <img
+          src={settings.backgroundImage}
+          alt=""
+          style={{
+            position: 'absolute', inset: 0, zIndex: 0,
+            width: '100%', height: '100%',
+            objectFit: 'cover', objectPosition: 'center',
+            background: 'var(--page-bg)',
+          }}
+        />
+      )}
+      {/* Dimming overlay on top of the image, driven by background opacity. */}
+      {settings.backgroundImage && (
+        <div style={{
+          position: 'absolute', inset: 0, zIndex: 1, pointerEvents: 'none',
+          background: `rgba(var(--app-overlay), ${(1 - settings.backgroundOpacity).toFixed(2)})`,
+        }} />
+      )}
+
       <div className="title-bar glass" style={{
+        position: 'relative', zIndex: 2,
         borderRadius: '12px 12px 0 0', borderBottom: '1px solid var(--glass-border)',
         height: titleBarH, minHeight: titleBarH,
       }}>
@@ -228,7 +249,7 @@ const App: React.FC = () => {
         </div>
       </div>
 
-      <div style={{ flex: 1, display: 'flex', overflow: 'hidden' }}>
+      <div style={{ position: 'relative', zIndex: 2, flex: 1, display: 'flex', overflow: 'hidden' }}>
         {/* Sidebar lives in a width-clamping container so collapse/expand gets a
             smooth height-free width transition (the content area re-flows each
             frame, and NoteGrid/FlowGrid's left/top transitions animate the cards). */}
@@ -268,14 +289,7 @@ const App: React.FC = () => {
             ) : viewMode === 'pdf' ? (
               <PdfView />
             ) : (
-              <>
-                <div style={{
-                  position: 'absolute', inset: 0,
-                  background: 'var(--glass-bg)', backdropFilter: 'blur(20px)', WebkitBackdropFilter: 'blur(20px)',
-                  borderLeft: '1px solid var(--glass-border)',
-                }} />
-                <NoteGrid />
-              </>
+              <NoteGrid />
             )}
           </div>
 

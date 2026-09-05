@@ -56,6 +56,8 @@ const SettingsDialog: React.FC<SettingsDialogProps> = ({ onClose }) => {
   const [showPicker, setShowPicker] = useState(false);
   const [pickerColor, setPickerColor] = useState('#ffffff');
   const [hoverSwatch, setHoverSwatch] = useState<string | null>(null);
+  const bgFileRef = useRef<HTMLInputElement>(null);
+  const [bgError, setBgError] = useState<string | null>(null);
   const [hoverDelete, setHoverDelete] = useState<string | null>(null);
   const [hoverEdit, setHoverEdit] = useState<string | null>(null);
   const [editingColor, setEditingColor] = useState<string | null>(null);
@@ -92,8 +94,47 @@ const SettingsDialog: React.FC<SettingsDialogProps> = ({ onClose }) => {
     onClose();
   };
 
-  const handlePickBackground = async () => {
-    if (window.electronAPI) { const r = await window.electronAPI.pickBackground(); if (r?.dataUrl) handleChange('backgroundImage', r.dataUrl); }
+  // Read a background image in the renderer (FileReader + downscale), so import
+  // does NOT depend on the main-process file IPC that could silently fail. The
+  // result is embedded as a data URL and previewed here; persisted on 保存.
+  const readBgFile = (file: File) => new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error('读取文件失败'));
+    reader.onload = () => {
+      const img = new Image();
+      img.onerror = () => reject(new Error('不是有效的图片文件'));
+      img.onload = () => {
+        const MAX = 1920; // keep the stored JSON small
+        let w = img.width, h = img.height;
+        if (w > MAX || h > MAX) { const s = Math.min(MAX / w, MAX / h); w = Math.round(w * s); h = Math.round(h * s); }
+        const c = document.createElement('canvas');
+        c.width = w; c.height = h;
+        c.getContext('2d')!.drawImage(img, 0, 0, w, h);
+        const isPhoto = /jpe?g|bmp/i.test(file.type);
+        resolve(c.toDataURL(isPhoto ? 'image/jpeg' : 'image/png', 0.9));
+      };
+      img.src = reader.result as string;
+    };
+    reader.readAsDataURL(file);
+  });
+
+  const handlePickBackground = () => {
+    setBgError(null);
+    bgFileRef.current?.click();
+  };
+
+  const handleBackgroundFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const f = e.target.files?.[0];
+    e.target.value = '';
+    if (!f) return;
+    try {
+      const dataUrl = await readBgFile(f);
+      handleChange('backgroundImage', dataUrl);
+      // Apply live (same as font size / opacity sliders); 保存 then persists it.
+      updateSettings({ backgroundImage: dataUrl });
+    } catch (err) {
+      setBgError(err instanceof Error ? err.message : String(err));
+    }
   };
 
   const changeDataDir = async () => {
@@ -215,12 +256,23 @@ const SettingsDialog: React.FC<SettingsDialogProps> = ({ onClose }) => {
 
         <div style={sectionStyle}>
           <label style={labelStyle(gfs)}>背景图片</label>
-          <div style={{ display: 'flex', gap: fs(6, gfs), alignItems: 'center' }}>
+          <input ref={bgFileRef} type="file" accept="image/*" style={{ display: 'none' }} onChange={handleBackgroundFile} />
+          <div style={{ display: 'flex', gap: fs(6, gfs), alignItems: 'center', marginBottom: fs(6, gfs) }}>
             <button className="glass-btn" onClick={handlePickBackground} style={{ fontSize: fs(12, gfs), padding: `${fs(6, gfs)} ${fs(12, gfs)}` }}>选择图片</button>
             {localSettings.backgroundImage && (
-              <button className="glass-btn" onClick={() => handleChange('backgroundImage', null)} style={{ color: 'var(--danger)', fontSize: fs(12, gfs) }}>清除</button>
+              <>
+                <button className="glass-btn" onClick={() => { handleChange('backgroundImage', null); updateSettings({ backgroundImage: null }); }} style={{ color: 'var(--danger)', fontSize: fs(12, gfs) }}>清除</button>
+                <span style={{ fontSize: fs(11, gfs), color: 'var(--text-secondary)' }}>已应用（点「保存」以持久化）</span>
+              </>
             )}
           </div>
+          {localSettings.backgroundImage && (
+            <img src={localSettings.backgroundImage} alt="背景预览"
+              style={{ width: '100%', maxHeight: 72, objectFit: 'cover', borderRadius: 6, border: '1px solid var(--glass-border)' }} />
+          )}
+          {bgError && (
+            <div style={{ marginTop: 6, fontSize: fs(11, gfs), color: '#ff8a8a' }}>背景图导入失败：{bgError}</div>
+          )}
         </div>
 
         <div style={sectionStyle}>
