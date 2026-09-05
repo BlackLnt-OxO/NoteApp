@@ -8,7 +8,7 @@ import {
 import { drawAnnotatedStroke } from '../PdfAnnotation/PdfBrushRenderers';
 import { screenToWorld, clampZoom, zoomAt, ERASER_RADIUS } from './constants';
 import {
-  stampStroke, eraseSegTiles, eraseDotTiles, drawVisibleTiles, rebuildTiles,
+  stampStroke, eraseSegTiles, eraseDotTiles, drawVisibleTiles, rebuildTiles, removeStrokesFromTiles,
 } from './InkTiles';
 import TextNode from './TextNode';
 import ImageObject from './ImageObject';
@@ -289,8 +289,17 @@ const InfiniteInkCanvas: React.FC = () => {
       st.beginEraseGesture();
       wipe.started = true;
     }
+    // Remove from the vector list cheaply (no renderEpoch bump → no page-wide
+    // tile rebuild), then clear just these strokes out of the ink tiles so the
+    // wipe stays instant even on large canvases.
     st.eraseStrokesLive(ids);
-  }, []);
+    const remaining = useCanvasStore.getState().objects.filter(
+      (o): o is Stroke => o.type === 'stroke',
+    );
+    removeStrokesFromTiles(inkTilesRef.current, remaining, targets);
+    dirtyRef.current = true;
+    scheduleRender();
+  }, [scheduleRender]);
 
   useEffect(() => {
     dirtyRef.current = true;

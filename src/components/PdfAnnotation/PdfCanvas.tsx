@@ -146,6 +146,70 @@ function stampStroke(tiles: Map<string, HTMLCanvasElement>, stroke: PdfStroke): 
   }
 }
 
+/**
+ * Whole-stroke eraser live removal: clear the removed stroke(s) out of the
+ * shared ink-tile map WITHOUT a page-wide rebuild. Affected tiles are cleared,
+ * then only remaining strokes overlapping them are re-stamped in order (so
+ * destination-out eraser carves keep the same z-relationship a full rebuild
+ * would produce). Empty tiles are dropped; other tiles are never re-rasterized.
+ */
+function removeStrokesFromInk(
+  tiles: Map<string, HTMLCanvasElement>,
+  remainingStrokes: PdfStroke[],
+  removed: PdfStroke[],
+): void {
+  if (removed.length === 0) return;
+
+  const cleared = new Set<string>();
+  for (const r of removed) {
+    const b = getStrokeBounds(r);
+    const tx0 = Math.floor(b.minX / TILE), tx1 = Math.floor(b.maxX / TILE);
+    const ty0 = Math.floor(b.minY / TILE), ty1 = Math.floor(b.maxY / TILE);
+    for (let ty = ty0; ty <= ty1; ty++) {
+      for (let tx = tx0; tx <= tx1; tx++) {
+        const key = tileKey(tx, ty);
+        if (tiles.has(key)) cleared.add(key);
+      }
+    }
+  }
+  if (cleared.size === 0) return;
+
+  for (const key of cleared) {
+    const c = tiles.get(key);
+    const ctx = c && c.getContext('2d');
+    if (!c || !ctx) continue;
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.clearRect(0, 0, c.width, c.height);
+  }
+
+  const stillNeeded = new Set<string>();
+  for (const s of remainingStrokes) {
+    const sb = getStrokeBounds(s);
+    const tx0 = Math.floor(sb.minX / TILE), tx1 = Math.floor(sb.maxX / TILE);
+    const ty0 = Math.floor(sb.minY / TILE), ty1 = Math.floor(sb.maxY / TILE);
+    const ribbon = prepareInkRibbon(s);
+    for (let ty = ty0; ty <= ty1; ty++) {
+      for (let tx = tx0; tx <= tx1; tx++) {
+        const key = tileKey(tx, ty);
+        if (!cleared.has(key)) continue;
+        const c = tiles.get(key);
+        const ctx = c && c.getContext('2d');
+        if (!c || !ctx) continue;
+        ctx.setTransform(SCALE, 0, 0, SCALE, -tx * TILE * SCALE, -ty * TILE * SCALE);
+        if (ribbon) {
+          drawInkRibbonSlice(ctx, ribbon, tx * TILE, ty * TILE, (tx + 1) * TILE, (ty + 1) * TILE);
+        } else {
+          drawAnnotatedStroke(ctx, s);
+        }
+        stillNeeded.add(key);
+      }
+    }
+  }
+  for (const key of cleared) {
+    if (!stillNeeded.has(key)) tiles.delete(key);
+  }
+}
+
 /** Erase a segment (destination-out) across the tiles it touches. */
 function eraseSegTiles(tiles: Map<string, HTMLCanvasElement>, x1: number, y1: number, x2: number, y2: number, size: number): void {
   const pad = size / 2 + 2;
@@ -672,8 +736,15 @@ const PdfCanvas: React.FC = () => {
       st.beginStrokeErase(wipe.page);
       wipe.started = true;
     }
+    // Remove from the vector list cheaply (no renderEpoch bump → no page-wide
+    // tile rebuild), then clear just these strokes out of the ink tiles so the
+    // wipe stays instant even on dense pages.
     st.eraseStrokesLive(wipe.page, ids);
-  }, []);
+    const remaining = strokesOnly(usePdfStore.getState().items[wipe.page] ?? []);
+    removeStrokesFromInk(inkTilesRef.current, remaining, targets);
+    dirtyRef.current = true;
+    scheduleRender();
+  }, [scheduleRender]);
 
   // ---- Pointer Down -----------------------------------------------------------
 

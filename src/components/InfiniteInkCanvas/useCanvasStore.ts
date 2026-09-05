@@ -85,8 +85,10 @@ export interface CanvasStore {
   /** Whole-stroke eraser: snapshot history ONCE per wipe gesture (undo restores
    *  every stroke removed by one drag in a single step). */
   beginEraseGesture: () => void;
-  /** Remove whole ink strokes WITHOUT recording history (live wipe feedback).
-   *  Structural → bumps renderEpoch so the canvas rebuilds its ink tiles. */
+  /** Remove whole ink strokes WITHOUT recording history and WITHOUT bumping
+   *  renderEpoch — during a drag wipe the canvas clears just the erased strokes'
+   *  pixels out of its ink tiles locally (no page-wide rebuild per stroke). The
+   *  full rebuild happens once when the gesture is undone. */
   eraseStrokesLive: (ids: string[]) => void;
   /** Batch-replace stroke points (drag-move drop). Structural → rebuilds tiles. */
   commitStrokesPoints: (entries: { id: string; points: StrokePoint[] }[]) => void;
@@ -269,11 +271,12 @@ export const useCanvasStore = create<CanvasStore>((set, get) => ({
     const cur = get().objects;
     const next = cur.filter((o) => !(o.type === 'stroke' && idSet.has(o.id)));
     if (next.length === cur.length) return;
+    // No renderEpoch bump: the canvas clears the erased strokes from its ink
+    // tiles locally so a wipe never triggers a page-wide rebuild per stroke.
     set((s) => ({
       objects: next,
       redoStack: [],
       selectedIds: s.selectedIds.filter((id) => !idSet.has(id)),
-      renderEpoch: get().renderEpoch + 1,
     }));
   },
 

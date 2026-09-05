@@ -327,7 +327,7 @@ describe('MAX_HISTORY', () => {
 });
 
 describe('whole-stroke eraser (beginStrokeErase + eraseStrokesLive)', () => {
-  it('removes ink strokes live and bumps renderEpoch', () => {
+  it('removes ink strokes live WITHOUT a full-rebuild epoch bump', () => {
     usePdfStore.getState().commitStroke(1, makeStroke('a'));
     usePdfStore.getState().commitStroke(1, makeStroke('b'));
     const before = usePdfStore.getState().renderEpoch;
@@ -335,7 +335,9 @@ describe('whole-stroke eraser (beginStrokeErase + eraseStrokesLive)', () => {
     usePdfStore.getState().eraseStrokesLive(1, ['a', 'b']);
     const s = usePdfStore.getState();
     expect(s.items[1]).toHaveLength(0);
-    expect(s.renderEpoch).toBeGreaterThan(before);
+    // renderEpoch stays put: during a wipe PdfCanvas clears the erased strokes
+    // out of its ink tiles locally, not via a page-wide rebuild.
+    expect(s.renderEpoch).toBe(before);
     expect(s.dirty).toBe(true);
   });
 

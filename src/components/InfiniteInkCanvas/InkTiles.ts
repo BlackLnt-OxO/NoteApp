@@ -163,3 +163,73 @@ export function rebuildTiles(
   }
   return tiles;
 }
+
+/**
+ * Whole-stroke eraser live removal: clear the pixels of the removed stroke(s)
+ * out of the SHARED ink-tile map without re-rasterizing strokes that do not
+ * overlap them. The affected tiles are cleared, then only the remaining strokes
+ * whose bounds intersect those tiles are re-stamped IN ORDER (so destination-out
+ * eraser carves keep the same z-relationship a full rebuild would produce).
+ * Tiles left empty are dropped. Strokes elsewhere are never re-rasterized —
+ * that is what keeps a drag-wipe from freezing on large canvases (a full
+ * rebuild happens only once per gesture on undo, via renderEpoch).
+ */
+export function removeStrokesFromTiles(
+  tiles: Map<string, HTMLCanvasElement>,
+  remainingStrokes: Stroke[],
+  removed: Stroke[],
+): void {
+  if (removed.length === 0) return;
+
+  // Tiles the removed strokes touch = the only tiles whose pixels can change.
+  const cleared = new Set<string>();
+  for (const r of removed) {
+    const b = getStrokeBounds(r);
+    const tx0 = Math.floor(b.minX / TILE), tx1 = Math.floor(b.maxX / TILE);
+    const ty0 = Math.floor(b.minY / TILE), ty1 = Math.floor(b.maxY / TILE);
+    for (let ty = ty0; ty <= ty1; ty++) {
+      for (let tx = tx0; tx <= tx1; tx++) {
+        const key = tileKey(tx, ty);
+        if (tiles.has(key)) cleared.add(key);
+      }
+    }
+  }
+  if (cleared.size === 0) return;
+
+  for (const key of cleared) {
+    const c = tiles.get(key);
+    const ctx = c && c.getContext('2d');
+    if (!c || !ctx) continue;
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.clearRect(0, 0, c.width, c.height);
+  }
+
+  // Re-stamp remaining strokes that overlap a cleared tile, restricted to those
+  // tiles, mirroring stampStroke's drawing exactly (ribbon slice or full path).
+  const stillNeeded = new Set<string>();
+  for (const s of remainingStrokes) {
+    const sb = getStrokeBounds(s);
+    const tx0 = Math.floor(sb.minX / TILE), tx1 = Math.floor(sb.maxX / TILE);
+    const ty0 = Math.floor(sb.minY / TILE), ty1 = Math.floor(sb.maxY / TILE);
+    const ribbon = prepareInkRibbon(s);
+    for (let ty = ty0; ty <= ty1; ty++) {
+      for (let tx = tx0; tx <= tx1; tx++) {
+        const key = tileKey(tx, ty);
+        if (!cleared.has(key)) continue;
+        const c = tiles.get(key);
+        const ctx = c && c.getContext('2d');
+        if (!c || !ctx) continue;
+        ctx.setTransform(SCALE, 0, 0, SCALE, -tx * TILE * SCALE, -ty * TILE * SCALE);
+        if (ribbon) {
+          drawInkRibbonSlice(ctx, ribbon, tx * TILE, ty * TILE, (tx + 1) * TILE, (ty + 1) * TILE);
+        } else {
+          drawAnnotatedStroke(ctx, s);
+        }
+        stillNeeded.add(key);
+      }
+    }
+  }
+  for (const key of cleared) {
+    if (!stillNeeded.has(key)) tiles.delete(key);
+  }
+}

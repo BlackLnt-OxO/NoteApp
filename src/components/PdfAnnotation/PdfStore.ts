@@ -218,7 +218,10 @@ export interface PdfStore {
   removeStroke: (page: number, id: string) => void;
   /** Whole-stroke eraser: one history snapshot per wipe gesture (page-scoped). */
   beginStrokeErase: (page: number) => void;
-  /** Remove whole ink strokes WITHOUT a history entry (live wipe). Structural. */
+  /** Remove whole ink strokes WITHOUT a history entry and WITHOUT bumping
+   *  renderEpoch — during a drag wipe PdfCanvas clears just the erased strokes'
+   *  pixels out of its ink tiles locally, so no page-wide rebuild happens per
+   *  stroke. The full rebuild runs once when the gesture is undone. */
   eraseStrokesLive: (page: number, ids: string[]) => void;
   /** Records a history entry without changing anything (used at drag start). */
   pushHistory: (page: number) => void;
@@ -636,11 +639,12 @@ export const usePdfStore = create<PdfStore>((set, get) => ({
     const cur = get().items[page] ?? [];
     const next = cur.filter((o) => !(o.type === 'stroke' && idSet.has(o.id)));
     if (next.length === cur.length) return;
+    // No renderEpoch bump: PdfCanvas clears the erased strokes from its ink
+    // tiles locally so a wipe never triggers a page-wide rebuild per stroke.
     set((s) => ({
       items: { ...s.items, [page]: next },
       redoStack: { ...s.redoStack, [page]: [] },
       selectedIds: s.selectedIds.filter((x) => !idSet.has(x)),
-      renderEpoch: get().renderEpoch + 1,
       dirty: true,
     }));
   },

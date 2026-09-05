@@ -234,7 +234,7 @@ describe('useCanvasStore', () => {
   });
 
   describe('whole-stroke eraser (beginEraseGesture + eraseStrokesLive)', () => {
-    it('removes the target strokes live and bumps renderEpoch', () => {
+    it('removes the target strokes live WITHOUT a full-rebuild epoch bump', () => {
       useCanvasStore.getState().addStroke(makeStroke('a'));
       useCanvasStore.getState().addStroke(makeStroke('b'));
       const before = useCanvasStore.getState().renderEpoch;
@@ -242,7 +242,9 @@ describe('useCanvasStore', () => {
       useCanvasStore.getState().eraseStrokesLive(['a', 'b']);
       const s = useCanvasStore.getState();
       expect(s.objects).toHaveLength(0);
-      expect(s.renderEpoch).toBeGreaterThan(before);
+      // renderEpoch stays put: during a wipe the canvas clears the erased
+      // strokes out of its ink tiles locally, not via a page-wide rebuild.
+      expect(s.renderEpoch).toBe(before);
     });
 
     it('keeps non-target objects (text/images/other strokes)', () => {
