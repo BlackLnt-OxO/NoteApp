@@ -139,6 +139,14 @@ function createMainWindow() {
 
   mainWindow.once('ready-to-show', () => {
     mainWindow.show();
+    // TEMP(eraser-perf): auto-open DevTools shortly after the window is visible
+    // so the user can copy the [eraser:canvas|pdf] timing lines from a wipe.
+    // Remove after the numbers have been captured.
+    setTimeout(() => {
+      if (isDev && mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.openDevTools({ mode: 'detach' });
+      }
+    }, 800);
   });
 
   // Save bounds on move/resize
@@ -183,11 +191,13 @@ function createMainWindow() {
     mainWindow.setBackgroundColor('#00000000');
   });
 
-  // TEMP(eraser-perf): auto-open DevTools once per dev launch so the user can
-  // copy the [eraser:canvas|pdf] timing lines from a stroke-dense wipe. Remove
-  // after the numbers have been captured.
-  mainWindow.webContents.once('did-finish-load', () => {
-    if (isDev) mainWindow.webContents.openDevTools({ mode: 'detach' });
+  // TEMP(eraser-perf): F12 fallback to toggle DevTools if the auto-open above
+  // didn't show. Remove together with the auto-open after data is captured.
+  mainWindow.webContents.on('before-input-event', (event, input) => {
+    if (input.type === 'keyDown' && (input.key === 'F12' || input.key === 'f12')) {
+      event.preventDefault();
+      if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.toggleDevTools();
+    }
   });
 }
 
