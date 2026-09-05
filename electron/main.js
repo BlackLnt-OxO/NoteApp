@@ -182,6 +182,13 @@ function createMainWindow() {
   mainWindow.on('ready-to-show', () => {
     mainWindow.setBackgroundColor('#00000000');
   });
+
+  // TEMP(eraser-perf): auto-open DevTools once per dev launch so the user can
+  // copy the [eraser:canvas|pdf] timing lines from a stroke-dense wipe. Remove
+  // after the numbers have been captured.
+  mainWindow.webContents.once('did-finish-load', () => {
+    if (isDev) mainWindow.webContents.openDevTools({ mode: 'detach' });
+  });
 }
 
 function saveWindowBounds(key, bounds) {
