@@ -111,6 +111,10 @@ export interface PdfStore {
   insertMode: PdfInsertMode;
   /** Id of the text card currently open in its editor (null = none). */
   editingTextId: string | null;
+  /** Tool to restore when the open text editor commits / cancels (null = keep).
+   *  'pen' when placing a NEW node via insert; the active tool when re-opening an
+   *  existing card. Returned brush subtype is preserved (fountain stays fountain). */
+  textCommitReturnTool: PdfTool | null;
   /** One-shot raster dropped from an external screenshot, centered on viewport. */
   pendingImageInsert: { dataUrl: string; width: number; height: number } | null;
 
@@ -163,6 +167,7 @@ export interface PdfStore {
   // Insert-object actions (page-scoped; text/image are DOM-only, no epoch bump)
   setInsertMode: (m: PdfInsertMode) => void;
   setEditingTextId: (id: string | null) => void;
+  setTextCommitReturnTool: (t: PdfTool | null) => void;
   /** Place an empty text card at (x,y); opens it in its editor immediately. */
   addTextNode: (page: number, x: number, y: number) => string;
   /** Merge content/geometry into a text card. Caller pushes history first. */
@@ -259,6 +264,7 @@ export const usePdfStore = create<PdfStore>((set, get) => ({
 
   insertMode: 'text',
   editingTextId: null,
+  textCommitReturnTool: null,
   pendingImageInsert: null,
 
   camera: { x: 0, y: 0, zoom: 1 },
@@ -408,6 +414,8 @@ export const usePdfStore = create<PdfStore>((set, get) => ({
 
   setEditingTextId: (id) => set({ editingTextId: id }),
 
+  setTextCommitReturnTool: (t) => set({ textCommitReturnTool: t }),
+
   addTextNode: (page, x, y) => {
     const id = makePdfId('text');
     const node: PdfTextObject = {
@@ -430,6 +438,7 @@ export const usePdfStore = create<PdfStore>((set, get) => ({
       history: pushHistoryEntry(s.history, page, cur),
       redoStack: { ...s.redoStack, [page]: [] },
       editingTextId: id,
+      textCommitReturnTool: 'pen',
       dirty: true,
     }));
     return id;
@@ -747,6 +756,7 @@ export const usePdfStore = create<PdfStore>((set, get) => ({
       showDotGrid: false,
       insertMode: 'text',
       editingTextId: null,
+      textCommitReturnTool: null,
       pendingImageInsert: null,
       camera: { x: 0, y: 0, zoom: 1 },
       sidebarOpen: true,

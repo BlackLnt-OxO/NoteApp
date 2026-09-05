@@ -47,9 +47,13 @@ const TextObject: React.FC<Props> = ({ node, camera, interactive }) => {
   const fontSize = Math.max(10, node.fontSize * camera.zoom) / uiScale;
 
   const openEdit = useCallback(() => {
+    // Remember the tool in use so closing the editor returns to it (re-opening an
+    // existing card must NOT yank the user into the pen tool).
+    const curTool = useCanvasStore.getState().activeTool;
     // Commit any currently-active text edit before switching target.
     const ae = document.activeElement;
     if (ae && ae instanceof HTMLTextAreaElement) ae.blur();
+    useCanvasStore.getState().setTextCommitReturnTool(curTool);
     setMenu(null);
     setDragD(null);
     setRzW(null);

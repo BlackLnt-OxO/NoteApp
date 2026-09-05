@@ -32,6 +32,10 @@ export interface CanvasStore {
   brushSettings: BrushSettings;
   showDotGrid: boolean;
   editingTextId: string | null;
+  /** Tool to restore when the open text editor commits / cancels (null = keep).
+   *  Set to 'pen' when placing a NEW text node (insert), or to the active tool
+   *  when re-opening an existing card so the user isn't yanked out of it. */
+  textCommitReturnTool: ToolType | null;
   selectedIds: string[];
   selectionMode: SelectionMode;
   eraserMode: 'free' | 'stroke';
@@ -66,6 +70,7 @@ export interface CanvasStore {
   setBrushSettings: (partial: Partial<BrushSettings>) => void;
   setShowDotGrid: (show: boolean) => void;
   setEditingTextId: (id: string | null) => void;
+  setTextCommitReturnTool: (t: ToolType | null) => void;
   setSelectedIds: (ids: string[]) => void;
   toggleSelected: (id: string) => void;
   setSelectionMode: (mode: SelectionMode) => void;
@@ -102,6 +107,7 @@ export const useCanvasStore = create<CanvasStore>((set, get) => ({
   brushSettings: { ...DEFAULT_BRUSH },
   showDotGrid: true,
   editingTextId: null,
+  textCommitReturnTool: null,
   selectedIds: [],
   selectionMode: 'box',
   eraserMode: 'free',
@@ -174,7 +180,7 @@ export const useCanvasStore = create<CanvasStore>((set, get) => ({
       updatedAt: Date.now(),
     };
     get().pushHistory();
-    set((s) => ({ objects: [...s.objects, node], editingTextId: id }));
+    set((s) => ({ objects: [...s.objects, node], editingTextId: id, textCommitReturnTool: 'pen' }));
     return id;
   },
 
@@ -275,6 +281,8 @@ export const useCanvasStore = create<CanvasStore>((set, get) => ({
 
   setEditingTextId: (id) => set({ editingTextId: id }),
 
+  setTextCommitReturnTool: (t) => set({ textCommitReturnTool: t }),
+
   setSelectedIds: (ids) => set({ selectedIds: ids }),
 
   toggleSelected: (id) =>
@@ -321,6 +329,7 @@ export const useCanvasStore = create<CanvasStore>((set, get) => ({
         redoStack: [],
         selectedIds: [],
         editingTextId: null,
+        textCommitReturnTool: null,
         renderEpoch: get().renderEpoch + 1,
       });
     } catch (e) {

@@ -28,6 +28,16 @@ const PdfTextNode: React.FC<Props> = ({ node, page, camera }) => {
   const pushHistory = usePdfStore((s) => s.pushHistory);
   const [content, setContent] = useState(node.content);
 
+  // After the editor closes, restore the tool saved when it was opened (a freshly
+  // placed node → back to 'pen' with its brush subtype; a re-opened card → the tool
+  // the user was using). Consumed once so later clicks never spawn another box.
+  const finishReturn = useCallback(() => {
+    const st = usePdfStore.getState();
+    const tool = st.textCommitReturnTool;
+    st.setTextCommitReturnTool(null);
+    if (tool) st.setActiveTool(tool);
+  }, []);
+
   // worldToScreen returns VISUAL px; App is CSS-scaled by uiScale → /uiScale.
   const screen = worldToScreen(node.x, node.y, camera);
   const screenX = screen.x / uiScale;
@@ -50,7 +60,8 @@ const PdfTextNode: React.FC<Props> = ({ node, page, camera }) => {
       height: Math.max(20, (cssH * uiScale) / camera.zoom),
     });
     setEditingTextId(null);
-  }, [content, node.id, page, camera.zoom, uiScale, updateTextNode, pushHistory, setEditingTextId]);
+    finishReturn();
+  }, [content, node.id, page, camera.zoom, uiScale, updateTextNode, pushHistory, setEditingTextId, finishReturn]);
 
   // Escape = explicit cancel: only deletes the node when it is still empty.
   const cancel = useCallback(() => {
@@ -58,10 +69,11 @@ const PdfTextNode: React.FC<Props> = ({ node, page, camera }) => {
     if (content.trim() === '') {
       finishedRef.current = true;
       deleteTextNode(page, node.id); // clears editingTextId itself
+      finishReturn();
     } else {
       commit();
     }
-  }, [content, commit, deleteTextNode, page, node.id]);
+  }, [content, commit, deleteTextNode, page, node.id, finishReturn]);
 
   // Auto-focus on mount + reset height to fit content.
   useEffect(() => {

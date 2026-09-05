@@ -659,12 +659,18 @@ const PdfCanvas: React.FC = () => {
     // image mode remembers the point and opens the file picker.
     if (st.activeTool === 'insert') {
       if (st.insertMode === 'image') {
+        // Commit any open text editor first (its own finishReturn restores the tool).
+        const ae = document.activeElement;
+        if (ae && ae instanceof HTMLTextAreaElement) ae.blur();
         insertWorldRef.current = world;
         fileInputRef.current?.click();
       } else {
-        // Commit any currently-open text editor before placing a new one.
+        // If a text editor is already open, this click just FINISHES that box
+        // (blur → commit → returns to the pen tool) — never spawn another one.
+        const hadEditor = st.editingTextId != null;
         const ae = document.activeElement;
         if (ae && ae instanceof HTMLTextAreaElement) ae.blur();
+        if (hadEditor) return;
         st.addTextNode(st.currentPage, world.x, world.y);
       }
       return;

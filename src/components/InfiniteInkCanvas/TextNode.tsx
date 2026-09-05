@@ -16,6 +16,16 @@ const TextNode: React.FC<Props> = ({ node, camera }) => {
   const uiScale = useNoteStore((s) => s.uiScale);
   const [content, setContent] = useState(node.content);
 
+  // After the editor closes, restore the tool saved when it was opened (a freshly
+  // placed node → back to 'pen' with its brush subtype; a re-opened card → the tool
+  // the user was using). Consumed once so later clicks never spawn another box.
+  const finishReturn = useCallback(() => {
+    const st = useCanvasStore.getState();
+    const tool = st.textCommitReturnTool;
+    st.setTextCommitReturnTool(null);
+    if (tool) st.setActiveTool(tool);
+  }, []);
+
   // Convert world → screen position. The box keeps the node's (world) width so
   // re-editing a resized box wraps the same as its committed card. worldToScreen
   // returns VISUAL px; App is CSS-scaled by uiScale → divide geometry by uiScale.
@@ -43,7 +53,8 @@ const TextNode: React.FC<Props> = ({ node, camera }) => {
       height: Math.max(20, (cssH * uiScale) / camera.zoom),
     });
     setEditingTextId(null);
-  }, [content, node.id, camera.zoom, uiScale, updateTextNode, pushHistory, setEditingTextId]);
+    finishReturn();
+  }, [content, node.id, camera.zoom, uiScale, updateTextNode, pushHistory, setEditingTextId, finishReturn]);
 
   // Escape = explicit cancel: only deletes the node when it is still empty.
   const cancel = useCallback(() => {
@@ -51,10 +62,11 @@ const TextNode: React.FC<Props> = ({ node, camera }) => {
     if (content.trim() === '') {
       finishedRef.current = true;
       deleteTextNode(node.id); // clears editingTextId itself
+      finishReturn();
     } else {
       commit();
     }
-  }, [content, commit, deleteTextNode]);
+  }, [content, commit, deleteTextNode, finishReturn]);
 
   // Auto-focus on mount + reset height to fit content.
   useEffect(() => {

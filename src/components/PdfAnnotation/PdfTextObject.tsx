@@ -49,8 +49,12 @@ const PdfTextObject: React.FC<Props> = ({ node, page, camera, interactive }) => 
   const fontSize = Math.max(10, node.fontSize * camera.zoom) / uiScale;
 
   const openEdit = useCallback(() => {
+    // Remember the tool in use so closing the editor returns to it (re-opening an
+    // existing card must NOT yank the user into the pen tool).
+    const curTool = usePdfStore.getState().activeTool;
     const ae = document.activeElement;
     if (ae && ae instanceof HTMLTextAreaElement) ae.blur();
+    usePdfStore.getState().setTextCommitReturnTool(curTool);
     setMenu(null);
     setDragD(null);
     setRzW(null);
