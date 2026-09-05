@@ -538,11 +538,15 @@ export interface InkRibbon {
 
 /** Rasterize a pen stroke's final ribbon ONCE (smoothing + width + resample) so
  *  tiles can be stamped from slices instead of re-processing + re-filling the WHOLE
- *  stroke into every tile it touches. Returns null for eraser / pencil — eraser
- *  keeps PdfEngine.drawStrokePath, and pencil grain is not sliceable, so those
- *  stay on the whole-stroke path. */
+ *  stroke into every tile it touches.
+ *
+ *  Eraser carves (destination-out, uniform width) are ribbonized TOO: when the
+ *  whole-stroke eraser clears a tile and re-stamps the strokes overlapping it,
+ *  drawing a carve's whole path into every tile is what made a dense page hitch
+ *  (~36ms per erase). A uniform-width ribbon makes carves sliceable like marker/
+ *  fountain. Pencil grain is not sliceable, so pencil stays on the whole-stroke
+ *  path. */
 export function prepareInkRibbon(stroke: PdfStroke): InkRibbon | null {
-  if (stroke.compositeOperation === 'destination-out') return null;
   if (stroke.style === 'pencil') return null;
 
   const pts = preparePoints(stroke);
@@ -550,7 +554,14 @@ export function prepareInkRibbon(stroke: PdfStroke): InkRibbon | null {
 
   let ribbon: ResampleOut;
   let alpha: number;
-  if (stroke.style === 'fountain') {
+  if (stroke.compositeOperation === 'destination-out') {
+    // Uniform width == eraser radius (matches PdfEngine.drawStrokePath's eraser
+    // width = stroke.size). Constant widths → smoothing is a no-op.
+    const widths = new Array<number>(pts.length).fill(stroke.size);
+    const resampled = resampleForRibbon(pts, widths, resampleSpacing(widths));
+    ribbon = { points: resampled.points, widths: smoothWidths(resampled.widths) };
+    alpha = stroke.opacity; // eraser carves commit with opacity 1
+  } else if (stroke.style === 'fountain') {
     const inkSpeed = stroke.inkSpeed ?? 0.5;
     ribbon = buildRibbonData(pts, (fp) => computeFountainWidths(fp, stroke.size, inkSpeed));
     alpha = markerStrokeAlpha(stroke.opacity, averagePressure(pts), stroke.pressureOpacity === true);
