@@ -22,6 +22,7 @@ import {
   drawEraserSegment,
   drawEraserDot,
   getStrokeBounds,
+  type Bounds,
 } from '../PdfAnnotation/PdfEngine';
 
 const TILE = 512; // world units per tile
@@ -178,13 +179,24 @@ export function removeStrokesFromTiles(
   tiles: Map<string, HTMLCanvasElement>,
   remainingStrokes: Stroke[],
   removed: Stroke[],
+  cachedBounds?: Map<string, Bounds>,
 ): void {
   if (removed.length === 0) return;
+
+  // Reuse the wipe gesture's per-stroke bounds cache (strokes are immutable
+  // here) so a per-frame removal is O(stroke count), not O(total points).
+  const boundsOf = (s: Stroke): Bounds => {
+    const b = cachedBounds?.get(s.id);
+    if (b) return b;
+    const nb = getStrokeBounds(s);
+    cachedBounds?.set(s.id, nb);
+    return nb;
+  };
 
   // Tiles the removed strokes touch = the only tiles whose pixels can change.
   const cleared = new Set<string>();
   for (const r of removed) {
-    const b = getStrokeBounds(r);
+    const b = boundsOf(r);
     const tx0 = Math.floor(b.minX / TILE), tx1 = Math.floor(b.maxX / TILE);
     const ty0 = Math.floor(b.minY / TILE), ty1 = Math.floor(b.maxY / TILE);
     for (let ty = ty0; ty <= ty1; ty++) {
@@ -206,11 +218,25 @@ export function removeStrokesFromTiles(
 
   // Re-stamp remaining strokes that overlap a cleared tile, restricted to those
   // tiles, mirroring stampStroke's drawing exactly (ribbon slice or full path).
+  // Clamp each stroke's tile range to the cleared region first so strokes far
+  // from the removed one cost O(1) instead of iterating their whole tile area.
+  let minTx = Infinity, maxTx = -Infinity, minTy = Infinity, maxTy = -Infinity;
+  for (const key of cleared) {
+    const idx = key.indexOf(':');
+    const tx = Number(key.slice(0, idx)), ty = Number(key.slice(idx + 1));
+    if (tx < minTx) minTx = tx;
+    if (tx > maxTx) maxTx = tx;
+    if (ty < minTy) minTy = ty;
+    if (ty > maxTy) maxTy = ty;
+  }
   const stillNeeded = new Set<string>();
   for (const s of remainingStrokes) {
-    const sb = getStrokeBounds(s);
-    const tx0 = Math.floor(sb.minX / TILE), tx1 = Math.floor(sb.maxX / TILE);
-    const ty0 = Math.floor(sb.minY / TILE), ty1 = Math.floor(sb.maxY / TILE);
+    const sb = boundsOf(s);
+    const tx0 = Math.max(Math.floor(sb.minX / TILE), minTx);
+    const tx1 = Math.min(Math.floor(sb.maxX / TILE), maxTx);
+    const ty0 = Math.max(Math.floor(sb.minY / TILE), minTy);
+    const ty1 = Math.min(Math.floor(sb.maxY / TILE), maxTy);
+    if (tx0 > tx1 || ty0 > ty1) continue;
     const ribbon = prepareInkRibbon(s);
     for (let ty = ty0; ty <= ty1; ty++) {
       for (let tx = tx0; tx <= tx1; tx++) {

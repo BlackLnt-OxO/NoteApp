@@ -96,6 +96,10 @@ const InfiniteInkCanvas: React.FC = () => {
     raf: number;
     last: { x: number; y: number };
     pending: { x: number; y: number }[];
+    /** Ink strokes erased VISUALLY during the drag but not yet removed from the
+     *  store — the store commit happens once on pointer-up (no per-frame React
+     *  churn, mirroring how pen/select-drag avoid mid-gesture store writes). */
+    pendingIds: Set<string>;
     bounds: Map<string, Bounds>;
   } | null>(null);
 
@@ -295,7 +299,29 @@ const InfiniteInkCanvas: React.FC = () => {
     const remaining = useCanvasStore.getState().objects.filter(
       (o): o is Stroke => o.type === 'stroke',
     );
-    removeStrokesFromTiles(inkTilesRef.current, remaining, targets);
+    removeStrokesFromTiles(inkTilesRef.current, remaining, targets, wipe.bounds);
+    dirtyRef.current = true;
+    scheduleRender();
+  }, [scheduleRender]);
+
+  /**
+   * Erase strokes VISUALLY during a drag WITHOUT touching the store (no React
+   * re-render / no per-frame store write — mirroring pen & select-drag). The
+   * strokes are cleared out of the ink tiles immediately and queued in
+   * `pendingIds`; the whole drag commits to the store once on pointer-up.
+   */
+  const applyVisualErase = useCallback((targets: Stroke[]) => {
+    if (targets.length === 0) return;
+    const wipe = strokeEraseRef.current;
+    if (!wipe) return;
+    for (const t of targets) wipe.pendingIds.add(t.id);
+    const st = useCanvasStore.getState();
+    // Strokes that are still VISIBLE: store strokes minus every erased-this-drag
+    // stroke (they are already gone from the tiles in prior frames).
+    const remaining = st.objects.filter(
+      (o): o is Stroke => o.type === 'stroke' && !wipe.pendingIds.has(o.id),
+    );
+    removeStrokesFromTiles(inkTilesRef.current, remaining, targets, wipe.bounds);
     dirtyRef.current = true;
     scheduleRender();
   }, [scheduleRender]);
@@ -321,7 +347,8 @@ const InfiniteInkCanvas: React.FC = () => {
   /**
    * Run the drag-wipe accumulated since the last frame: hit-test the travelled
    * segments against every ink stroke (bbox-cached, so O(1) per stroke) and erase
-   * every crossed stroke in ONE store update + ONE local tile pass.
+   * every crossed stroke VISUALLY (local tiles only — the store commit happens
+   * once on pointer-up). Destination-out eraser carves are never hit.
    */
   const flushStrokeWipe = useCallback(() => {
     const wipe = strokeEraseRef.current;
@@ -340,7 +367,8 @@ const InfiniteInkCanvas: React.FC = () => {
     if (all.length < 2) return;
     const st = useCanvasStore.getState();
     const ink = st.objects.filter(
-      (o): o is Stroke => o.type === 'stroke' && o.compositeOperation !== 'destination-out',
+      (o): o is Stroke =>
+        o.type === 'stroke' && o.compositeOperation !== 'destination-out' && !wipe.pendingIds.has(o.id),
     );
     const targets: Stroke[] = [];
     const seen = new Set<string>();
@@ -357,8 +385,8 @@ const InfiniteInkCanvas: React.FC = () => {
         if (hitTestStrokeBySegment(s, a.x, a.y, b.x, b.y)) { targets.push(s); seen.add(s.id); }
       }
     }
-    commitStrokeErase(targets);
-  }, [commitStrokeErase]);
+    applyVisualErase(targets);
+  }, [applyVisualErase]);
 
   /** Schedule one wipe flush for the next animation frame (coalescing). */
   const scheduleWipe = useCallback(() => {
@@ -533,7 +561,8 @@ const InfiniteInkCanvas: React.FC = () => {
     if (state.activeTool === 'eraser' && state.eraserMode === 'stroke') {
       canvas.setPointerCapture(e.pointerId);
       strokeEraseRef.current = {
-        started: false, raf: 0, last: { x: world.x, y: world.y }, pending: [], bounds: new Map(),
+        started: false, raf: 0, last: { x: world.x, y: world.y },
+        pending: [], pendingIds: new Set(), bounds: new Map(),
       };
       eraseTopmostAt(world.x, world.y);
       return;
@@ -695,10 +724,18 @@ const InfiniteInkCanvas: React.FC = () => {
     try { canvas.releasePointerCapture(e.pointerId); } catch { /* already released */ }
 
     // End any whole-stroke-eraser wipe session. Flush any samples that arrived
-    // since the last animation frame so the stroke under the final pointer
-    // position is erased too, then clear the session.
+    // since the last animation frame, then commit every visually-erased stroke
+    // to the store in ONE history snapshot (removals were only tile-local so
+    // far — nothing touched the store mid-drag).
     const wipe = strokeEraseRef.current;
-    if (wipe && wipe.pending.length > 0) flushStrokeWipe();
+    if (wipe) {
+      if (wipe.pending.length > 0) flushStrokeWipe();
+      if (wipe.pendingIds.size > 0) {
+        const st = useCanvasStore.getState();
+        if (!wipe.started) { st.beginEraseGesture(); wipe.started = true; }
+        st.eraseStrokesLive([...wipe.pendingIds]);
+      }
+    }
     strokeEraseRef.current = null;
 
     if (panAnchorRef.current) { panAnchorRef.current = null; return; }
