@@ -17,7 +17,13 @@ import type { PdfCamera, PdfItem, PdfStroke } from './PdfTypes';
 
 /** Resolution factor for the baked page bitmaps (sharp up to this zoom). */
 export const PDF_BAKE_SCALE = 3;
-export const PDF_ERASER_RADIUS = 20; // world units
+/**
+ * PDF_ERASER_RADIUS / ERASER_RADIUS (canvas) actually describe the eraser cursor
+ * RING's full width (the toolbar draws a circle whose diameter = this × zoom).
+ * The wipe disc therefore has a half-width of PDF_ERASER_RADIUS / 2.
+ */
+export const PDF_ERASER_RADIUS = 20; // world units (diameter of the cursor ring)
+const ERASER_DISC_HALF = PDF_ERASER_RADIUS / 2;
 
 export const MIN_ZOOM = 0.1;
 export const MAX_ZOOM = 8;
@@ -239,6 +245,89 @@ export function hitTestStroke(stroke: PdfStroke, x: number, y: number): boolean 
   if (pts.length === 1) return Math.hypot(pts[0].x - x, pts[0].y - y) <= threshold;
   for (let i = 1; i < pts.length; i++) {
     if (distToSegment(x, y, pts[i - 1].x, pts[i - 1].y, pts[i].x, pts[i].y) <= threshold) return true;
+  }
+  return false;
+}
+
+// ---- Whole-stroke eraser ("擦除笔画") helpers --------------------------------
+//
+// The whole-stroke eraser deletes an ENTIRE stroke as soon as the eraser cursor
+// disc touches it. Its hit radius is the cursor ring half-width (PDF_ERASER_RADIUS/2)
+// plus the stroke's own half-width — i.e. the ring visually "presses on" the ink.
+// Important: only INK strokes (source-over) may be erased by it. The free eraser
+// also commits its carve as a stroke with compositeOperation 'destination-out',
+// which must NEVER be hit here — otherwise erasing a partially-erased stroke
+// could target the carve stroke, and rebuilding from the vector list would
+// resurrect the full original ink underneath.
+
+/** True for a stroke that represents an eraser carve (destination-out). */
+export function isEraserStroke(it: { compositeOperation?: string }): boolean {
+  return it.compositeOperation === 'destination-out';
+}
+
+/** True for a real ink stroke (source-over). Pass strokes only, not objects. */
+export function isInkStroke(it: { compositeOperation?: string }): boolean {
+  return it.compositeOperation !== 'destination-out';
+}
+
+/** Hit radius (centerline distance, world units) for whole-stroke erasing. */
+export function strokeEraserRadius(strokeSize: number): number {
+  return ERASER_DISC_HALF + strokeSize / 2;
+}
+
+/** Orientation sign of r relative to the directed line p→q (-1/0/1). */
+function orient(px: number, py: number, qx: number, qy: number, rx: number, ry: number): number {
+  const v = (qx - px) * (ry - py) - (qy - py) * (rx - px);
+  return v > 0 ? 1 : v < 0 ? -1 : 0;
+}
+
+/** Minimum distance between two line segments (0 when they intersect/touch). */
+function segSegDistance(
+  x1: number, y1: number, x2: number, y2: number,
+  x3: number, y3: number, x4: number, y4: number,
+): number {
+  // Proper crossing → distance 0. Collinear/parallel overlaps fall through to
+  // the endpoint tests below, which already return 0 when an endpoint lies on
+  // the other segment.
+  const o1 = orient(x1, y1, x2, y2, x3, y3);
+  const o2 = orient(x1, y1, x2, y2, x4, y4);
+  const o3 = orient(x3, y3, x4, y4, x1, y1);
+  const o4 = orient(x3, y3, x4, y4, x2, y2);
+  if (o1 !== o2 && o3 !== o4) return 0;
+  return Math.min(
+    distToSegment(x3, y3, x1, y1, x2, y2),
+    distToSegment(x4, y4, x1, y1, x2, y2),
+    distToSegment(x1, y1, x3, y3, x4, y4),
+    distToSegment(x2, y2, x3, y3, x4, y4),
+  );
+}
+
+/**
+ * Hit-test a stroke against a WIPE SEGMENT (the path the eraser travelled between
+ * two pointer samples). Continuous along the whole segment — a fast swipe that
+ * skips samples still erases every stroke it crosses. A degenerate segment
+ * (a==b) degenerates to the old click-to-erase behaviour.
+ */
+export function hitTestStrokeBySegment(
+  stroke: PdfStroke,
+  x1: number, y1: number,
+  x2: number, y2: number,
+): boolean {
+  const radius = strokeEraserRadius(stroke.size);
+  const pts = stroke.points;
+  if (pts.length === 0) return false;
+  // Bounding-box prefilter: sweep rectangle inflated by the hit radius.
+  const b = getStrokeBounds(stroke);
+  if (!boundsIntersectRect(b, x1 - radius, y1 - radius, x2 + radius, y2 + radius)) {
+    return false;
+  }
+  if (pts.length === 1) {
+    return distToSegment(pts[0].x, pts[0].y, x1, y1, x2, y2) <= radius;
+  }
+  for (let i = 1; i < pts.length; i++) {
+    if (segSegDistance(x1, y1, x2, y2, pts[i - 1].x, pts[i - 1].y, pts[i].x, pts[i].y) <= radius) {
+      return true;
+    }
   }
   return false;
 }

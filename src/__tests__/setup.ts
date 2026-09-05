@@ -49,6 +49,7 @@ const electronAPIMock = {
     filePath: '/fake/bg.png',
   }),
   saveImage: vi.fn().mockResolvedValue('/fake/saved.png'),
+  saveImageAs: vi.fn().mockResolvedValue({ ok: true, filePath: '/fake/saved-as.png' }),
   getPath: vi.fn().mockResolvedValue('/fake/userdata'),
   getDefaultBackground: vi.fn().mockResolvedValue(null),
 

@@ -116,33 +116,45 @@ const LibraryHome: React.FC = () => {
   const doOpen = async (item: PdfLibraryItem) => {
     if (openingRef.current) return;
     openingRef.current = true;
-    const api = window.electronAPI;
-    if (api?.pdfFileExists) {
-      const exists = await api.pdfFileExists(item.path);
-      if (exists) {
-        const res = await api.readPdfFile(item.path);
-        if (res?.ok) {
-          await usePdfStore.getState().loadPdfFromBuffer(res.data, item.name, {
-            itemId: item.id,
-            lastPage: item.lastPage,
-            camera: item.camera,
-            showDotGrid: item.showDotGrid,
-            sidebarOpen: item.sidebarOpen,
-          });
-          await usePdfStore.getState().loadAnnotations(item.id);
-          usePdfLibrary.getState().touchLastOpened(item.id);
-          openingRef.current = false;
-          return;
+    try {
+      const api = window.electronAPI;
+      if (api?.pdfFileExists) {
+        const exists = await api.pdfFileExists(item.path);
+        if (exists) {
+          const res = await api.readPdfFile(item.path);
+          if (res?.ok) {
+            await usePdfStore.getState().loadPdfFromBuffer(res.data, item.name, {
+              itemId: item.id,
+              lastPage: item.lastPage,
+              camera: item.camera,
+              showDotGrid: item.showDotGrid,
+              sidebarOpen: item.sidebarOpen,
+              anchorPages: item.anchorPages,
+            });
+            // The user hit "中断" → the store reset itself to home. Stop here and
+            // do NOT load annotations / mark "last opened" for a doc that isn't
+            // open (openingRef is cleared by the finally below).
+            if (usePdfStore.getState().currentItemId !== item.id) return;
+            await usePdfStore.getState().loadAnnotations(item.id);
+            usePdfLibrary.getState().touchLastOpened(item.id);
+            return;
+          }
         }
+        setMissingItem(item);
+        return;
       }
-      setMissingItem(item);
+      // No IPC (browser) — just try the picker
+      const picked = await pickPdfFile();
+      if (picked) {
+        await usePdfStore.getState().loadPdfFromBuffer(picked.buffer, picked.name);
+      }
+    } catch (e) {
+      console.error('Failed to open PDF:', e);
+    } finally {
+      // Always release the guard — otherwise one cancelled/interrupted open makes
+      // every later card click a silent no-op.
       openingRef.current = false;
-      return;
     }
-    // No IPC (browser) — just try the picker
-    const picked = await pickPdfFile();
-    if (picked) await usePdfStore.getState().loadPdfFromBuffer(picked.buffer, picked.name);
-    openingRef.current = false;
   };
 
   const doReselect = async () => {
@@ -158,7 +170,10 @@ const LibraryHome: React.FC = () => {
       camera: item.camera,
       showDotGrid: item.showDotGrid,
       sidebarOpen: item.sidebarOpen,
+      anchorPages: item.anchorPages,
     });
+    // Aborted → the store is back on the home screen; nothing to resume.
+    if (usePdfStore.getState().fileName === null) return;
     await usePdfStore.getState().loadAnnotations(item.id);
     usePdfLibrary.getState().touchLastOpened(item.id);
   };

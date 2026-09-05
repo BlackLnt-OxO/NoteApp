@@ -30,6 +30,7 @@ import {
   drawEraserDot,
   drawDotGrid,
   hitTestStroke,
+  hitTestStrokeBySegment,
   getStrokeBounds,
   boundsIntersectRect,
   screenToWorld,
@@ -283,6 +284,15 @@ const PdfCanvas: React.FC = () => {
     snapshots: Map<string, PdfPoint[]>;
     dx: number;
     dy: number;
+  } | null>(null);
+
+  // Active whole-stroke-eraser wipe session (drag-to-erase), page-scoped so the
+  // current page can't change under a pointer capture. `started` becomes true on
+  // the FIRST removal so one wipe gesture = ONE history snapshot (single undo).
+  const strokeEraseRef = useRef<{
+    page: number;
+    started: boolean;
+    last: { x: number; y: number };
   } | null>(null);
 
   const pageLoadTokenRef = useRef(0);
@@ -634,6 +644,37 @@ const PdfCanvas: React.FC = () => {
     }
   }, []);
 
+  // ---- Whole-stroke eraser helper -------------------------------------------
+
+  /**
+   * Whole-stroke eraser: remove every INK stroke (source-over) the wipe segment
+   * (ax,ay)→(bx,by) touches, with the eraser cursor disc as hit radius. A click
+   * (degenerate point segment) erases only the topmost stroke; a real drag erases
+   * every crossed stroke. Destination-out eraser carves are never hit, so erasing
+   * a partially-erased stroke deletes the whole ink stroke instead of deleting the
+   * carve and resurrecting the full original underneath.
+   */
+  const runStrokeWipe = useCallback((ax: number, ay: number, bx: number, by: number) => {
+    const wipe = strokeEraseRef.current;
+    if (!wipe) return;
+    const st = usePdfStore.getState();
+    const ink = strokesOnly(st.items[wipe.page] ?? [])
+      .filter((s) => s.compositeOperation !== 'destination-out');
+    const hits: PdfStroke[] = [];
+    for (const s of ink) {
+      if (hitTestStrokeBySegment(s, ax, ay, bx, by)) hits.push(s);
+    }
+    if (hits.length === 0) return;
+    // Degenerate point segment = click → erase only the topmost (last in list).
+    const targets = ax === bx && ay === by ? [hits[hits.length - 1]] : hits;
+    const ids = targets.map((s) => s.id);
+    if (!wipe.started) {
+      st.beginStrokeErase(wipe.page);
+      wipe.started = true;
+    }
+    st.eraseStrokesLive(wipe.page, ids);
+  }, []);
+
   // ---- Pointer Down -----------------------------------------------------------
 
   const handlePointerDown = useCallback((e: React.PointerEvent<HTMLCanvasElement>) => {
@@ -709,11 +750,12 @@ const PdfCanvas: React.FC = () => {
       return;
     }
 
-    // Stroke eraser (click a stroke to delete it)
+    // Stroke eraser — click erases the whole topmost stroke; dragging keeps the
+    // pointer captured and wipes every ink stroke the cursor disc touches.
     if (st.activeTool === 'eraser' && st.eraserMode === 'stroke') {
-      const strokes = strokesOnly(st.items[st.currentPage] ?? []);
-      const hit = [...strokes].reverse().find((o) => hitTestStroke(o, world.x, world.y));
-      if (hit) st.removeStroke(st.currentPage, hit.id);
+      canvas.setPointerCapture(e.pointerId);
+      strokeEraseRef.current = { page: st.currentPage, started: false, last: { x: world.x, y: world.y } };
+      runStrokeWipe(world.x, world.y, world.x, world.y);
       return;
     }
 
@@ -784,6 +826,19 @@ const PdfCanvas: React.FC = () => {
       });
       dirtyRef.current = true;
       scheduleRender();
+      return;
+    }
+
+    // Whole-stroke eraser — continuous drag wipe between the last and current
+    // pointer world positions (segment hit-test stays continuous even on a fast
+    // swipe that skips pointer samples).
+    if (st.activeTool === 'eraser' && st.eraserMode === 'stroke' && strokeEraseRef.current) {
+      const w = screenToWorld(sx, sy, st.camera);
+      const last = strokeEraseRef.current.last;
+      if (last.x !== w.x || last.y !== w.y) {
+        runStrokeWipe(last.x, last.y, w.x, w.y);
+        strokeEraseRef.current.last = w;
+      }
       return;
     }
 
@@ -866,6 +921,9 @@ const PdfCanvas: React.FC = () => {
     const canvas = canvasRef.current;
     if (!canvas) return;
     canvas.releasePointerCapture?.(e.pointerId);
+
+    // End any whole-stroke-eraser wipe session (removals already committed live).
+    strokeEraseRef.current = null;
 
     if (panAnchorRef.current) {
       panAnchorRef.current = null;

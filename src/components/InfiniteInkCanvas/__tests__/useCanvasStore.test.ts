@@ -232,4 +232,49 @@ describe('useCanvasStore', () => {
       expect(useCanvasStore.getState().history.length).toBeLessThanOrEqual(50);
     });
   });
+
+  describe('whole-stroke eraser (beginEraseGesture + eraseStrokesLive)', () => {
+    it('removes the target strokes live and bumps renderEpoch', () => {
+      useCanvasStore.getState().addStroke(makeStroke('a'));
+      useCanvasStore.getState().addStroke(makeStroke('b'));
+      const before = useCanvasStore.getState().renderEpoch;
+      useCanvasStore.getState().beginEraseGesture();
+      useCanvasStore.getState().eraseStrokesLive(['a', 'b']);
+      const s = useCanvasStore.getState();
+      expect(s.objects).toHaveLength(0);
+      expect(s.renderEpoch).toBeGreaterThan(before);
+    });
+
+    it('keeps non-target objects (text/images/other strokes)', () => {
+      useCanvasStore.getState().addStroke(makeStroke('a'));
+      useCanvasStore.getState().addStroke(makeStroke('b'));
+      useCanvasStore.getState().beginEraseGesture();
+      useCanvasStore.getState().eraseStrokesLive(['a']);
+      const s = useCanvasStore.getState();
+      expect(s.objects).toHaveLength(1);
+      expect((s.objects[0] as Stroke).id).toBe('b');
+    });
+
+    it('one wipe gesture = ONE undo restores every erased stroke', () => {
+      const a = makeStroke('a');
+      const b = makeStroke('b');
+      useCanvasStore.getState().addStroke(a);
+      useCanvasStore.getState().addStroke(b);
+      // A drag wipe removes strokes one call at a time but shares one snapshot.
+      useCanvasStore.getState().beginEraseGesture();
+      useCanvasStore.getState().eraseStrokesLive(['a']);
+      useCanvasStore.getState().eraseStrokesLive(['b']);
+      expect(useCanvasStore.getState().objects).toHaveLength(0);
+      useCanvasStore.getState().undo();
+      expect(useCanvasStore.getState().objects).toEqual([a, b]);
+    });
+
+    it('clears erased strokes out of the selection', () => {
+      useCanvasStore.getState().addStroke(makeStroke('a'));
+      useCanvasStore.setState({ selectedIds: ['a'] });
+      useCanvasStore.getState().beginEraseGesture();
+      useCanvasStore.getState().eraseStrokesLive(['a']);
+      expect(useCanvasStore.getState().selectedIds).toEqual([]);
+    });
+  });
 });

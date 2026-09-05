@@ -14,34 +14,59 @@ type PdfDocument = Awaited<ReturnType<PdfJsModule['getDocument']>>['promise'] ex
 export type PdfJsDocument = PdfDocument;
 
 let pdfjs: PdfJsModule | null = null;
-let workerConfigured = false;
+let pdfWorker: Worker | null = null;
 
 async function getLib(): Promise<PdfJsModule> {
   if (!pdfjs) {
     pdfjs = await import('pdfjs-dist');
   }
-  if (!workerConfigured && pdfjs.GlobalWorkerOptions) {
-    try {
-      pdfjs.GlobalWorkerOptions.workerPort = new PdfWorker();
-    } catch {
-      /* fall back to pdf.js's own worker handling (fake worker) */
+  if (pdfjs.GlobalWorkerOptions) {
+    if (!pdfWorker) {
+      try {
+        pdfWorker = new PdfWorker();
+      } catch {
+        /* fall back to pdf.js's own worker handling (fake worker) */
+      }
     }
-    workerConfigured = true;
+    if (pdfWorker) pdfjs.GlobalWorkerOptions.workerPort = pdfWorker;
   }
   return pdfjs;
 }
 
+/**
+ * Drop the shared pdf.js worker so the next getLib() spins up a brand-new one.
+ * Only called after an abort or a failed load — NEVER on the happy path, because
+ * an already-open document keeps using the worker for its page renders.
+ */
+export function resetPdfWorker(): void {
+  if (pdfWorker) {
+    try { pdfWorker.terminate(); } catch { /* ignore */ }
+    pdfWorker = null;
+  }
+  if (pdfjs?.GlobalWorkerOptions) {
+    try { (pdfjs.GlobalWorkerOptions as any).workerPort = null; } catch { /* ignore */ }
+  }
+}
+
 let activeLoadAbort: (() => void) | null = null;
+let rejectActiveLoad: ((reason: unknown) => void) | null = null;
 
 /**
  * Best-effort abort of the currently in-flight pdf.js document load (if any).
- * Used by the "中断" button shown after a PDF import has been spinning 10s —
- * destroys the loading task so a stuck getDocument() rejects and unwinds.
+ * Used by the "中断" button shown after a PDF import has been spinning 10s.
+ * pdf.js does NOT guarantee that destroy() settles the loading promise (a wedged
+ * worker can leave it pending forever) — so besides destroying the task we also
+ * force-reject the awaiting caller AND drop the worker so the next open starts
+ * from a clean port instead of spinning forever.
  */
 export function abortActivePdfLoad(): void {
+  const rej = rejectActiveLoad;
+  rejectActiveLoad = null;
   const a = activeLoadAbort;
   activeLoadAbort = null;
   if (a) { try { a(); } catch { /* ignore */ } }
+  resetPdfWorker();
+  if (rej) rej(new DOMException('PDF load aborted', 'AbortError'));
 }
 
 /** Parse a PDF from an ArrayBuffer. Returns the pdf.js document + page 1 size. */
@@ -52,8 +77,14 @@ export async function loadPdfDocument(
   // pdf.js v6+ requires a TypedArray, not a bare ArrayBuffer.
   const loadingTask = lib.getDocument({ data: new Uint8Array(buffer) });
   activeLoadAbort = () => { try { (loadingTask as any).destroy(); } catch { /* ignore */ } };
+  // Race the pdf.js load against an abortable promise so abortActivePdfLoad() can
+  // always make this function settle, even if destroy() leaves pdf.js hanging.
+  let rejectAbort!: (reason: unknown) => void;
+  const abortPromise = new Promise<never>((_, reject) => { rejectAbort = reject; });
+  rejectActiveLoad = rejectAbort;
   try {
-    const doc = await loadingTask.promise;
+    const doc = await Promise.race([loadingTask.promise, abortPromise]);
+    rejectActiveLoad = null;
     activeLoadAbort = null;
     const page = await doc.getPage(1);
     const vp = page.getViewport({ scale: 1 });
@@ -61,6 +92,7 @@ export async function loadPdfDocument(
     page.cleanup();
     return { doc: doc as unknown as PdfJsDocument, numPages: doc.numPages, firstPage };
   } catch (e) {
+    rejectActiveLoad = null;
     activeLoadAbort = null;
     throw e;
   }

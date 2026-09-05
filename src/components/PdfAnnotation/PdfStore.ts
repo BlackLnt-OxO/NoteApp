@@ -32,7 +32,7 @@ import type {
   PdfTool,
   PdfBrushType,
 } from './PdfTypes';
-import { loadPdfDocument, type PdfJsDocument, abortActivePdfLoad } from './PdfLoader';
+import { loadPdfDocument, type PdfJsDocument, abortActivePdfLoad, resetPdfWorker } from './PdfLoader';
 import { PDF_ANNOTATION_BLUE } from '../../themeColors';
 
 /**
@@ -46,6 +46,13 @@ let pdfLoadEpoch = 0;
 const MAX_HISTORY = 50;
 /** Hard cap on how many pages can be anchored at once. */
 export const MAX_ANCHOR_PAGES = 7;
+
+/** Clamp restored anchor pages to the real page range (a file may have been
+ *  replaced by a shorter one since the user last marked pages). */
+export function clampAnchorPages(pages: number[] | undefined, numPages: number): number[] {
+  if (!pages) return [];
+  return pages.filter((p) => Number.isInteger(p) && p >= 1 && p <= numPages);
+}
 
 export const DEFAULT_PDF_BRUSH: PdfBrush = {
   size: 8,
@@ -146,6 +153,7 @@ export interface PdfStore {
     camera?: PdfCamera;
     showDotGrid?: boolean;
     sidebarOpen?: boolean;
+    anchorPages?: number[];
   }) => Promise<void>;
   /** Abort a stuck import / resume: destroys the pdf.js load, resets to home. */
   abortPdfLoad: () => void;
@@ -208,6 +216,10 @@ export interface PdfStore {
   /** Additive: appends a stroke + records history. Canvas already rasterized it. */
   commitStroke: (page: number, stroke: PdfStroke) => void;
   removeStroke: (page: number, id: string) => void;
+  /** Whole-stroke eraser: one history snapshot per wipe gesture (page-scoped). */
+  beginStrokeErase: (page: number) => void;
+  /** Remove whole ink strokes WITHOUT a history entry (live wipe). Structural. */
+  eraseStrokesLive: (page: number, ids: string[]) => void;
   /** Records a history entry without changing anything (used at drag start). */
   pushHistory: (page: number) => void;
   /** Moves strokes WITHOUT recording history (used during a live drag). */
@@ -319,9 +331,10 @@ export const usePdfStore = create<PdfStore>((set, get) => ({
         // it is not restored from the remembered sidebar state.
         sidebarOpen: true,
         camera: resume?.camera ?? { x: 0, y: 0, zoom: 1 },
-        // Anchors are user-added only — the resume page is remembered in the
-        // background (lastPage above) but never auto-marked as an anchor.
-        anchorPages: [],
+        // Anchors are user-added, restored from the library item's resume state,
+        // clamped to the real page range in case the file was replaced by a
+        // shorter one since the user last marked pages.
+        anchorPages: clampAnchorPages(resume?.anchorPages, numPages),
         sidebarScrollTarget: null,
         loading: false,
         loadingPhase: null,
@@ -333,6 +346,10 @@ export const usePdfStore = create<PdfStore>((set, get) => ({
         return;
       }
       console.error('PDF import failed:', e);
+      // A load that died mid-parse can wedge the pdf.js worker/port. Drop it so
+      // the NEXT open starts from a fresh worker — but never while another
+      // document is still open and rendering on that same worker.
+      if (!get().pdfDoc) resetPdfWorker();
       set({ loading: false, loadingPhase: null, error: e instanceof Error ? e.message : String(e) });
     }
   },
@@ -606,6 +623,23 @@ export const usePdfStore = create<PdfStore>((set, get) => ({
       history: pushHistoryEntry(s.history, page, cur),
       redoStack: { ...s.redoStack, [page]: [] },
       selectedIds: s.selectedIds.filter((x) => x !== id),
+      renderEpoch: get().renderEpoch + 1,
+      dirty: true,
+    }));
+  },
+
+  beginStrokeErase: (page) => get().pushHistory(page),
+
+  eraseStrokesLive: (page, ids) => {
+    if (ids.length === 0) return;
+    const idSet = new Set(ids);
+    const cur = get().items[page] ?? [];
+    const next = cur.filter((o) => !(o.type === 'stroke' && idSet.has(o.id)));
+    if (next.length === cur.length) return;
+    set((s) => ({
+      items: { ...s.items, [page]: next },
+      redoStack: { ...s.redoStack, [page]: [] },
+      selectedIds: s.selectedIds.filter((x) => !idSet.has(x)),
       renderEpoch: get().renderEpoch + 1,
       dirty: true,
     }));

@@ -31,6 +31,8 @@ export interface PdfLibraryItem {
   camera?: { x: number; y: number; zoom: number };
   showDotGrid?: boolean;
   sidebarOpen?: boolean;
+  /** Anchored ("marked") page numbers the user added; restored on reopen. */
+  anchorPages?: number[];
 }
 
 const STORAGE_KEY = 'stickynotes-pdf-library';
@@ -51,8 +53,8 @@ export interface PdfLibraryStore {
   addCategory: (name: string) => string;
   renameCategory: (id: string, name: string) => void;
   deleteCategory: (id: string) => void;
-  /** Persist resume state (last page / camera / toggles) onto an item. */
-  updateItemResume: (id: string, resume: { lastPage: number; camera: { x: number; y: number; zoom: number }; showDotGrid: boolean; sidebarOpen: boolean }) => void;
+  /** Persist resume state (last page / camera / toggles / anchors) onto an item. */
+  updateItemResume: (id: string, resume: { lastPage: number; camera: { x: number; y: number; zoom: number }; showDotGrid: boolean; sidebarOpen: boolean; anchorPages?: number[] }) => void;
 
   saveState: () => void;
   loadState: () => void;

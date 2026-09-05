@@ -703,6 +703,34 @@ document.addEventListener('keydown',function(e){if(e.key==='Escape')ipcRenderer.
     return filePath;
   });
 
+  // "另存为…" — write an image data-URL to a user-chosen disk location.
+  ipcMain.handle('file:saveImageAs', async (event, { dataUrl, defaultFileName }) => {
+    const { dialog } = require('electron');
+    try {
+      const mimeMatch = /^data:image\/(\w+);base64,/.exec(String(dataUrl || ''));
+      const mime = mimeMatch ? mimeMatch[1].toLowerCase() : 'png';
+      const validExt = ['png', 'jpg', 'jpeg', 'webp', 'gif', 'bmp'].includes(mime) ? mime : 'png';
+      // Strip any extension the caller attached so the mime-derived one is used.
+      const base = String(defaultFileName || '').trim().replace(/\.[^.\\/]+$/, '') || 'note-image';
+      const defaultPath = path.join(app.getPath('downloads'), `${base}.${validExt}`);
+      const result = await dialog.showSaveDialog(mainWindow, {
+        defaultPath,
+        filters: [
+          { name: '图片', extensions: ['png', 'jpg', 'jpeg', 'webp', 'gif', 'bmp'] },
+          { name: '所有文件', extensions: ['*'] },
+        ],
+      });
+      if (result.canceled || !result.filePath) return { ok: false, canceled: true };
+      let filePath = result.filePath;
+      if (!/\.[^\\/]+$/.test(filePath)) filePath += `.${validExt}`;
+      const base64Data = String(dataUrl).replace(/^data:image\/\w+;base64,/, '');
+      fs.writeFileSync(filePath, base64Data, 'base64');
+      return { ok: true, filePath };
+    } catch (e) {
+      return { ok: false, error: String(e) };
+    }
+  });
+
   ipcMain.handle('file:pickImage', async () => {
     const { dialog } = require('electron');
     const result = await dialog.showOpenDialog(mainWindow, {

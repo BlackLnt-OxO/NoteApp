@@ -6,6 +6,10 @@ import {
   applyOneEuro,
   getStrokeBounds,
   hitTestStroke,
+  hitTestStrokeBySegment,
+  isInkStroke,
+  isEraserStroke,
+  strokeEraserRadius,
   boundsIntersectRect,
   screenToWorld,
   worldToScreen,
@@ -163,5 +167,58 @@ describe('fitCamera', () => {
   it('never zooms beyond clamp bounds', () => {
     const cam = fitCamera(10, 10, 100000, 100000, 0);
     expect(cam.zoom).toBeLessThanOrEqual(8);
+  });
+});
+
+describe('whole-stroke eraser helpers', () => {
+  function line(): PdfStroke {
+    const s = makeStroke();
+    addRawPoint(s, 0, 0, 0.5, 1000);
+    addRawPoint(s, 100, 0, 0.5, 1016);
+    return s; // size 8 → hit radius = 10 + 4 = 14
+  }
+
+  it('strokeEraserRadius = disc half-width + stroke half-width', () => {
+    expect(strokeEraserRadius(8)).toBeCloseTo(PDF_ERASER_RADIUS / 2 + 4, 6);
+  });
+
+  it('distinguishes ink strokes from destination-out eraser carves', () => {
+    const ink = makeStroke();
+    const carve = { ...makeStroke(), compositeOperation: 'destination-out' as const };
+    expect(isInkStroke(ink)).toBe(true);
+    expect(isInkStroke(carve)).toBe(false);
+    expect(isEraserStroke(carve)).toBe(true);
+    expect(isEraserStroke(ink)).toBe(false);
+  });
+
+  it('a wipe parallel to a stroke catches it within the cursor-disc radius', () => {
+    const s = line();
+    // y=12 is 12 world px off the stroke's centerline → inside 14.
+    expect(hitTestStrokeBySegment(s, 0, 12, 100, 12)).toBe(true);
+    // y=40 is far outside the disc.
+    expect(hitTestStrokeBySegment(s, 0, 40, 100, 40)).toBe(false);
+  });
+
+  it('a perpendicular fast swipe crossing the stroke hits (continuous, no sample skips)', () => {
+    const s = line();
+    // Endpoints are far away; only the middle of the wipe crosses the stroke.
+    expect(hitTestStrokeBySegment(s, 50, -500, 50, 500)).toBe(true);
+  });
+
+  it('a degenerate segment (click) behaves like a point hit', () => {
+    const s = line();
+    expect(hitTestStrokeBySegment(s, 5, 0, 5, 0)).toBe(true);
+    expect(hitTestStrokeBySegment(s, 500, 0, 500, 0)).toBe(false);
+  });
+
+  it('catches a single-dot stroke swept over by a wipe segment', () => {
+    const dot = makeStroke();
+    addRawPoint(dot, 10, 10, 0.5, 1000);
+    expect(hitTestStrokeBySegment(dot, 0, 10, 20, 10)).toBe(true);
+    expect(hitTestStrokeBySegment(dot, 10, 60, 10, 80)).toBe(false);
+  });
+
+  it('empty stroke never hits', () => {
+    expect(hitTestStrokeBySegment(makeStroke(), 0, 0, 0, 0)).toBe(false);
   });
 });

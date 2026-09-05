@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import { usePdfStore } from '../PdfStore';
+import { usePdfStore, clampAnchorPages } from '../PdfStore';
 import type { PdfStroke, PdfTextObject } from '../PdfTypes';
 import { PDF_ANNOTATION_BLUE } from '../../../themeColors';
 
@@ -323,5 +323,51 @@ describe('MAX_HISTORY', () => {
       usePdfStore.getState().commitStroke(1, makeStroke(`s${i}`));
     }
     expect(usePdfStore.getState().history[1].length).toBeLessThanOrEqual(50);
+  });
+});
+
+describe('whole-stroke eraser (beginStrokeErase + eraseStrokesLive)', () => {
+  it('removes ink strokes live and bumps renderEpoch', () => {
+    usePdfStore.getState().commitStroke(1, makeStroke('a'));
+    usePdfStore.getState().commitStroke(1, makeStroke('b'));
+    const before = usePdfStore.getState().renderEpoch;
+    usePdfStore.getState().beginStrokeErase(1);
+    usePdfStore.getState().eraseStrokesLive(1, ['a', 'b']);
+    const s = usePdfStore.getState();
+    expect(s.items[1]).toHaveLength(0);
+    expect(s.renderEpoch).toBeGreaterThan(before);
+    expect(s.dirty).toBe(true);
+  });
+
+  it('one wipe gesture = ONE undo restores every erased stroke', () => {
+    const a = makeStroke('a');
+    const b = makeStroke('b');
+    usePdfStore.getState().commitStroke(1, a);
+    usePdfStore.getState().commitStroke(1, b);
+    // Wipe erases two strokes, sharing a single history snapshot.
+    usePdfStore.getState().beginStrokeErase(1);
+    usePdfStore.getState().eraseStrokesLive(1, ['a']);
+    usePdfStore.getState().eraseStrokesLive(1, ['b']);
+    expect(usePdfStore.getState().items[1]).toHaveLength(0);
+    usePdfStore.getState().undo();
+    expect(usePdfStore.getState().items[1]).toEqual([a, b]);
+  });
+
+  it('removes the stroke from the selection when erased', () => {
+    usePdfStore.getState().commitStroke(1, makeStroke('a'));
+    usePdfStore.setState({ selectedIds: ['a'] });
+    usePdfStore.getState().beginStrokeErase(1);
+    usePdfStore.getState().eraseStrokesLive(1, ['a']);
+    expect(usePdfStore.getState().selectedIds).toEqual([]);
+  });
+});
+
+describe('clampAnchorPages', () => {
+  it('filters out pages outside [1, numPages] and non-integers', () => {
+    expect(clampAnchorPages([1, 5, 12, 0, -3, 2.5], 10)).toEqual([1, 5]);
+  });
+  it('returns [] for undefined / empty', () => {
+    expect(clampAnchorPages(undefined, 10)).toEqual([]);
+    expect(clampAnchorPages([], 10)).toEqual([]);
   });
 });

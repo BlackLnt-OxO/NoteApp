@@ -21,6 +21,10 @@ const NoteCard: React.FC<NoteCardProps> = ({ note, isDragGhost, isExpanded, onDr
   const [content, setContent] = useState(note.content);
   const [showMenu, setShowMenu] = useState(false);
   const [menuPos, setMenuPos] = useState({ x: 0, y: 0 });
+  // Right-click on an embedded image → "另存为…" (distinct from the card menu).
+  const [imgSaveMenu, setImgSaveMenu] = useState<{
+    x: number; y: number; dataUrl: string; fileName?: string;
+  } | null>(null);
   const [isEditing, setIsEditing] = useState(false);
   const [lightboxImg, setLightboxImg] = useState<string | null>(null);
   const [lightboxScale, setLightboxScale] = useState(1);
@@ -178,6 +182,8 @@ const NoteCard: React.FC<NoteCardProps> = ({ note, isDragGhost, isExpanded, onDr
 
   // Image drag between notes (pointer-based, no browser DnD)
   const handleImagePointerDown = useCallback((imgIdx: number, img: any) => (ev: React.PointerEvent) => {
+    // Left button only — a right click opens the "另存为…" menu, never a drag.
+    if (ev.button !== 0) return;
     ev.preventDefault(); ev.stopPropagation();
     selectNote(note.id);
     const imgH = img._previewH || 100;
@@ -282,6 +288,25 @@ const NoteCard: React.FC<NoteCardProps> = ({ note, isDragGhost, isExpanded, onDr
   };
 
   const handleDelete = () => { setShowMenu(false); remove(note.id); };
+
+  // "另存为…": write the image's data-URL to a user-chosen location via IPC.
+  const saveImageToDisk = useCallback(async (m: { x: number; y: number; dataUrl: string; fileName?: string }) => {
+    setImgSaveMenu(null);
+    const api = window.electronAPI;
+    if (!api?.saveImageAs) return;
+    try {
+      const r = await api.saveImageAs(m.dataUrl, m.fileName || '');
+      if (r?.ok) {
+        api.showToast('已保存：' + r.filePath);
+      } else if (r?.error) {
+        api.showToast('保存失败：' + r.error);
+      }
+      // canceled → silently do nothing
+    } catch (err) {
+      console.error('Save image as failed:', err);
+      api.showToast('保存失败');
+    }
+  }, []);
 
   // Resize
   const resizing = useRef(false);
@@ -405,7 +430,13 @@ const NoteCard: React.FC<NoteCardProps> = ({ note, isDragGhost, isExpanded, onDr
               <div key={img.id} className="note-image-wrap" style={{
                 position: 'absolute', left: imgX, top: imgY, zIndex: 5,
                 lineHeight: 0, pointerEvents: 'auto',
-              }}>
+              }}
+                onContextMenu={(ev) => {
+                  ev.preventDefault();
+                  ev.stopPropagation(); // don't bubble to the card's own menu
+                  selectNote(note.id);
+                  setImgSaveMenu({ x: ev.clientX, y: ev.clientY, dataUrl: img.dataUrl, fileName: img.fileName });
+                }}>
                 <img src={img.dataUrl} alt=""
                   onPointerDown={handleImagePointerDown(imgIdx, img)}
                   onClick={(ev) => { ev.stopPropagation(); if (imgDragMoved.current) { imgDragMoved.current = false; return; } setLightboxImg(img.dataUrl); setLightboxScale(1); setLbPan({x:0,y:0}); lbScaleRef.current=1; lbPanRef.current={x:0,y:0}; }}
@@ -506,6 +537,11 @@ const NoteCard: React.FC<NoteCardProps> = ({ note, isDragGhost, isExpanded, onDr
       {lightboxImg && createPortal(
         <div className="img-lightbox-overlay" style={{ cursor: lightboxScale > 1 ? 'grab' : 'default', userSelect: 'none' }}
           onClick={(e) => { if (!lbDragging.current && e.target === e.currentTarget && !lbOnImg.current) setLightboxImg(null); lbDragging.current = false; lbOnImg.current = false; }}
+          onContextMenu={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            if (lightboxImg) setImgSaveMenu({ x: e.clientX, y: e.clientY, dataUrl: lightboxImg });
+          }}
           onWheel={(e) => {
             e.stopPropagation(); e.preventDefault();
             const ns = Math.max(0.3, Math.min(10, lbScaleRef.current * (e.deltaY > 0 ? 0.85 : 1.15)));
@@ -552,6 +588,20 @@ const NoteCard: React.FC<NoteCardProps> = ({ note, isDragGhost, isExpanded, onDr
           </div>
           <div className="context-menu-divider" />
           <button className="context-menu-item" onClick={handleDelete} style={{ color: 'var(--danger)', fontSize: fs(13, gfs) }}>删除</button>
+        </div>
+      </>, document.body)}
+
+      {/* Image "另存为…" menu (right-click an embedded image / lightbox preview) */}
+      {imgSaveMenu && createPortal(<>
+        <div style={{ position: 'fixed', inset: 0, zIndex: 10000 }} onClick={() => setImgSaveMenu(null)}
+          onContextMenu={(ev) => { ev.preventDefault(); setImgSaveMenu(null); }} />
+        <div className="context-menu" style={{
+          left: Math.min(imgSaveMenu.x, window.innerWidth - 180),
+          top: Math.min(imgSaveMenu.y, window.innerHeight - 60),
+        }}>
+          <button className="context-menu-item" style={{ fontSize: fs(13, gfs) }} onClick={() => saveImageToDisk(imgSaveMenu)}>
+            另存为…
+          </button>
         </div>
       </>, document.body)}
     </>

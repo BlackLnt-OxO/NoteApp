@@ -27,6 +27,9 @@ async function importPdf(categoryId: string | null): Promise<void> {
   const picked = await pickPdfFile();
   if (!picked) return;
   await usePdfStore.getState().loadPdfFromBuffer(picked.buffer, picked.name);
+  // The user hit "中断" → the store reset to the home screen; don't record a
+  // bogus 0-page library entry for a document that never opened.
+  if (usePdfStore.getState().fileName === null) return;
   const numPages = usePdfStore.getState().numPages;
   const id = usePdfLibrary.getState().addItem({
     name: picked.name,
@@ -316,6 +319,7 @@ const PdfView: React.FC = () => {
         camera: st.camera,
         showDotGrid: st.showDotGrid,
         sidebarOpen: st.sidebarOpen,
+        anchorPages: st.anchorPages,
       });
     }
     if (st.dirty) {
@@ -342,6 +346,7 @@ const PdfView: React.FC = () => {
   const camera = usePdfStore((s) => s.camera);
   const showDotGrid = usePdfStore((s) => s.showDotGrid);
   const sidebarOpen = usePdfStore((s) => s.sidebarOpen);
+  const anchorPages = usePdfStore((s) => s.anchorPages);
 
   useEffect(() => {
     if (!currentItemId || !fileName) return;
@@ -351,10 +356,11 @@ const PdfView: React.FC = () => {
         camera,
         showDotGrid,
         sidebarOpen,
+        anchorPages,
       });
     }, 400);
     return () => clearTimeout(t);
-  }, [currentItemId, fileName, currentPage, camera, showDotGrid, sidebarOpen]);
+  }, [currentItemId, fileName, currentPage, camera, showDotGrid, sidebarOpen, anchorPages]);
 
   // Toolbar drag overlay (same behavior as the infinite canvas)
   const isDraggingToolbar = usePdfToolbarStore((s) => s.isDragging);

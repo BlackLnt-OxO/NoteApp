@@ -42,6 +42,7 @@ declare global {
       pickImage: () => Promise<{ dataUrl: string; filePath: string } | null>;
       pickBackground: () => Promise<{ dataUrl: string; filePath: string } | null>;
       saveImage: (dataUrl: string, fileName: string) => Promise<string>;
+      saveImageAs: (dataUrl: string, defaultFileName?: string) => Promise<{ ok: boolean; filePath?: string; canceled?: boolean; error?: string }>;
       pickPdfFile: () => Promise<{ filePath: string; sizeBytes: number; data: ArrayBuffer; error?: string } | null>;
       readPdfFile: (filePath: string) => Promise<{ ok: boolean; sizeBytes: number; data: ArrayBuffer; error?: string }>;
       pdfFileExists: (filePath: string) => Promise<boolean>;

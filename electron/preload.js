@@ -79,6 +79,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   pickImage: () => ipcRenderer.invoke('file:pickImage'),
   pickBackground: () => ipcRenderer.invoke('file:pickBackground'),
   saveImage: (dataUrl, fileName) => ipcRenderer.invoke('file:saveImage', { dataUrl, fileName }),
+  saveImageAs: (dataUrl, defaultFileName) => ipcRenderer.invoke('file:saveImageAs', { dataUrl, defaultFileName }),
 
   // PDF file access (annotation library)
   pickPdfFile: () => ipcRenderer.invoke('pdf:pickFile'),

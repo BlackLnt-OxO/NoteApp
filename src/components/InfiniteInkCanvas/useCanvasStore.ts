@@ -82,6 +82,12 @@ export interface CanvasStore {
   redo: () => void;
   clearCanvas: () => void;
   deleteObject: (id: string) => void;
+  /** Whole-stroke eraser: snapshot history ONCE per wipe gesture (undo restores
+   *  every stroke removed by one drag in a single step). */
+  beginEraseGesture: () => void;
+  /** Remove whole ink strokes WITHOUT recording history (live wipe feedback).
+   *  Structural → bumps renderEpoch so the canvas rebuilds its ink tiles. */
+  eraseStrokesLive: (ids: string[]) => void;
   /** Batch-replace stroke points (drag-move drop). Structural → rebuilds tiles. */
   commitStrokesPoints: (entries: { id: string; points: StrokePoint[] }[]) => void;
   saveCanvasData: () => Promise<void>;
@@ -250,6 +256,25 @@ export const useCanvasStore = create<CanvasStore>((set, get) => ({
   clearCanvas: () => {
     get().pushHistory();
     set({ objects: [], renderEpoch: get().renderEpoch + 1 });
+  },
+
+  beginEraseGesture: () => {
+    // Reference-sharing snapshot; also clears the redo stack (like any edit).
+    get().pushHistory();
+  },
+
+  eraseStrokesLive: (ids) => {
+    if (ids.length === 0) return;
+    const idSet = new Set(ids);
+    const cur = get().objects;
+    const next = cur.filter((o) => !(o.type === 'stroke' && idSet.has(o.id)));
+    if (next.length === cur.length) return;
+    set((s) => ({
+      objects: next,
+      redoStack: [],
+      selectedIds: s.selectedIds.filter((id) => !idSet.has(id)),
+      renderEpoch: get().renderEpoch + 1,
+    }));
   },
 
   commitStrokesPoints: (entries) => {
