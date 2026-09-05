@@ -46,6 +46,10 @@ import {
   drawInkRibbonSlice,
 } from './PdfBrushRenderers';
 import { renderPageToCanvas, getPageSize, cleanupPage } from './PdfLoader';
+import {
+  createEraserPerf, addEraserScan, addEraserRestamp, logEraserPerf,
+  type EraserPerf,
+} from './eraserPerf';
 import type { PdfItem, PdfPoint, PdfStroke, PdfTextObject as PdfTextObjectData } from './PdfTypes';
 import PdfTextNode from './PdfTextNode';
 import PdfTextObject from './PdfTextObject';
@@ -195,12 +199,15 @@ function stampStroke(tiles: Map<string, HTMLCanvasElement>, stroke: PdfStroke): 
  * eraser carves are re-stamped in order so the z-relationship matches a full
  * rebuild. Empty tiles are dropped.
  */
+type InkRibbon = ReturnType<typeof prepareInkRibbon>;
+
 function removeStrokesFromInk(
   tiles: Map<string, HTMLCanvasElement>,
   grid: Map<string, PdfStroke[]>,
   skipIds: Set<string>,
   removed: PdfStroke[],
   cachedBounds?: Map<string, Bounds>,
+  ribbons?: Map<string, InkRibbon>,
 ): void {
   if (removed.length === 0) return;
 
@@ -248,7 +255,15 @@ function removeStrokesFromInk(
     for (const s of list) {
       if (skipIds.has(s.id)) continue;
       ctx.setTransform(SCALE, 0, 0, SCALE, -tx * TILE * SCALE, -ty * TILE * SCALE);
-      const ribbon = prepareInkRibbon(s);
+      // Prepare the ribbon geometry once per stroke per gesture; a long stroke
+      // can be re-stamped into many cleared tiles across several erase frames.
+      let ribbon: InkRibbon;
+      if (ribbons) {
+        if (!ribbons.has(s.id)) ribbons.set(s.id, prepareInkRibbon(s));
+        ribbon = ribbons.get(s.id)!;
+      } else {
+        ribbon = prepareInkRibbon(s);
+      }
       if (ribbon) {
         drawInkRibbonSlice(ctx, ribbon, tx * TILE, ty * TILE, (tx + 1) * TILE, (ty + 1) * TILE);
       } else {
@@ -422,6 +437,10 @@ const PdfCanvas: React.FC = () => {
     /** Spatial hash (cell == ink tile) so erase cost doesn't scale with the
      *  total stroke count on the page. Built once when the gesture starts. */
     grid: Map<string, PdfStroke[]>;
+    /** Prepared ribbon geometry per stroke, cached for the whole gesture. */
+    ribbons: Map<string, InkRibbon>;
+    /** Dev-only timing for this gesture (null in prod). */
+    perf: EraserPerf | null;
   } | null>(null);
 
   const pageLoadTokenRef = useRef(0);
@@ -792,7 +811,9 @@ const PdfCanvas: React.FC = () => {
     const wipe = strokeEraseRef.current;
     if (!wipe) return;
     for (const t of targets) wipe.pendingIds.add(t.id);
-    removeStrokesFromInk(inkTilesRef.current, wipe.grid, wipe.pendingIds, targets, wipe.bounds);
+    const tRestamp = performance.now();
+    removeStrokesFromInk(inkTilesRef.current, wipe.grid, wipe.pendingIds, targets, wipe.bounds, wipe.ribbons);
+    addEraserRestamp(wipe.perf, targets.length, performance.now() - tRestamp);
     dirtyRef.current = true;
     scheduleRender();
   }, [scheduleRender]);
@@ -807,9 +828,9 @@ const PdfCanvas: React.FC = () => {
     const half = PDF_ERASER_RADIUS / 2;
     for (let i = ink.length - 1; i >= 0; i--) {
       const s = ink[i];
-      const bnd = wipe.bounds.get(s.id) ?? getStrokeBounds(s);
-      if (!boundsIntersectRect(bnd, x - half, y - half, x + half, y + half)) continue;
-      if (hitTestStrokeBySegment(s, x, y, x, y)) { applyVisualErase([s]); return; }
+      const bnd = wipe.bounds.get(s.id);
+      if (bnd && !boundsIntersectRect(bnd, x - half, y - half, x + half, y + half)) continue;
+      if (hitTestStrokeBySegment(s, x, y, x, y, bnd)) { applyVisualErase([s]); return; }
     }
   }, [applyVisualErase]);
 
@@ -843,18 +864,21 @@ const PdfCanvas: React.FC = () => {
       if (p.y > by2) by2 = p.y;
     }
     const candidates: PdfStroke[] = [];
+    const tScan = performance.now();
     collectGridStrokes(wipe.grid, bx1 - half, by1 - half, bx2 + half, by2 + half, candidates);
     const targets: PdfStroke[] = [];
     for (const s of candidates) {
       if (wipe.pendingIds.has(s.id)) continue;
       if (s.compositeOperation === 'destination-out') continue;
+      const bnd = wipe.bounds.get(s.id);
       for (let i = 1; i < all.length; i++) {
-        if (hitTestStrokeBySegment(s, all[i - 1].x, all[i - 1].y, all[i].x, all[i].y)) {
+        if (hitTestStrokeBySegment(s, all[i - 1].x, all[i - 1].y, all[i].x, all[i].y, bnd)) {
           targets.push(s);
           break;
         }
       }
     }
+    addEraserScan(wipe.perf, 1, candidates.length, performance.now() - tScan);
     applyVisualErase(targets);
   }, [applyVisualErase]);
 
@@ -948,7 +972,7 @@ const PdfCanvas: React.FC = () => {
       strokeEraseRef.current = {
         page: st.currentPage, started: false, raf: 0,
         last: { x: world.x, y: world.y }, pending: [], pendingIds: new Set(),
-        bounds: new Map(), grid: new Map(),
+        bounds: new Map(), grid: new Map(), ribbons: new Map(), perf: createEraserPerf(),
       };
       // Hash every stroke once per gesture; erase cost then stays local to the
       // cells under the cursor no matter how many strokes the page holds.
@@ -1142,6 +1166,7 @@ const PdfCanvas: React.FC = () => {
         if (!wipe.started) { st.beginStrokeErase(wipe.page); wipe.started = true; }
         st.eraseStrokesLive(wipe.page, [...wipe.pendingIds]);
       }
+      logEraserPerf(wipe.perf, 'pdf');
     }
     strokeEraseRef.current = null;
 

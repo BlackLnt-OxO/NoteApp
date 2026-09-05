@@ -6,10 +6,15 @@ import {
   hitTestStroke, hitTestStrokeBySegment, getStrokeBounds, boundsIntersectRect,
   type Bounds,
 } from '../PdfAnnotation/PdfEngine';
+import {
+  createEraserPerf, addEraserScan, addEraserRestamp, logEraserPerf,
+  type EraserPerf,
+} from '../PdfAnnotation/eraserPerf';
 import { drawAnnotatedStroke } from '../PdfAnnotation/PdfBrushRenderers';
 import { screenToWorld, clampZoom, zoomAt, ERASER_RADIUS } from './constants';
 import {
   stampStroke, eraseSegTiles, eraseDotTiles, drawVisibleTiles, rebuildTiles, removeStrokesFromTiles,
+  type InkRibbon,
 } from './InkTiles';
 import TextNode from './TextNode';
 import ImageObject from './ImageObject';
@@ -147,6 +152,10 @@ const InfiniteInkCanvas: React.FC = () => {
     /** Spatial hash (cell == ink tile) so erase cost doesn't scale with the
      *  total stroke count on the page. Built once when the gesture starts. */
     grid: Map<string, Stroke[]>;
+    /** Prepared ribbon geometry per stroke, cached for the whole gesture. */
+    ribbons: Map<string, InkRibbon>;
+    /** Dev-only timing for this gesture (null in prod). */
+    perf: EraserPerf | null;
   } | null>(null);
 
   const objects = useCanvasStore((s) => s.objects);
@@ -338,7 +347,9 @@ const InfiniteInkCanvas: React.FC = () => {
     const wipe = strokeEraseRef.current;
     if (!wipe) return;
     for (const t of targets) wipe.pendingIds.add(t.id);
-    removeStrokesFromTiles(inkTilesRef.current, wipe.grid, wipe.pendingIds, targets, wipe.bounds);
+    const tRestamp = performance.now();
+    removeStrokesFromTiles(inkTilesRef.current, wipe.grid, wipe.pendingIds, targets, wipe.bounds, wipe.ribbons);
+    addEraserRestamp(wipe.perf, targets.length, performance.now() - tRestamp);
     dirtyRef.current = true;
     scheduleRender();
   }, [scheduleRender]);
@@ -355,9 +366,9 @@ const InfiniteInkCanvas: React.FC = () => {
     const half = ERASER_RADIUS / 2;
     for (let i = ink.length - 1; i >= 0; i--) {
       const s = ink[i];
-      const bnd = wipe.bounds.get(s.id) ?? getStrokeBounds(s);
-      if (!boundsIntersectRect(bnd, x - half, y - half, x + half, y + half)) continue;
-      if (hitTestStrokeBySegment(s, x, y, x, y)) { applyVisualErase([s]); return; }
+      const bnd = wipe.bounds.get(s.id);
+      if (bnd && !boundsIntersectRect(bnd, x - half, y - half, x + half, y + half)) continue;
+      if (hitTestStrokeBySegment(s, x, y, x, y, bnd)) { applyVisualErase([s]); return; }
     }
   }, [applyVisualErase]);
 
@@ -391,18 +402,21 @@ const InfiniteInkCanvas: React.FC = () => {
       if (p.y > by2) by2 = p.y;
     }
     const candidates: Stroke[] = [];
+    const tScan = performance.now();
     collectGridStrokes(wipe.grid, bx1 - half, by1 - half, bx2 + half, by2 + half, candidates);
     const targets: Stroke[] = [];
     for (const s of candidates) {
       if (wipe.pendingIds.has(s.id)) continue;
       if (s.compositeOperation === 'destination-out') continue;
+      const bnd = wipe.bounds.get(s.id);
       for (let i = 1; i < all.length; i++) {
-        if (hitTestStrokeBySegment(s, all[i - 1].x, all[i - 1].y, all[i].x, all[i].y)) {
+        if (hitTestStrokeBySegment(s, all[i - 1].x, all[i - 1].y, all[i].x, all[i].y, bnd)) {
           targets.push(s);
           break;
         }
       }
     }
+    addEraserScan(wipe.perf, 1, candidates.length, performance.now() - tScan);
     applyVisualErase(targets);
   }, [applyVisualErase]);
 
@@ -581,6 +595,7 @@ const InfiniteInkCanvas: React.FC = () => {
       strokeEraseRef.current = {
         started: false, raf: 0, last: { x: world.x, y: world.y },
         pending: [], pendingIds: new Set(), bounds: new Map(), grid: new Map(),
+        ribbons: new Map(), perf: createEraserPerf(),
       };
       // Hash every stroke once per gesture; erase cost then stays local to the
       // cells under the cursor no matter how many strokes the page holds.
@@ -766,6 +781,7 @@ const InfiniteInkCanvas: React.FC = () => {
         if (!wipe.started) { st.beginEraseGesture(); wipe.started = true; }
         st.eraseStrokesLive([...wipe.pendingIds]);
       }
+      logEraserPerf(wipe.perf, 'canvas');
     }
     strokeEraseRef.current = null;
 

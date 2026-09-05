@@ -307,17 +307,21 @@ function segSegDistance(
  * two pointer samples). Continuous along the whole segment — a fast swipe that
  * skips samples still erases every stroke it crosses. A degenerate segment
  * (a==b) degenerates to the old click-to-erase behaviour.
+ *
+ * `cachedBounds` avoids recomputing getStrokeBounds() — the whole-stroke eraser
+ * already caches every stroke's bounds for the gesture and should pass them in.
  */
 export function hitTestStrokeBySegment(
   stroke: PdfStroke,
   x1: number, y1: number,
   x2: number, y2: number,
+  cachedBounds?: Bounds,
 ): boolean {
   const radius = strokeEraserRadius(stroke.size);
   const pts = stroke.points;
   if (pts.length === 0) return false;
   // Bounding-box prefilter: sweep rectangle inflated by the hit radius.
-  const b = getStrokeBounds(stroke);
+  const b = cachedBounds ?? getStrokeBounds(stroke);
   if (!boundsIntersectRect(b, x1 - radius, y1 - radius, x2 + radius, y2 + radius)) {
     return false;
   }

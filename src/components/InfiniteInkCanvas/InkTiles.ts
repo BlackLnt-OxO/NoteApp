@@ -28,6 +28,9 @@ import {
 const TILE = 512; // world units per tile
 const SCALE = 3;  // bake supersampling (matches PDF_BAKE_SCALE)
 
+/** A prepared ribbon slice geometry for one stroke (see PdfBrushRenderers). */
+export type InkRibbon = ReturnType<typeof prepareInkRibbon>;
+
 function tileKey(tx: number, ty: number): string {
   return `${tx}:${ty}`;
 }
@@ -181,6 +184,7 @@ export function removeStrokesFromTiles(
   skipIds: Set<string>,
   removed: Stroke[],
   cachedBounds?: Map<string, Bounds>,
+  ribbons?: Map<string, InkRibbon>,
 ): void {
   if (removed.length === 0) return;
 
@@ -231,7 +235,15 @@ export function removeStrokesFromTiles(
     for (const s of list) {
       if (skipIds.has(s.id)) continue;
       ctx.setTransform(SCALE, 0, 0, SCALE, -tx * TILE * SCALE, -ty * TILE * SCALE);
-      const ribbon = prepareInkRibbon(s);
+      // Prepare the ribbon geometry once per stroke per gesture; a long stroke
+      // can be re-stamped into many cleared tiles across several erase frames.
+      let ribbon: InkRibbon;
+      if (ribbons) {
+        if (!ribbons.has(s.id)) ribbons.set(s.id, prepareInkRibbon(s));
+        ribbon = ribbons.get(s.id)!;
+      } else {
+        ribbon = prepareInkRibbon(s);
+      }
       if (ribbon) {
         drawInkRibbonSlice(ctx, ribbon, tx * TILE, ty * TILE, (tx + 1) * TILE, (ty + 1) * TILE);
       } else {
