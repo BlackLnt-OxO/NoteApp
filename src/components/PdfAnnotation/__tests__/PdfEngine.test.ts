@@ -16,12 +16,12 @@ import {
   clampZoom,
   zoomAt,
   fitCamera,
-  BAKE_SCALE,
-  ERASER_RADIUS,
-} from '../inkGeometry';
-import type { InkStroke } from '../inkTypes';
+  PDF_BAKE_SCALE,
+  PDF_ERASER_RADIUS,
+} from '../PdfEngine';
+import type { PdfStroke } from '../PdfTypes';
 
-function makeStroke(): InkStroke {
+function makeStroke(): PdfStroke {
   return {
     id: 's1', type: 'stroke', points: [], color: '#fff', size: 8, opacity: 1,
     smoothing: 0.35, compositeOperation: 'source-over', createdAt: 1,
@@ -30,8 +30,8 @@ function makeStroke(): InkStroke {
 
 describe('constants', () => {
   it('exports bake scale and eraser radius', () => {
-    expect(BAKE_SCALE).toBeGreaterThanOrEqual(1);
-    expect(ERASER_RADIUS).toBeGreaterThan(0);
+    expect(PDF_BAKE_SCALE).toBeGreaterThanOrEqual(1);
+    expect(PDF_ERASER_RADIUS).toBeGreaterThan(0);
   });
 });
 
@@ -171,7 +171,7 @@ describe('fitCamera', () => {
 });
 
 describe('whole-stroke eraser helpers', () => {
-  function line(): InkStroke {
+  function line(): PdfStroke {
     const s = makeStroke();
     addRawPoint(s, 0, 0, 0.5, 1000);
     addRawPoint(s, 100, 0, 0.5, 1016);
@@ -179,7 +179,7 @@ describe('whole-stroke eraser helpers', () => {
   }
 
   it('strokeEraserRadius = disc half-width + stroke half-width', () => {
-    expect(strokeEraserRadius(8)).toBeCloseTo(ERASER_RADIUS / 2 + 4, 6);
+    expect(strokeEraserRadius(8)).toBeCloseTo(PDF_ERASER_RADIUS / 2 + 4, 6);
   });
 
   it('distinguishes ink strokes from destination-out eraser carves', () => {

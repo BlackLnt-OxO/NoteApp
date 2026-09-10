@@ -22,33 +22,34 @@ import { usePdfToolbarStore } from '../InfiniteInkCanvas/useToolbarStore';
 import { useNoteStore } from '../../store';
 import { themeCanvasColors } from '../../themeColors';
 import {
-  BAKE_SCALE,
-  ERASER_RADIUS,
+  PDF_BAKE_SCALE,
+  PDF_ERASER_RADIUS,
   getPressure,
   addRawPoint,
+  drawEraserSegment,
+  drawEraserDot,
   drawDotGrid,
   hitTestStroke,
   hitTestStrokeBySegment,
   getStrokeBounds,
   boundsIntersectRect,
   screenToWorld,
+  worldToScreen,
   clampZoom,
   zoomAt,
   fitCamera,
   type Bounds,
-} from '../InkCore/inkGeometry';
-import { addStrokeToGrid, collectGridStrokes } from '../InkCore/inkGrid';
-import { InkTileLayer, type InkRibbon } from '../InkCore/InkTileLayer';
-import { drawAnnotatedStroke } from '../InkCore/inkRenderers';
+} from './PdfEngine';
 import {
-  drawSelectionHighlight, drawSelectionRect, drawLaser, LASER_LIFETIME,
-  type LaserSegment,
-} from '../InkCore/inkOverlays';
+  drawAnnotatedStroke,
+  prepareInkRibbon,
+  drawInkRibbonSlice,
+} from './PdfBrushRenderers';
+import { renderPageToCanvas, getPageSize, cleanupPage } from './PdfLoader';
 import {
   createEraserPerf, addEraserScan, addEraserRestamp, logEraserPerf,
   type EraserPerf,
-} from '../InkCore/inkPerf';
-import { renderPageToCanvas, getPageSize, cleanupPage } from './PdfLoader';
+} from './eraserPerf';
 import type { PdfItem, PdfPoint, PdfStroke, PdfTextObject as PdfTextObjectData } from './PdfTypes';
 import PdfTextNode from './PdfTextNode';
 import PdfTextObject from './PdfTextObject';
@@ -59,9 +60,327 @@ function strokesOnly(items: PdfItem[]): PdfStroke[] {
   return items.filter((o): o is PdfStroke => o.type === 'stroke');
 }
 
+// ---- Whole-stroke-eraser spatial hash -------------------------------------
+// Strokes are hashed once per wipe gesture into cells the size of an ink tile.
+// The drag hit-scan and the tile re-stamp then only touch strokes in cells near
+// the cursor, so erase cost is independent of how many strokes the page holds.
+
+/** Insert a stroke into the wipe hash (into every cell its bounds overlap). */
+function addStrokeToGrid(grid: Map<string, PdfStroke[]>, s: PdfStroke, b: Bounds): void {
+  const tx0 = Math.floor(b.minX / TILE), tx1 = Math.floor(b.maxX / TILE);
+  const ty0 = Math.floor(b.minY / TILE), ty1 = Math.floor(b.maxY / TILE);
+  for (let ty = ty0; ty <= ty1; ty++) {
+    for (let tx = tx0; tx <= tx1; tx++) {
+      const key = tx + ':' + ty;
+      let arr = grid.get(key);
+      if (!arr) { arr = []; grid.set(key, arr); }
+      arr.push(s);
+    }
+  }
+}
+
+/** Collect the distinct strokes whose grid cells overlap the given rect. */
+function collectGridStrokes(
+  grid: Map<string, PdfStroke[]>,
+  x1: number, y1: number, x2: number, y2: number,
+  out: PdfStroke[],
+): void {
+  const cx0 = Math.floor(Math.min(x1, x2) / TILE), cx1 = Math.floor(Math.max(x1, x2) / TILE);
+  const cy0 = Math.floor(Math.min(y1, y2) / TILE), cy1 = Math.floor(Math.max(y1, y2) / TILE);
+  const seen = new Set<string>();
+  for (let cy = cy0; cy <= cy1; cy++) {
+    for (let cx = cx0; cx <= cx1; cx++) {
+      const arr = grid.get(cx + ':' + cy);
+      if (!arr) continue;
+      for (const s of arr) {
+        if (!seen.has(s.id)) { seen.add(s.id); out.push(s); }
+      }
+    }
+  }
+}
+
+/** Transient laser-pointer stroke segment (never committed / persisted). */
+interface LaserSegment {
+  points: PdfPoint[];
+  color: string;
+  size: number;
+  /** Timestamp of stroke start (pen-down). */
+  start: number;
+  /** Timestamp of pen-up — the fade clock starts HERE, not at pen-down. */
+  end?: number;
+}
+const LASER_LIFETIME = 1800; // ms — how long a laser trail stays visible
+
+/** Draw a laser segment; it stays fully visible while writing (no `end` yet),
+ *  then fades linearly from the pen-up time. */
+function drawLaser(ctx: CanvasRenderingContext2D, seg: LaserSegment, alpha: number): void {
+  if (alpha <= 0 || seg.points.length === 0) return;
+
+  ctx.save();
+  ctx.lineCap = 'round';
+  ctx.lineJoin = 'round';
+  ctx.globalCompositeOperation = 'source-over';
+  ctx.strokeStyle = seg.color;
+  ctx.fillStyle = seg.color;
+  ctx.lineWidth = seg.size;
+  ctx.globalAlpha = alpha;
+  ctx.shadowColor = seg.color;
+  ctx.shadowBlur = 6;
+  if (seg.points.length === 1) {
+    ctx.beginPath();
+    ctx.arc(seg.points[0].x, seg.points[0].y, seg.size / 2, 0, Math.PI * 2);
+    ctx.fill();
+  } else {
+    ctx.beginPath();
+    ctx.moveTo(seg.points[0].x, seg.points[0].y);
+    for (let i = 1; i < seg.points.length; i++) ctx.lineTo(seg.points[i].x, seg.points[i].y);
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+
+// ---- Tiling -------------------------------------------------------------------
+
+const TILE = 512; // world units per tile
+const SCALE = PDF_BAKE_SCALE;
 /** Background canvases always kept hot: every anchored page + the current page. */
 const BG_CACHE_MIN = 3;
 const BG_CACHE_MAX = 8;
+
+function tileKey(tx: number, ty: number): string {
+  return `${tx}:${ty}`;
+}
+
+function getTile(tiles: Map<string, HTMLCanvasElement>, tx: number, ty: number): HTMLCanvasElement {
+  const key = tileKey(tx, ty);
+  let c = tiles.get(key);
+  if (!c) {
+    c = document.createElement('canvas');
+    c.width = Math.round(TILE * SCALE);
+    c.height = Math.round(TILE * SCALE);
+    tiles.set(key, c);
+  }
+  return c;
+}
+
+function tileCtx(tiles: Map<string, HTMLCanvasElement>, tx: number, ty: number): CanvasRenderingContext2D {
+  return getTile(tiles, tx, ty).getContext('2d')!;
+}
+
+/** Draw a stroke into whichever tiles it intersects. For ribbon pens the ribbon
+ *  is prepared once, then each tile stamps only the slice overlapping it — the
+ *  pixels are identical (no re-smoothing, no seams) but cost scales with the
+ *  tile instead of re-rasterizing the WHOLE stroke per tile. Eraser / pencil
+ *  keep the whole-stroke path. */
+function stampStroke(tiles: Map<string, HTMLCanvasElement>, stroke: PdfStroke): void {
+  const b = getStrokeBounds(stroke);
+  const tx0 = Math.floor(b.minX / TILE), tx1 = Math.floor(b.maxX / TILE);
+  const ty0 = Math.floor(b.minY / TILE), ty1 = Math.floor(b.maxY / TILE);
+  const ribbon = prepareInkRibbon(stroke);
+  for (let ty = ty0; ty <= ty1; ty++) {
+    for (let tx = tx0; tx <= tx1; tx++) {
+      const ctx = tileCtx(tiles, tx, ty);
+      ctx.setTransform(SCALE, 0, 0, SCALE, -tx * TILE * SCALE, -ty * TILE * SCALE);
+      if (ribbon) {
+        drawInkRibbonSlice(ctx, ribbon, tx * TILE, ty * TILE, (tx + 1) * TILE, (ty + 1) * TILE);
+      } else {
+        drawAnnotatedStroke(ctx, stroke);
+      }
+    }
+  }
+}
+
+/**
+ * Whole-stroke eraser live removal: clear the removed stroke(s) out of the
+ * shared ink-tile map. Affected tiles are cleared, then only the strokes listed
+ * in those tiles' wipe-grid cells are re-stamped (the grid was built once per
+ * wipe gesture and cell size == tile size, so cost scales with the strokes near
+ * the removed one, never with the total page stroke count). Destination-out
+ * eraser carves are re-stamped in order so the z-relationship matches a full
+ * rebuild. Empty tiles are dropped.
+ */
+type InkRibbon = ReturnType<typeof prepareInkRibbon>;
+
+function removeStrokesFromInk(
+  tiles: Map<string, HTMLCanvasElement>,
+  grid: Map<string, PdfStroke[]>,
+  skipIds: Set<string>,
+  removed: PdfStroke[],
+  cachedBounds?: Map<string, Bounds>,
+  ribbons?: Map<string, InkRibbon>,
+): void {
+  if (removed.length === 0) return;
+
+  const boundsOf = (s: PdfStroke): Bounds => {
+    const b = cachedBounds?.get(s.id);
+    if (b) return b;
+    const nb = getStrokeBounds(s);
+    cachedBounds?.set(s.id, nb);
+    return nb;
+  };
+
+  const cleared = new Set<string>();
+  for (const r of removed) {
+    const b = boundsOf(r);
+    const tx0 = Math.floor(b.minX / TILE), tx1 = Math.floor(b.maxX / TILE);
+    const ty0 = Math.floor(b.minY / TILE), ty1 = Math.floor(b.maxY / TILE);
+    for (let ty = ty0; ty <= ty1; ty++) {
+      for (let tx = tx0; tx <= tx1; tx++) {
+        const key = tileKey(tx, ty);
+        if (tiles.has(key)) cleared.add(key);
+      }
+    }
+  }
+  if (cleared.size === 0) return;
+
+  for (const key of cleared) {
+    const c = tiles.get(key);
+    const ctx = c && c.getContext('2d');
+    if (!c || !ctx) continue;
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.clearRect(0, 0, c.width, c.height);
+  }
+
+  // Re-stamp, per cleared tile, only the strokes the wipe grid lists for that
+  // cell (except the ones erased this gesture). Mirrors stampStroke exactly.
+  const stillNeeded = new Set<string>();
+  for (const key of cleared) {
+    const c = tiles.get(key);
+    const ctx = c && c.getContext('2d');
+    if (!c || !ctx) continue;
+    const list = grid.get(key);
+    if (!list) continue;
+    const sep = key.indexOf(':');
+    const tx = Number(key.slice(0, sep)), ty = Number(key.slice(sep + 1));
+    for (const s of list) {
+      if (skipIds.has(s.id)) continue;
+      ctx.setTransform(SCALE, 0, 0, SCALE, -tx * TILE * SCALE, -ty * TILE * SCALE);
+      // Prepare the ribbon geometry once per stroke per gesture; a long stroke
+      // can be re-stamped into many cleared tiles across several erase frames.
+      let ribbon: InkRibbon;
+      if (ribbons) {
+        if (!ribbons.has(s.id)) ribbons.set(s.id, prepareInkRibbon(s));
+        ribbon = ribbons.get(s.id)!;
+      } else {
+        ribbon = prepareInkRibbon(s);
+      }
+      if (ribbon) {
+        drawInkRibbonSlice(ctx, ribbon, tx * TILE, ty * TILE, (tx + 1) * TILE, (ty + 1) * TILE);
+      } else {
+        drawAnnotatedStroke(ctx, s);
+      }
+      stillNeeded.add(key);
+    }
+  }
+  for (const key of cleared) {
+    if (!stillNeeded.has(key)) tiles.delete(key);
+  }
+}
+
+/** Erase a segment (destination-out) across the tiles it touches. */
+function eraseSegTiles(tiles: Map<string, HTMLCanvasElement>, x1: number, y1: number, x2: number, y2: number, size: number): void {
+  const pad = size / 2 + 2;
+  const tx0 = Math.floor((Math.min(x1, x2) - pad) / TILE), tx1 = Math.floor((Math.max(x1, x2) + pad) / TILE);
+  const ty0 = Math.floor((Math.min(y1, y2) - pad) / TILE), ty1 = Math.floor((Math.max(y1, y2) + pad) / TILE);
+  for (let ty = ty0; ty <= ty1; ty++) {
+    for (let tx = tx0; tx <= tx1; tx++) {
+      const ctx = tileCtx(tiles, tx, ty);
+      ctx.setTransform(SCALE, 0, 0, SCALE, -tx * TILE * SCALE, -ty * TILE * SCALE);
+      drawEraserSegment(ctx, x1, y1, x2, y2, size);
+    }
+  }
+}
+
+/** Erase a single dot (destination-out) across the tiles it touches. */
+function eraseDotTiles(tiles: Map<string, HTMLCanvasElement>, x: number, y: number, size: number): void {
+  const pad = size / 2 + 2;
+  const tx0 = Math.floor((x - pad) / TILE), tx1 = Math.floor((x + pad) / TILE);
+  const ty0 = Math.floor((y - pad) / TILE), ty1 = Math.floor((y + pad) / TILE);
+  for (let ty = ty0; ty <= ty1; ty++) {
+    for (let tx = tx0; tx <= tx1; tx++) {
+      const ctx = tileCtx(tiles, tx, ty);
+      ctx.setTransform(SCALE, 0, 0, SCALE, -tx * TILE * SCALE, -ty * TILE * SCALE);
+      drawEraserDot(ctx, x, y, size);
+    }
+  }
+}
+
+/** Draw all ink tiles that intersect the current viewport (already in world transform). */
+function drawVisibleTiles(
+  ctx: CanvasRenderingContext2D,
+  tiles: Map<string, HTMLCanvasElement>,
+  cam: { x: number; y: number; zoom: number },
+  vw: number,
+  vh: number,
+  dpr: number,
+): void {
+  const tl = screenToWorld(0, 0, cam);
+  const br = screenToWorld(vw, vh, cam);
+  const tx0 = Math.floor(tl.x / TILE), tx1 = Math.floor(br.x / TILE);
+  const ty0 = Math.floor(tl.y / TILE), ty1 = Math.floor(br.y / TILE);
+
+  // Snap tiles to integer device pixels so neighbors share an exact edge → no
+  // 1px seam (dark/white line) and crisper edges when 3×-supersampled tiles are
+  // downscaled. See InkTiles.drawVisibleTiles for the same rationale.
+  ctx.save();
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = 'high';
+
+  for (let ty = ty0; ty <= ty1; ty++) {
+    for (let tx = tx0; tx <= tx1; tx++) {
+      const c = tiles.get(tileKey(tx, ty));
+      if (!c) continue;
+      // Snap shared boundaries once (see InkTiles.drawVisibleTiles) so adjacent
+      // tiles share an exact edge at any zoom — no 1px seam.
+      const tl = worldToScreen(tx * TILE, ty * TILE, cam);
+      const br = worldToScreen((tx + 1) * TILE, (ty + 1) * TILE, cam);
+      const x0 = Math.round(tl.x * dpr) / dpr;
+      const y0 = Math.round(tl.y * dpr) / dpr;
+      const x1 = Math.round(br.x * dpr) / dpr;
+      const y1 = Math.round(br.y * dpr) / dpr;
+      ctx.drawImage(c, x0, y0, x1 - x0, y1 - y0);
+    }
+  }
+
+  ctx.restore();
+}
+
+// ---- Selection drawing helpers (world coords) ---------------------------------
+
+function drawSelectionHighlight(
+  ctx: CanvasRenderingContext2D,
+  strokes: PdfStroke[],
+  selectedIds: string[],
+): void {
+  ctx.save();
+  ctx.strokeStyle = '#6b5ce7';
+  ctx.lineWidth = 1.5 / (ctx.getTransform().a || 1);
+  ctx.setLineDash([5, 4]);
+  const set = new Set(selectedIds);
+  for (const s of strokes) {
+    if (!set.has(s.id)) continue;
+    const b = getStrokeBounds(s);
+    ctx.strokeRect(b.minX, b.minY, b.maxX - b.minX, b.maxY - b.minY);
+  }
+  ctx.restore();
+}
+
+function drawSelectionRect(
+  ctx: CanvasRenderingContext2D,
+  r: { x1: number; y1: number; x2: number; y2: number },
+): void {
+  ctx.save();
+  ctx.strokeStyle = '#6b5ce7';
+  ctx.lineWidth = 1 / (ctx.getTransform().a || 1);
+  ctx.setLineDash([5, 4]);
+  ctx.fillStyle = 'rgba(107,92,231,0.08)';
+  const x = Math.min(r.x1, r.x2), y = Math.min(r.y1, r.y2);
+  const w = Math.abs(r.x2 - r.x1), h = Math.abs(r.y2 - r.y1);
+  ctx.fillRect(x, y, w, h);
+  ctx.strokeRect(x, y, w, h);
+  ctx.restore();
+}
 
 // ---- Component ----------------------------------------------------------------
 
@@ -70,7 +389,7 @@ const PdfCanvas: React.FC = () => {
   const containerRef = useRef<HTMLDivElement>(null);
   const bgCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const bgCacheRef = useRef<Map<number, HTMLCanvasElement>>(new Map());
-  const inkTilesRef = useRef<InkTileLayer>(new InkTileLayer());
+  const inkTilesRef = useRef<Map<string, HTMLCanvasElement>>(new Map());
 
   const dprRef = useRef(1);
   const rafRef = useRef(0);
@@ -218,7 +537,7 @@ const PdfCanvas: React.FC = () => {
       const bg = bgCanvasRef.current;
       if (bg) ctx.drawImage(bg, 0, 0, size.width, size.height);
 
-      inkTilesRef.current.drawVisible(ctx, cam, vw, vh, dpr);
+      drawVisibleTiles(ctx, inkTilesRef.current, cam, vw, vh, dpr);
 
       const strokes = strokesOnly(st.items[st.currentPage] ?? []);
 
@@ -300,7 +619,12 @@ const PdfCanvas: React.FC = () => {
   const rebuildInk = useCallback((excludeIds?: Set<string>) => {
     const st = usePdfStore.getState();
     const strokes = strokesOnly(st.items[st.currentPage] ?? []);
-    inkTilesRef.current.rebuild(strokes, excludeIds);
+    const tiles = new Map<string, HTMLCanvasElement>();
+    for (const s of strokes) {
+      if (excludeIds?.has(s.id)) continue;
+      stampStroke(tiles, s);
+    }
+    inkTilesRef.current = tiles;
   }, []);
 
   // Structural changes (undo/redo/delete/move/clear) → rebuild tiles
@@ -379,7 +703,7 @@ const PdfCanvas: React.FC = () => {
 
       // Miss → render into a scratch canvas, then atomically swap it in.
       const scratch = document.createElement('canvas');
-      await renderPageToCanvas(pdfDoc, pageNum, scratch, BAKE_SCALE);
+      await renderPageToCanvas(pdfDoc, pageNum, scratch, PDF_BAKE_SCALE);
       if (token !== pageLoadTokenRef.current) return;
 
       // Insert into cache (LRU; anchored pages are never evicted). Capacity
@@ -488,7 +812,7 @@ const PdfCanvas: React.FC = () => {
     if (!wipe) return;
     for (const t of targets) wipe.pendingIds.add(t.id);
     const tRestamp = performance.now();
-    inkTilesRef.current.removeStrokes(wipe.grid, wipe.pendingIds, targets, wipe.bounds, wipe.ribbons);
+    removeStrokesFromInk(inkTilesRef.current, wipe.grid, wipe.pendingIds, targets, wipe.bounds, wipe.ribbons);
     addEraserRestamp(wipe.perf, targets.length, performance.now() - tRestamp);
     dirtyRef.current = true;
     scheduleRender();
@@ -501,7 +825,7 @@ const PdfCanvas: React.FC = () => {
     const st = usePdfStore.getState();
     const ink = strokesOnly(st.items[wipe.page] ?? [])
       .filter((s) => s.compositeOperation !== 'destination-out' && !wipe.pendingIds.has(s.id));
-    const half = ERASER_RADIUS / 2;
+    const half = PDF_ERASER_RADIUS / 2;
     for (let i = ink.length - 1; i >= 0; i--) {
       const s = ink[i];
       const bnd = wipe.bounds.get(s.id);
@@ -531,7 +855,7 @@ const PdfCanvas: React.FC = () => {
     }
     wipe.last = all[all.length - 1];
     if (all.length < 2) return;
-    const half = ERASER_RADIUS / 2;
+    const half = PDF_ERASER_RADIUS / 2;
     let bx1 = Infinity, by1 = Infinity, bx2 = -Infinity, by2 = -Infinity;
     for (const p of all) {
       if (p.x < bx1) bx1 = p.x;
@@ -695,7 +1019,7 @@ const PdfCanvas: React.FC = () => {
       type: 'stroke',
       points: [],
       color: isEraser ? '#000000' : st.brush.color,
-      size: isEraser ? ERASER_RADIUS : st.brush.size,
+      size: isEraser ? PDF_ERASER_RADIUS : st.brush.size,
       opacity: isEraser ? 1 : st.brush.opacity,
       smoothing: isEraser ? 0 : st.brush.smoothing,
       compositeOperation: isEraser ? 'destination-out' : 'source-over',
@@ -709,7 +1033,7 @@ const PdfCanvas: React.FC = () => {
     if (isEraser) {
       eraserStrokeRef.current = stroke;
       // Erase the initial dot immediately for instant feedback.
-      inkTilesRef.current.eraseDot(world.x, world.y, ERASER_RADIUS);
+      eraseDotTiles(inkTilesRef.current, world.x, world.y, PDF_ERASER_RADIUS);
     } else {
       currentStrokeRef.current = stroke;
     }
@@ -801,7 +1125,7 @@ const PdfCanvas: React.FC = () => {
         addRawPoint(es, w.x, w.y, 1, ce.timeStamp);
         if (es.points.length >= 2) {
           const a = es.points[es.points.length - 2];
-          inkTilesRef.current.eraseSegment(a.x, a.y, w.x, w.y, ERASER_RADIUS);
+          eraseSegTiles(inkTilesRef.current, a.x, a.y, w.x, w.y, PDF_ERASER_RADIUS);
         }
       }
       dirtyRef.current = true;
@@ -915,7 +1239,7 @@ const PdfCanvas: React.FC = () => {
       currentStrokeRef.current = null;
       if (stroke.points.length > 0) {
         const st = usePdfStore.getState();
-        inkTilesRef.current.stampStroke(stroke);
+        stampStroke(inkTilesRef.current, stroke);
         st.commitStroke(st.currentPage, stroke);
       }
       isDrawingRef.current = false;
@@ -1029,7 +1353,7 @@ const PdfCanvas: React.FC = () => {
   const showCursor = (activeTool === 'pen' || activeTool === 'eraser') && cursorScreen && !isDraggingToolbar;
   const laserSize = Math.max(1.5, brush.size * 0.4);
   const cs = (activeTool === 'eraser'
-    ? ERASER_RADIUS
+    ? PDF_ERASER_RADIUS
     : brushType === 'laser' ? laserSize : brush.size) * camera.zoom;
   const editingTextNode = currentItems.find((o): o is PdfTextObjectData => o.type === 'text' && o.id === editingTextId);
 

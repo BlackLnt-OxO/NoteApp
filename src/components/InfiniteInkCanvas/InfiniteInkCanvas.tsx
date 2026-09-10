@@ -1,23 +1,21 @@
 import React, { useRef, useEffect, useCallback, useState } from 'react';
 import { useCanvasStore } from './useCanvasStore';
-import {
-  drawSelectionHighlight, drawSelectionRect, drawLaser, LASER_LIFETIME,
-  type LaserSegment,
-} from '../InkCore/inkOverlays';
+import { drawSelectionHighlight, drawSelectionRect } from './CanvasRenderer';
 import {
   drawDotGrid, getPressure, addRawPoint,
   hitTestStroke, hitTestStrokeBySegment, getStrokeBounds, boundsIntersectRect,
-  ERASER_RADIUS,
   type Bounds,
-} from '../InkCore/inkGeometry';
-import { addStrokeToGrid, collectGridStrokes } from '../InkCore/inkGrid';
-import { InkTileLayer, type InkRibbon } from '../InkCore/InkTileLayer';
-import { drawAnnotatedStroke } from '../InkCore/inkRenderers';
+} from '../PdfAnnotation/PdfEngine';
 import {
   createEraserPerf, addEraserScan, addEraserRestamp, logEraserPerf,
   type EraserPerf,
-} from '../InkCore/inkPerf';
-import { screenToWorld, clampZoom, zoomAt } from './constants';
+} from '../PdfAnnotation/eraserPerf';
+import { drawAnnotatedStroke } from '../PdfAnnotation/PdfBrushRenderers';
+import { screenToWorld, clampZoom, zoomAt, ERASER_RADIUS } from './constants';
+import {
+  stampStroke, eraseSegTiles, eraseDotTiles, drawVisibleTiles, rebuildTiles, removeStrokesFromTiles,
+  type InkRibbon,
+} from './InkTiles';
 import TextNode from './TextNode';
 import ImageObject from './ImageObject';
 import TextObject from './TextObject';
@@ -28,6 +26,89 @@ import { useNoteStore } from '../../store';
 import { themeCanvasColors } from '../../themeColors';
 import type { Stroke, StrokePoint, TextNodeData, ImageObject as ImageObjectType } from './types';
 
+/** Transient laser-pointer stroke segment (never committed / persisted). */
+interface LaserSegment {
+  points: StrokePoint[];
+  color: string;
+  size: number;
+  /** Timestamp of stroke start (pen-down). */
+  start: number;
+  /** Timestamp of pen-up — the fade clock starts HERE, not at pen-down. */
+  end?: number;
+}
+const LASER_LIFETIME = 1800; // ms — how long a laser trail stays visible
+
+// ---- Whole-stroke-eraser spatial hash -------------------------------------
+// Strokes are hashed once per wipe gesture into cells the size of an ink tile.
+// The drag hit-scan and the tile re-stamp then only touch strokes in cells near
+// the cursor, so erase cost is independent of how many strokes the page holds.
+
+const WIPE_CELL = 512; // world units (== ink tile size, so grid keys == tile keys)
+
+/** Insert a stroke into the wipe hash (into every cell its bounds overlap). */
+function addStrokeToGrid(grid: Map<string, Stroke[]>, s: Stroke, b: Bounds): void {
+  const tx0 = Math.floor(b.minX / WIPE_CELL), tx1 = Math.floor(b.maxX / WIPE_CELL);
+  const ty0 = Math.floor(b.minY / WIPE_CELL), ty1 = Math.floor(b.maxY / WIPE_CELL);
+  for (let ty = ty0; ty <= ty1; ty++) {
+    for (let tx = tx0; tx <= tx1; tx++) {
+      const key = tx + ':' + ty;
+      let arr = grid.get(key);
+      if (!arr) { arr = []; grid.set(key, arr); }
+      arr.push(s);
+    }
+  }
+}
+
+/** Collect the distinct strokes whose grid cells overlap the given rect. */
+function collectGridStrokes(
+  grid: Map<string, Stroke[]>,
+  x1: number, y1: number, x2: number, y2: number,
+  out: Stroke[],
+): void {
+  const cx0 = Math.floor(Math.min(x1, x2) / WIPE_CELL), cx1 = Math.floor(Math.max(x1, x2) / WIPE_CELL);
+  const cy0 = Math.floor(Math.min(y1, y2) / WIPE_CELL), cy1 = Math.floor(Math.max(y1, y2) / WIPE_CELL);
+  const seen = new Set<string>();
+  for (let cy = cy0; cy <= cy1; cy++) {
+    for (let cx = cx0; cx <= cx1; cx++) {
+      const arr = grid.get(cx + ':' + cy);
+      if (!arr) continue;
+      for (const s of arr) {
+        if (!seen.has(s.id)) { seen.add(s.id); out.push(s); }
+      }
+    }
+  }
+}
+
+
+/** Draw a laser segment at the given alpha. The caller decides alpha (uniform
+ *  while writing so every trail stays lit, then a group fade from the last pen
+ *  activity). */
+function drawLaser(ctx: CanvasRenderingContext2D, seg: LaserSegment, alpha: number): void {
+  if (alpha <= 0 || seg.points.length === 0) return;
+
+  ctx.save();
+  ctx.lineCap = 'round';
+  ctx.lineJoin = 'round';
+  ctx.globalCompositeOperation = 'source-over';
+  ctx.strokeStyle = seg.color;
+  ctx.fillStyle = seg.color;
+  ctx.lineWidth = seg.size;
+  ctx.globalAlpha = alpha;
+  ctx.shadowColor = seg.color;
+  ctx.shadowBlur = 6;
+  if (seg.points.length === 1) {
+    ctx.beginPath();
+    ctx.arc(seg.points[0].x, seg.points[0].y, seg.size / 2, 0, Math.PI * 2);
+    ctx.fill();
+  } else {
+    ctx.beginPath();
+    ctx.moveTo(seg.points[0].x, seg.points[0].y);
+    for (let i = 1; i < seg.points.length; i++) ctx.lineTo(seg.points[i].x, seg.points[i].y);
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+
 const InfiniteInkCanvas: React.FC = () => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -37,7 +118,7 @@ const InfiniteInkCanvas: React.FC = () => {
   const selectAnchorRef = useRef<{ x: number; y: number } | null>(null);
   const selectionRectRef = useRef<{ x1: number; y1: number; x2: number; y2: number } | null>(null);
   const selectDragRef = useRef<{ start: { x: number; y: number }; ids: string[]; snapshots: Map<string, StrokePoint[]>; dx: number; dy: number } | null>(null);
-  const inkTilesRef = useRef<InkTileLayer>(new InkTileLayer());
+  const inkTilesRef = useRef<Map<string, HTMLCanvasElement>>(new Map());
   const fileInputRef = useRef<HTMLInputElement>(null);
   const insertWorldRef = useRef<{ x: number; y: number } | null>(null);
   const [cursorScreen, setCursorScreen] = useState<{ x: number; y: number } | null>(null);
@@ -172,7 +253,7 @@ const InfiniteInkCanvas: React.FC = () => {
     ctx.scale(cam.zoom, cam.zoom);
 
     // Rasterized ink tiles (O(1) per frame).
-    inkTilesRef.current.drawVisible(ctx, cam, vw, vh, dpr);
+    drawVisibleTiles(ctx, inkTilesRef.current, cam, vw, vh, dpr);
 
     // Text nodes are now always-interactive DOM cards rendered ABOVE the canvas
     // (TextObject) — they are intentionally NOT drawn into the vector canvas.
@@ -267,7 +348,7 @@ const InfiniteInkCanvas: React.FC = () => {
     if (!wipe) return;
     for (const t of targets) wipe.pendingIds.add(t.id);
     const tRestamp = performance.now();
-    inkTilesRef.current.removeStrokes(wipe.grid, wipe.pendingIds, targets, wipe.bounds, wipe.ribbons);
+    removeStrokesFromTiles(inkTilesRef.current, wipe.grid, wipe.pendingIds, targets, wipe.bounds, wipe.ribbons);
     addEraserRestamp(wipe.perf, targets.length, performance.now() - tRestamp);
     dirtyRef.current = true;
     scheduleRender();
@@ -356,7 +437,7 @@ const InfiniteInkCanvas: React.FC = () => {
   useEffect(() => {
     const state = useCanvasStore.getState();
     const strokes = state.objects.filter((o): o is Stroke => o.type === 'stroke');
-    inkTilesRef.current.rebuild(strokes);
+    inkTilesRef.current = rebuildTiles(strokes);
     dirtyRef.current = true;
     scheduleRender();
   }, [renderEpoch, scheduleRender]);
@@ -429,7 +510,7 @@ const InfiniteInkCanvas: React.FC = () => {
     selectDragRef.current = { start: world, ids, snapshots, dx: 0, dy: 0 };
     // Remove the selected strokes from the tiles — they're drawn live during drag.
     const strokes = state.objects.filter((o): o is Stroke => o.type === 'stroke');
-    inkTilesRef.current.rebuild(strokes, new Set(ids));
+    inkTilesRef.current = rebuildTiles(strokes, new Set(ids));
     dirtyRef.current = true;
     scheduleRender();
   };
@@ -575,7 +656,7 @@ const InfiniteInkCanvas: React.FC = () => {
     currentStrokeRef.current = stroke;
     if (isEraser) {
       // Free eraser: erase the initial dot immediately (destination-out into tiles).
-      inkTilesRef.current.eraseDot(world.x, world.y, ERASER_RADIUS);
+      eraseDotTiles(inkTilesRef.current, world.x, world.y, ERASER_RADIUS);
     }
 
     dirtyRef.current = true;
@@ -669,7 +750,7 @@ const InfiniteInkCanvas: React.FC = () => {
       addRawPoint(stroke, w.x, w.y, getPressure(ce), ce.timeStamp);
       if (isEraser && stroke.points.length >= 2) {
         const a = stroke.points[stroke.points.length - 2];
-        inkTilesRef.current.eraseSegment(a.x, a.y, w.x, w.y, ERASER_RADIUS);
+        eraseSegTiles(inkTilesRef.current, a.x, a.y, w.x, w.y, ERASER_RADIUS);
       }
     }
 
@@ -752,7 +833,7 @@ const InfiniteInkCanvas: React.FC = () => {
         useCanvasStore.getState().addStroke(stroke);
         if (stroke.compositeOperation !== 'destination-out') {
           // Pen: stamp into tiles. Free eraser already erased incrementally.
-          inkTilesRef.current.stampStroke(stroke);
+          stampStroke(inkTilesRef.current, stroke);
         }
       }
       currentStrokeRef.current = null;

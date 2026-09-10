@@ -1,51 +1,108 @@
-/**
- * Canvas view types.
- *
- * The ink data shapes themselves (`Stroke`, `StrokePoint`, `Camera`, the insert
- * objects) now live in `InkCore/inkTypes.ts`, shared with the PDF annotation
- * view — they used to be two parallel declarations of the same thing. They are
- * re-exported here under their historical names so every call site, component
- * prop and store signature in this folder is unchanged.
- *
- * Only the genuinely canvas-only types remain declared here (multi-canvas
- * library metadata, persisted payload).
- */
+// ---- Tool & Interaction Types ------------------------------------------------
 
-import type {
-  InkBrush,
-  InkBrushType,
-  InkCamera,
-  InkCommittedStrokeStyle,
-  InkEraserMode,
-  InkImageObject,
-  InkInsertMode,
-  InkItem,
-  InkPoint,
-  InkSelectionMode,
-  InkStroke,
-  InkTextObject,
-  InkTool,
-} from '../InkCore/inkTypes';
+export type ToolType = 'pen' | 'eraser' | 'text' | 'select' | 'insert';
 
-// ---- Re-exported ink types (historical names) ----------------------------------
+export type InsertMode = 'text' | 'image';
 
-export type Camera = InkCamera;
-export type BrushSettings = InkBrush;
-export type BrushType = InkBrushType;
-export type CommittedStrokeStyle = InkCommittedStrokeStyle;
-export type StrokePoint = InkPoint;
-export type Stroke = InkStroke;
-export type TextNodeData = InkTextObject;
-export type ImageObject = InkImageObject;
-export type CanvasObject = InkItem;
+export type SelectionMode = 'box' | 'click';
 
-/** The canvas view DOES expose a standalone text tool. */
-export type ToolType = InkTool;
-export type SelectionMode = InkSelectionMode;
-export type InsertMode = InkInsertMode;
-export type EraserMode = InkEraserMode;
+// ---- Coordinate System -------------------------------------------------------
 
-// ---- Persisted canvas data -----------------------------------------------------
+export interface Camera {
+  x: number;
+  y: number;
+  zoom: number;
+}
+
+// ---- Brush Settings (toolbar UI) ---------------------------------------------
+
+export interface BrushSettings {
+  size: number;
+  opacity: number;
+  color: string;
+  smoothing: number; // 0-1, maps to 1€ filter minCutoff (PS-style)
+  /** Fountain only: how strongly fast writing thins the line (0-1). */
+  inkSpeed: number;
+  /** Marker only: enable pressure-driven opacity (0 → light ink, 1 → full). */
+  pressureOpacity: boolean;
+  /** Soft edge: apply a short, width-proportional feather to ink edges. */
+  edgeFeather?: boolean;
+  /** Three quick-size presets (default 8 / 20 / 40). */
+  quickSizes: number[];
+}
+
+// ---- Stroke ------------------------------------------------------------------
+
+export interface StrokePoint {
+  x: number;
+  y: number;
+  pressure: number;
+  t: number; // timestamp ms (for 1€ filter)
+}
+
+export interface Stroke {
+  id: string;
+  type: 'stroke';
+  points: StrokePoint[];
+  color: string;
+  size: number;
+  opacity: number;
+  smoothing: number;
+  compositeOperation: 'source-over' | 'destination-out';
+  /**
+   * Optional brush style. Legacy strokes (without this field) render as marker.
+   * 'laser' is excluded because it is transient and never committed.
+   */
+  style?: CommittedStrokeStyle;
+  /** Fountain only: ink-speed sensitivity captured at draw time. */
+  inkSpeed?: number;
+  /** Marker only: pressure→opacity flag captured at draw time. */
+  pressureOpacity?: boolean;
+  /** Soft edge feather flag captured at draw time (defaults to ON). */
+  edgeFeather?: boolean;
+  createdAt: number;
+}
+
+// ---- Brush style --------------------------------------------------------------
+
+export type CommittedStrokeStyle = 'marker' | 'fountain' | 'pencil';
+
+export type BrushType = CommittedStrokeStyle | 'laser';
+
+// ---- Text Node ---------------------------------------------------------------
+
+export interface TextNodeData {
+  id: string;
+  type: 'text';
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  content: string;
+  fontSize: number;
+  color: string;
+  backgroundColor: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface ImageObject {
+  id: string;
+  type: 'image';
+  x: number;
+  y: number;
+  /** World-space width/height (pre-zoom). */
+  width: number;
+  height: number;
+  dataUrl: string;
+  createdAt: number;
+}
+
+// ---- Unified Object Type -----------------------------------------------------
+
+export type CanvasObject = Stroke | TextNodeData | ImageObject;
+
+// ---- Persisted Canvas Data ---------------------------------------------------
 
 export interface PersistedCanvasData {
   objects: CanvasObject[];
@@ -53,7 +110,7 @@ export interface PersistedCanvasData {
   dotDensity: number;
 }
 
-// ---- Multi-canvas library ------------------------------------------------------
+// ---- Multi-canvas library ----------------------------------------------------
 
 export interface CanvasCategory {
   id: string;

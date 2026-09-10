@@ -8,7 +8,7 @@
  */
 import React, { useRef, useEffect, useCallback, useState } from 'react';
 import type { PdfTextObject, PdfCamera } from './PdfTypes';
-import { worldToScreen } from '../InkCore/inkGeometry';
+import { worldToScreen } from './PdfEngine';
 import { usePdfStore } from './PdfStore';
 import { useNoteStore } from '../../store';
 

@@ -1,8 +1,7 @@
 /**
- * inkRenderers — brush-style rasterizers for the ink pipeline.
- *
- * Shared by BOTH ink surfaces (infinite canvas + PDF annotation), so a stroke is
- * rasterized pixel-identically no matter which surface it was drawn on.
+ * PdfBrushRenderers — shared brush-style rasterizers for the annotation ink
+ * pipeline (used by BOTH the infinite canvas and the PDF annotation canvas, so
+ * strokes stay pixel-identical across the two surfaces).
  *
  * RENDERING MODEL (union of same-winding subpaths, ONE fill): a stroke is drawn
  * as one quad per consecutive sample pair plus one round disc per sample, all
@@ -23,7 +22,7 @@
  * must reproduce identical pixels. Fountain has no randomness; pencil derives
  * its grain from a stable hash of stroke.id (mulberry32 PRNG).
  *
- * `drawAnnotatedStroke` dispatches: eraser (destination-out) → inkGeometry
+ * `drawAnnotatedStroke` dispatches: eraser (destination-out) → PdfEngine
  * drawStrokePath (unchanged); 'fountain'/'pencil' → their renderer; marker and
  * any legacy/no-style stroke → the marker renderer (so the DEFAULT brush is
  * always ribbon-drawn). When a marker stroke has pressureOpacity=true, the whole
@@ -31,8 +30,8 @@
  * you press) — still a single fill, so it never stacks.
  */
 
-import { drawStrokePath, applyOneEuro, smoothingToMinCutoff } from './inkGeometry';
-import type { InkStroke } from './inkTypes';
+import { drawStrokePath, applyOneEuro, smoothingToMinCutoff } from './PdfEngine';
+import type { PdfStroke } from './PdfTypes';
 
 // ---- Small numeric helpers ----------------------------------------------------
 
@@ -354,7 +353,7 @@ export function drawVariableRibbon(
   widths: number[],
   color: string,
   alpha: number,
-  composite: InkStroke['compositeOperation'],
+  composite: PdfStroke['compositeOperation'],
   dx = 0,
   dy = 0,
   feather = true,
@@ -472,7 +471,7 @@ export function drawVariableRibbon(
  */
 export function drawAnnotatedStroke(
   ctx: CanvasRenderingContext2D,
-  stroke: InkStroke,
+  stroke: PdfStroke,
   dx = 0,
   dy = 0,
 ): void {
@@ -498,7 +497,7 @@ type FilteredPoint = { x: number; y: number; p: number; t: number };
 
 /** 1€-smooth raw samples, then attach each sample's original timestamp (applyOneEuro
  *  returns one output per input, so pts[i] aligns with raw[i].t). */
-function preparePoints(stroke: InkStroke): FilteredPoint[] {
+function preparePoints(stroke: PdfStroke): FilteredPoint[] {
   const raw = sanitizePoints(stroke.points);
   if (raw.length === 0) return [];
   const sm = applyOneEuro(raw, smoothingToMinCutoff(stroke.smoothing));
@@ -530,7 +529,7 @@ export interface InkRibbon {
   widths: number[];
   color: string;
   alpha: number;
-  composite: InkStroke['compositeOperation'];
+  composite: PdfStroke['compositeOperation'];
   /** soft-edge feather flag captured at draw time (defaults to ON). */
   edge: boolean;
   /** world margin around a tile: half of the widest local width (+ small slack). */
@@ -547,7 +546,7 @@ export interface InkRibbon {
  *  (~36ms per erase). A uniform-width ribbon makes carves sliceable like marker/
  *  fountain. Pencil grain is not sliceable, so pencil stays on the whole-stroke
  *  path. */
-export function prepareInkRibbon(stroke: InkStroke): InkRibbon | null {
+export function prepareInkRibbon(stroke: PdfStroke): InkRibbon | null {
   if (stroke.style === 'pencil') return null;
 
   const pts = preparePoints(stroke);
@@ -556,7 +555,7 @@ export function prepareInkRibbon(stroke: InkStroke): InkRibbon | null {
   let ribbon: ResampleOut;
   let alpha: number;
   if (stroke.compositeOperation === 'destination-out') {
-    // Uniform width == eraser radius (matches inkGeometry.drawStrokePath's eraser
+    // Uniform width == eraser radius (matches PdfEngine.drawStrokePath's eraser
     // width = stroke.size). Constant widths → smoothing is a no-op.
     const widths = new Array<number>(pts.length).fill(stroke.size);
     const resampled = resampleForRibbon(pts, widths, resampleSpacing(widths));
@@ -622,7 +621,7 @@ export function drawInkRibbonSlice(
 
 // ---- Marker (default brush) ----------------------------------------------------
 
-function drawMarker(ctx: CanvasRenderingContext2D, stroke: InkStroke, dx = 0, dy = 0): void {
+function drawMarker(ctx: CanvasRenderingContext2D, stroke: PdfStroke, dx = 0, dy = 0): void {
   const pts = preparePoints(stroke);
   if (pts.length === 0) return;
 
@@ -638,7 +637,7 @@ function drawMarker(ctx: CanvasRenderingContext2D, stroke: InkStroke, dx = 0, dy
 
 // ---- Fountain pen --------------------------------------------------------------
 
-function drawFountain(ctx: CanvasRenderingContext2D, stroke: InkStroke, dx = 0, dy = 0): void {
+function drawFountain(ctx: CanvasRenderingContext2D, stroke: PdfStroke, dx = 0, dy = 0): void {
   const pts = preparePoints(stroke);
   if (pts.length === 0) return;
 
@@ -662,7 +661,7 @@ function drawFountain(ctx: CanvasRenderingContext2D, stroke: InkStroke, dx = 0, 
  * is kept away from both ends). Offsets stay inside getStrokeBounds's size/2 so
  * tiles are never clipped.
  */
-function drawPencil(ctx: CanvasRenderingContext2D, stroke: InkStroke, dx = 0, dy = 0): void {
+function drawPencil(ctx: CanvasRenderingContext2D, stroke: PdfStroke, dx = 0, dy = 0): void {
   const pts = preparePoints(stroke);
   if (pts.length === 0) return;
 
@@ -677,7 +676,7 @@ function drawPencil(ctx: CanvasRenderingContext2D, stroke: InkStroke, dx = 0, dy
 function drawPencilGrain(
   ctx: CanvasRenderingContext2D,
   points: ResamplePoint[],
-  stroke: InkStroke,
+  stroke: PdfStroke,
   dx: number,
   dy: number,
 ): void {
