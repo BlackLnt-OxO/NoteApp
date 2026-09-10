@@ -1,34 +1,45 @@
 /**
- * PdfEngine — Pure functions for the PDF annotation ink pipeline.
+ * inkGeometry — pure geometry / sampling / hit-testing for the ink pipeline.
  *
- * Self-contained copy of the smoothing / stroke-drawing math (1€ filter,
- * raw-point sampling, pressure-width rendering) used by the infinite canvas,
- * so this module owns its writing pipeline and can evolve independently.
+ * Shared by BOTH ink surfaces (infinite canvas + PDF annotation). This used to
+ * exist twice: as `PdfEngine.ts` (the superset) and as `StrokeEngine.ts` (a
+ * strictly smaller copy whose only remaining caller was dead code). They had
+ * drifted — different pressure floors, different dedup thresholds — so a stroke
+ * could feel different depending on which view you drew it in. The PDF side's
+ * behaviour is the one kept, for both:
+ *
+ *   - `getPressure` passes genuinely tiny pen pressures through (a 16383-level
+ *     tablet reports ~0.001; flooring those to 0.05 threw away the finest line
+ *     the hardware could produce).
+ *   - `addRawPoint` decimates below `RAW_SAMPLE_MIN_DIST` (0.3 world px) instead
+ *     of 0.01, so a slow stroke stops piling up samples that add no geometry but
+ *     cost per-frame work on every render.
  *
  * Rendering model (two-layer raster):
- *   backgroundLayer  = pdf.js page render (read-only, never erased)
- *   inkLayer         = rasterized strokes (pen = source-over, eraser = destination-out)
- *   main canvas      = drawImage(bg) + drawImage(ink) + live stroke
+ *   backgroundLayer = page render / theme fill (read-only, never erased)
+ *   inkLayer        = rasterized strokes (pen = source-over, eraser = destination-out)
+ *   main canvas     = drawImage(bg) + visible ink tiles + live stroke
  */
 
-import type { PdfCamera, PdfItem, PdfStroke } from './PdfTypes';
+import type { InkBounds, InkCamera, InkItem, InkPoint, InkStroke } from './inkTypes';
 
-// ---- Constants ----------------------------------------------------------------
+// ---- Constants ------------------------------------------------------------------
 
-/** Resolution factor for the baked page bitmaps (sharp up to this zoom). */
-export const PDF_BAKE_SCALE = 3;
+/** Resolution factor for the baked bitmaps (tiles / PDF page) — sharp up to this zoom. */
+export const BAKE_SCALE = 3;
+
 /**
- * PDF_ERASER_RADIUS / ERASER_RADIUS (canvas) actually describe the eraser cursor
- * RING's full width (the toolbar draws a circle whose diameter = this × zoom).
- * The wipe disc therefore has a half-width of PDF_ERASER_RADIUS / 2.
+ * ERASER_RADIUS describes the eraser cursor RING's full width (the toolbar draws
+ * a circle whose diameter = this × zoom). The wipe disc therefore has a half-width
+ * of ERASER_RADIUS / 2.
  */
-export const PDF_ERASER_RADIUS = 20; // world units (diameter of the cursor ring)
-const ERASER_DISC_HALF = PDF_ERASER_RADIUS / 2;
+export const ERASER_RADIUS = 20; // world units (diameter of the cursor ring)
+export const ERASER_DISC_HALF = ERASER_RADIUS / 2;
 
 export const MIN_ZOOM = 0.1;
 export const MAX_ZOOM = 8;
 
-// ---- Pressure -----------------------------------------------------------------
+// ---- Pressure -------------------------------------------------------------------
 
 export function getPressure(e: { pointerType: string; pressure: number }): number {
   // Non-pen pointers (mouse/touch) have no real pressure → neutral 0.5.
@@ -42,7 +53,7 @@ export function getPressure(e: { pointerType: string; pressure: number }): numbe
   return Math.max(0, Math.min(1, p));
 }
 
-// ---- Raw sampling -------------------------------------------------------------
+// ---- Raw sampling ---------------------------------------------------------------
 
 /**
  * Adaptive capture decimation: samples closer than ~0.3 world px add no geometry
@@ -53,7 +64,7 @@ export function getPressure(e: { pointerType: string; pressure: number }): numbe
 export const RAW_SAMPLE_MIN_DIST = 0.3;
 
 export function addRawPoint(
-  stroke: PdfStroke,
+  stroke: { points: InkPoint[] },
   x: number,
   y: number,
   pressure: number,
@@ -64,7 +75,7 @@ export function addRawPoint(
   stroke.points.push({ x, y, pressure, t });
 }
 
-// ---- 1€ Filter ----------------------------------------------------------------
+// ---- 1€ Filter (Casiez et al., 2012) --------------------------------------------
 
 const BETA = 0.007;   // speed coefficient (paper value)
 const DCUTOFF = 1.0;  // derivative cutoff
@@ -119,7 +130,7 @@ export function applyOneEuro(
   return out;
 }
 
-// ---- Width --------------------------------------------------------------------
+// ---- Width ----------------------------------------------------------------------
 
 /** Pressure → width.  eraser = constant. */
 export function strokeWidth(pressure: number, baseSize: number, isEraser: boolean): number {
@@ -127,16 +138,20 @@ export function strokeWidth(pressure: number, baseSize: number, isEraser: boolea
   return Math.max(0.5, baseSize * (0.2 + 0.8 * Math.max(0.05, Math.min(1, pressure))));
 }
 
-// ---- Stroke path rendering ----------------------------------------------------
+// ---- Stroke path rendering ------------------------------------------------------
 
 /**
  * Draw a stroke onto a context that is already in WORLD coordinates
- * (e.g. the main canvas under the camera transform, or the inkLayer under a
+ * (e.g. the main canvas under the camera transform, or a tile under a
  * bakeScale transform). `dx/dy` optionally shift the whole stroke (live drag).
+ *
+ * This is the SIMPLE uniform-width path, used for eraser carves (and as the
+ * fallback when a ribbon can't be prepared). The styled brushes go through
+ * `inkRenderers.drawAnnotatedStroke`.
  */
 export function drawStrokePath(
   ctx: CanvasRenderingContext2D,
-  stroke: PdfStroke,
+  stroke: InkStroke,
   dx = 0,
   dy = 0,
 ): void {
@@ -211,13 +226,12 @@ export function drawEraserDot(ctx: CanvasRenderingContext2D, x: number, y: numbe
   ctx.restore();
 }
 
-// ---- Hit testing (selection) --------------------------------------------------
+// ---- Hit testing (selection) ----------------------------------------------------
 
-export interface Bounds {
-  minX: number; minY: number; maxX: number; maxY: number;
-}
+/** Kept as `Bounds` too: most call sites predate the `Ink*` naming. */
+export type Bounds = InkBounds;
 
-export function getStrokeBounds(stroke: PdfStroke): Bounds {
+export function getStrokeBounds(stroke: InkStroke): InkBounds {
   let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
   const r = stroke.size / 2;
   for (const p of stroke.points) {
@@ -229,7 +243,7 @@ export function getStrokeBounds(stroke: PdfStroke): Bounds {
   return { minX, minY, maxX, maxY };
 }
 
-function distToSegment(px: number, py: number, x1: number, y1: number, x2: number, y2: number): number {
+export function distToSegment(px: number, py: number, x1: number, y1: number, x2: number, y2: number): number {
   const dx = x2 - x1, dy = y2 - y1;
   const len2 = dx * dx + dy * dy;
   if (len2 === 0) return Math.hypot(px - x1, py - y1);
@@ -238,7 +252,7 @@ function distToSegment(px: number, py: number, x1: number, y1: number, x2: numbe
   return Math.hypot(px - (x1 + t * dx), py - (y1 + t * dy));
 }
 
-export function hitTestStroke(stroke: PdfStroke, x: number, y: number): boolean {
+export function hitTestStroke(stroke: InkStroke, x: number, y: number): boolean {
   const threshold = stroke.size / 2 + 6;
   const pts = stroke.points;
   if (pts.length === 0) return false;
@@ -249,10 +263,10 @@ export function hitTestStroke(stroke: PdfStroke, x: number, y: number): boolean 
   return false;
 }
 
-// ---- Whole-stroke eraser ("擦除笔画") helpers --------------------------------
+// ---- Whole-stroke eraser ("擦除笔画") helpers -----------------------------------
 //
 // The whole-stroke eraser deletes an ENTIRE stroke as soon as the eraser cursor
-// disc touches it. Its hit radius is the cursor ring half-width (PDF_ERASER_RADIUS/2)
+// disc touches it. Its hit radius is the cursor ring half-width (ERASER_RADIUS/2)
 // plus the stroke's own half-width — i.e. the ring visually "presses on" the ink.
 // Important: only INK strokes (source-over) may be erased by it. The free eraser
 // also commits its carve as a stroke with compositeOperation 'destination-out',
@@ -282,7 +296,7 @@ function orient(px: number, py: number, qx: number, qy: number, rx: number, ry: 
 }
 
 /** Minimum distance between two line segments (0 when they intersect/touch). */
-function segSegDistance(
+export function segSegDistance(
   x1: number, y1: number, x2: number, y2: number,
   x3: number, y3: number, x4: number, y4: number,
 ): number {
@@ -312,10 +326,10 @@ function segSegDistance(
  * already caches every stroke's bounds for the gesture and should pass them in.
  */
 export function hitTestStrokeBySegment(
-  stroke: PdfStroke,
+  stroke: InkStroke,
   x1: number, y1: number,
   x2: number, y2: number,
-  cachedBounds?: Bounds,
+  cachedBounds?: InkBounds,
 ): boolean {
   const radius = strokeEraserRadius(stroke.size);
   const pts = stroke.points;
@@ -336,31 +350,31 @@ export function hitTestStrokeBySegment(
   return false;
 }
 
-/** World-space bounding box of any page item (stroke → its path bounds). */
-export function getItemBounds(item: PdfItem): Bounds {
+/** World-space bounding box of any surface item (stroke → its path bounds). */
+export function getItemBounds(item: InkItem): InkBounds {
   if (item.type === 'stroke') return getStrokeBounds(item);
   return { minX: item.x, minY: item.y, maxX: item.x + item.width, maxY: item.y + item.height };
 }
 
-/** Point hit-test over any page item (stroke → proximity; object → its rect). */
-export function hitTestItem(item: PdfItem, x: number, y: number): boolean {
+/** Point hit-test over any surface item (stroke → proximity; object → its rect). */
+export function hitTestItem(item: InkItem, x: number, y: number): boolean {
   if (item.type === 'stroke') return hitTestStroke(item, x, y);
   return x >= item.x && x <= item.x + item.width && y >= item.y && y <= item.y + item.height;
 }
 
-export function boundsIntersectRect(b: Bounds, x1: number, y1: number, x2: number, y2: number): boolean {
+export function boundsIntersectRect(b: InkBounds, x1: number, y1: number, x2: number, y2: number): boolean {
   const rx1 = Math.min(x1, x2), rx2 = Math.max(x1, x2);
   const ry1 = Math.min(y1, y2), ry2 = Math.max(y1, y2);
   return !(b.maxX < rx1 || b.minX > rx2 || b.maxY < ry1 || b.minY > ry2);
 }
 
-// ---- Coordinate transforms ----------------------------------------------------
+// ---- Coordinate transforms ------------------------------------------------------
 
-export function screenToWorld(sx: number, sy: number, cam: PdfCamera): { x: number; y: number } {
+export function screenToWorld(sx: number, sy: number, cam: InkCamera): { x: number; y: number } {
   return { x: (sx - cam.x) / cam.zoom, y: (sy - cam.y) / cam.zoom };
 }
 
-export function worldToScreen(wx: number, wy: number, cam: PdfCamera): { x: number; y: number } {
+export function worldToScreen(wx: number, wy: number, cam: InkCamera): { x: number; y: number } {
   return { x: wx * cam.zoom + cam.x, y: wy * cam.zoom + cam.y };
 }
 
@@ -369,19 +383,19 @@ export function clampZoom(zoom: number): number {
 }
 
 /** Zoom so the world point under (sx,sy) stays fixed. */
-export function zoomAt(cam: PdfCamera, sx: number, sy: number, nextZoom: number): PdfCamera {
+export function zoomAt(cam: InkCamera, sx: number, sy: number, nextZoom: number): InkCamera {
   const worldX = (sx - cam.x) / cam.zoom;
   const worldY = (sy - cam.y) / cam.zoom;
   return { zoom: nextZoom, x: sx - worldX * nextZoom, y: sy - worldY * nextZoom };
 }
 
 /** Camera that centers and fits a page inside a viewport with padding. */
-export function fitCamera(pageW: number, pageH: number, vw: number, vh: number, pad = 24): PdfCamera {
+export function fitCamera(pageW: number, pageH: number, vw: number, vh: number, pad = 24): InkCamera {
   const zoom = clampZoom(Math.min((vw - pad * 2) / pageW, (vh - pad * 2) / pageH));
   return { zoom, x: (vw - pageW * zoom) / 2, y: (vh - pageH * zoom) / 2 };
 }
 
-// ---- Dot grid -----------------------------------------------------------------
+// ---- Dot grid -------------------------------------------------------------------
 
 const DOT_SCREEN_STEP = 24;
 const DOT_RADIUS = 0.7;
@@ -389,7 +403,7 @@ const DOT_RADIUS = 0.7;
 /** Dot-grid overlay, drawn in screen space but anchored to the world (zoom-consistent). */
 export function drawDotGrid(
   ctx: CanvasRenderingContext2D,
-  cam: PdfCamera,
+  cam: InkCamera,
   canvasW: number,
   canvasH: number,
   dotColor: string,

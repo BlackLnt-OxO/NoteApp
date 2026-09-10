@@ -14,13 +14,13 @@
 import { describe, it, expect } from 'vitest';
 import { createCanvas } from '@napi-rs/canvas';
 
-import { drawAnnotatedStroke, prepareInkRibbon, drawInkRibbonSlice } from '../PdfBrushRenderers';
-import type { PdfStroke } from '../PdfTypes';
+import { drawAnnotatedStroke, prepareInkRibbon, drawInkRibbonSlice } from '../inkRenderers';
+import type { InkStroke } from '../inkTypes';
 
 function makeStroke(
   points: { x: number; y: number; pressure: number; t: number }[],
-  overrides: Partial<PdfStroke> = {},
-): PdfStroke {
+  overrides: Partial<InkStroke> = {},
+): InkStroke {
   return {
     id: 's_px',
     type: 'stroke',
@@ -43,7 +43,7 @@ interface Raster {
   height: number;
 }
 
-function rasterize(stroke: PdfStroke, width: number, height: number): Raster {
+function rasterize(stroke: InkStroke, width: number, height: number): Raster {
   const canvas = createCanvas(width, height);
   const ctx = canvas.getContext('2d') as unknown as CanvasRenderingContext2D;
   drawAnnotatedStroke(ctx, stroke);

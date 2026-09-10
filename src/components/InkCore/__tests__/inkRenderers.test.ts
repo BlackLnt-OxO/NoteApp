@@ -1,5 +1,5 @@
 /**
- * Tests for the shared brush renderer (PdfBrushRenderers).
+ * Tests for the shared brush renderer (inkRenderers).
  *
  * Two layers:
  *  - pure geometry helpers (resampling, width curves) asserted directly;
@@ -21,8 +21,8 @@ import {
   averagePressure,
   markerStrokeAlpha,
   sanitizePoints,
-} from '../PdfBrushRenderers';
-import type { PdfStroke } from '../PdfTypes';
+} from '../inkRenderers';
+import type { InkStroke } from '../inkTypes';
 
 // ---- Recording mock 2D context --------------------------------------------------
 
@@ -77,8 +77,8 @@ const setValues = (c: MockCtx, prop: string): unknown[] =>
 
 function makeStroke(
   points: { x: number; y: number; pressure: number; t: number }[],
-  overrides: Partial<PdfStroke> = {},
-): PdfStroke {
+  overrides: Partial<InkStroke> = {},
+): InkStroke {
   return {
     id: 's_test',
     type: 'stroke',

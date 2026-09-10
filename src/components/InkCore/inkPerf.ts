@@ -1,6 +1,6 @@
 /**
- * Dev-only timing for the whole-stroke eraser ("擦除笔画"). Helps answer where
- * the per-frame cost actually goes on a stroke-dense page:
+ * inkPerf — dev-only timing for the whole-stroke eraser ("擦除笔画"). Answers where
+ * the per-frame cost actually goes on a stroke-dense page — shared by both ink surfaces:
  *   1. hit-scan of nearby strokes (flushStrokeWipe),
  *   2. clearing + re-stamping tiles after each erase (applyVisualErase).
  *

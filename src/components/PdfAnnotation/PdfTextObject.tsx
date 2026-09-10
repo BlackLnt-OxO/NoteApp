@@ -13,7 +13,7 @@
  */
 import React, { useRef, useState, useCallback } from 'react';
 import type { PdfTextObject, PdfCamera } from './PdfTypes';
-import { worldToScreen } from './PdfEngine';
+import { worldToScreen } from '../InkCore/inkGeometry';
 import { usePdfStore } from './PdfStore';
 import { useNoteStore } from '../../store';
 import { PDF_ANNOTATION_BLUE } from '../../themeColors';
