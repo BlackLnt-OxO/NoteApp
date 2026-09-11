@@ -1,6 +1,6 @@
 {
   "name": "sticky-notes",
-  "version": "0.9.4",
+  "version": "0.9.11",
   "description": "Modern Sticky Notes with Mind Map and Screenshot",
   "main": "electron/main.js",
   "scripts": {
