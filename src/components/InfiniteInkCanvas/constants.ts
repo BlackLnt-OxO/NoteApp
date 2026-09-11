@@ -12,6 +12,7 @@ export const DEFAULT_BRUSH: BrushSettings = {
   inkSpeed: 0.5,
   pressureOpacity: false,
   edgeFeather: true,
+  featherSize: 0.4,
   quickSizes: [8, 20, 40],
   eraserSize: 20,
   eraserQuickSizes: [12, 20, 60],

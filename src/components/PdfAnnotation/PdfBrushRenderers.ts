@@ -9,7 +9,7 @@ import { drawStrokePath, applyOneEuro, smoothingToMinCutoff } from './PdfEngine'
 import type { PdfStroke } from './PdfTypes';
 import { getStreamingInk } from './StreamingInkStroke';
 
-import { clamp01, sanitizePoints, averagePressure, markerStrokeAlpha, computeMarkerWidths, computeFountainWidths, computePencilCoreWidths, resampleSpacing, resampleForRibbon, smoothWidths } from './InkMath';
+import { clamp01, sanitizePoints, averagePressure, markerStrokeAlpha, computeMarkerWidths, computeFountainWidths, computePencilCoreWidths, resampleSpacing, resampleForRibbon, smoothWidths, resolveFeatherWorld } from './InkMath';
 import type { ResamplePoint, ResampleOut } from './InkMath';
 import { drawVariableRibbon } from './InkRibbonRenderer';
 export * from './InkMath';
@@ -89,6 +89,13 @@ export interface InkRibbon {
   composite: PdfStroke['compositeOperation'];
   /** soft-edge feather flag captured at draw time (defaults to ON). */
   edge: boolean;
+  /**
+   * Feather radius in WORLD px, resolved ONCE for the whole stroke.
+   *
+   * Every tile must use this same number. Deriving it from a tile's slice instead
+   * is what made one stroke's edge soften by different amounts along its length.
+   */
+  feather: number;
   /** world margin around a tile: half of the widest local width (+ small slack). */
   pad: number;
 }
@@ -137,6 +144,7 @@ export function prepareInkRibbon(stroke: PdfStroke): InkRibbon | null {
     alpha,
     composite: stroke.compositeOperation,
     edge: stroke.edgeFeather !== false,
+    feather: resolveFeatherWorld(stroke, ribbon.widths),
     pad: maxW * 0.5 + 2, // ≥ widest half width + small safety margin
   };
 }
@@ -173,7 +181,7 @@ export function drawInkRibbonSlice(
 
   const slicePoints = lo === 0 && hi === n - 1 ? points : points.slice(lo, hi + 1);
   const sliceWidths = lo === 0 && hi === n - 1 ? widths : widths.slice(lo, hi + 1);
-  drawVariableRibbon(ctx, slicePoints, sliceWidths, ribbon.color, ribbon.alpha, ribbon.composite, 0, 0, ribbon.edge);
+  drawVariableRibbon(ctx, slicePoints, sliceWidths, ribbon.color, ribbon.alpha, ribbon.composite, 0, 0, ribbon.feather);
 }
 
 // ---- Marker (default brush) ----------------------------------------------------
@@ -189,7 +197,7 @@ function drawMarker(ctx: CanvasRenderingContext2D, stroke: PdfStroke, dx = 0, dy
   // points, clamped to 0..1) — it can never exceed the slider's bounds.
   const alpha = markerStrokeAlpha(stroke.opacity, averagePressure(pts), stroke.pressureOpacity === true);
 
-  drawVariableRibbon(ctx, ribbon.points, ribbon.widths, stroke.color, alpha, stroke.compositeOperation, dx, dy, stroke.edgeFeather !== false);
+  drawVariableRibbon(ctx, ribbon.points, ribbon.widths, stroke.color, alpha, stroke.compositeOperation, dx, dy, resolveFeatherWorld(stroke, ribbon.widths));
 }
 
 // ---- Fountain pen --------------------------------------------------------------
@@ -204,7 +212,7 @@ function drawFountain(ctx: CanvasRenderingContext2D, stroke: PdfStroke, dx = 0, 
   // Fountain supports the same pressure→opacity band (±10pp around the slider)
   // as marker when the toggle is ON.
   const alpha = markerStrokeAlpha(stroke.opacity, averagePressure(pts), stroke.pressureOpacity === true);
-  drawVariableRibbon(ctx, ribbon.points, ribbon.widths, stroke.color, alpha, stroke.compositeOperation, dx, dy, stroke.edgeFeather !== false);
+  drawVariableRibbon(ctx, ribbon.points, ribbon.widths, stroke.color, alpha, stroke.compositeOperation, dx, dy, resolveFeatherWorld(stroke, ribbon.widths));
 }
 
 // ---- Pencil (hard lead core + deterministic grain) ------------------------------
@@ -223,7 +231,7 @@ function drawPencil(ctx: CanvasRenderingContext2D, stroke: PdfStroke, dx = 0, dy
   if (pts.length === 0) return;
 
   const core = buildRibbonData(pts, (fp) => computePencilCoreWidths(fp, stroke.size));
-  drawVariableRibbon(ctx, core.points, core.widths, stroke.color, clamp01(stroke.opacity * 0.85), stroke.compositeOperation, dx, dy, stroke.edgeFeather !== false);
+  drawVariableRibbon(ctx, core.points, core.widths, stroke.color, clamp01(stroke.opacity * 0.85), stroke.compositeOperation, dx, dy, resolveFeatherWorld(stroke, core.widths));
 
   drawPencilGrain(ctx, core.points, stroke, dx, dy);
 }

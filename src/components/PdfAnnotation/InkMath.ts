@@ -269,6 +269,54 @@ export function resampleForRibbon(
 /** Smooth a width array (2 passes of a 3-point average + neighbor clamp) so a
  *  pressure/speed spike can't make adjacent widths jump — this removes the
  *  "bumps"/bumpy edges at fast corners and pen starts/ends. */
+// ---- Edge feather ---------------------------------------------------------------
+
+/**
+ * Cap for the WIDTH-DERIVED feather, in world px. Only applies to strokes with no
+ * explicit featherSize (ink written before the 羽化大小 control existed).
+ */
+export const FEATHER_AUTO_MAX = 0.6;
+
+/**
+ * Below this the blur is not worth a canvas filter (world px). Deliberately far
+ * under anything visible: the old code cut off at 0.05 world, which is ABOVE the
+ * feather a lightly-pressed thin stroke produces (width floor is ~0.15 world, so
+ * the derived feather lands near 0.04) — light strokes silently got no feather at
+ * all, with a hard on/off edge rather than a gradual falloff.
+ */
+export const FEATHER_MIN_WORLD = 0.01;
+
+/** Width-derived feather (world px) for one ribbon: scales with stroke width,
+ *  capped so a fat stroke never grows a blurry halo. */
+export function autoFeatherWorld(widths: readonly number[]): number {
+  let sum = 0;
+  for (const w of widths) sum += Number.isFinite(w) ? w : 0;
+  const avg = widths.length ? sum / widths.length : 0;
+  return Math.min(FEATHER_AUTO_MAX, avg * 0.25);
+}
+
+/**
+ * The feather radius (world px) for a stroke — ONE value per stroke.
+ *
+ * This is the single source of truth for both renderers. It must be resolved
+ * once from the WHOLE stroke, never from a tile's slice of it: the tile stamp
+ * path used to average only the widths it was handed, so each 512-unit tile
+ * picked its own blur and one stroke's edge softened by a different amount along
+ * its length (measured 0.28px at one end rising to 1.75px at the other), with a
+ * visible step at tile boundaries.
+ *
+ * `stroke.featherSize` (the 羽化大小 control) wins when present; 0 means off.
+ */
+export function resolveFeatherWorld(
+  stroke: { edgeFeather?: boolean; featherSize?: number },
+  widths: readonly number[],
+): number {
+  if (stroke.edgeFeather === false) return 0;
+  const explicit = stroke.featherSize;
+  if (typeof explicit === 'number' && Number.isFinite(explicit)) return Math.max(0, explicit);
+  return autoFeatherWorld(widths);
+}
+
 export function smoothWidths(widths: number[]): number[] {
   const n = widths.length;
   const out = widths.slice();

@@ -1,6 +1,6 @@
 import type { PdfPoint, PdfStroke } from './PdfTypes';
 import { smoothingToMinCutoff, type Bounds } from './PdfEngine';
-import { clamp01, markerStrokeAlpha, pressureToWidth } from './InkMath';
+import { clamp01, markerStrokeAlpha, pressureToWidth, resolveFeatherWorld } from './InkMath';
 import { drawVariableRibbon } from './InkRibbonRenderer';
 import { StreamingPencilGrain, type PencilGrainMark } from './StreamingPencilGrain';
 
@@ -176,8 +176,10 @@ export class StreamingInkStroke {
     this.oldTipTiles = this.tip ? this.visit(this.last ?? this.tip, this.tip, false) : new Set();
     if (this.grain && this.tip) this.visitGrain(this.grain.preview(this.last ?? this.tip, this.tip), false);
     this.stats.grainCandidates = this.grain?.stats.candidates ?? 0;
+    // One radius for the whole stroke, from the same resolver the legacy ribbon
+    // path uses — a stroke must not look softer in one place than another.
     const avgWidth = (this.widthSum + (this.tip?.width ?? 0)) / Math.max(1, points.length);
-    const blur = this.stroke.edgeFeather === false ? 0 : Math.round(Math.min(0.6, avgWidth * 0.25) * SCALE * 16) / 16;
+    const blur = Math.round(resolveFeatherWorld(this.stroke, [avgWidth]) * SCALE * 16) / 16;
     if (blur !== this.blur) for (const tile of this.tiles.values()) tile.dirty = true;
     this.blur = blur;
     this.alpha = this.grain ? 1 : markerStrokeAlpha(this.stroke.opacity,
@@ -199,7 +201,7 @@ export class StreamingInkStroke {
       out.clearRect(0, 0, PIXELS, PIXELS);
       out.save();
       if (this.grain) out.globalAlpha = clamp01(this.stroke.opacity * 0.85);
-      if (blur > 0.15) out.filter = `blur(${blur}px)`;
+      if (blur >= 1 / 16) out.filter = `blur(${blur}px)`;
       out.drawImage(this.scratch, 0, 0);
       out.restore();
       if (this.grain && (tile.grain || this.grainPreview.has(key))) {

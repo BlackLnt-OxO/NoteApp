@@ -1,4 +1,4 @@
-import { clamp01 } from './InkMath';
+import { autoFeatherWorld, FEATHER_MIN_WORLD, clamp01 } from './InkMath';
 import type { PdfStroke } from './PdfTypes';
 
 // ---- Single-fill variable-width ribbon ------------------------------------------
@@ -35,7 +35,11 @@ export function drawVariableRibbon(
   composite: PdfStroke['compositeOperation'],
   dx = 0,
   dy = 0,
-  feather = true,
+  /** `false` = no feather, `true` = derive from the widths given, or an explicit
+   *  radius in WORLD px. Callers that draw a slice of a stroke MUST pass the
+   *  explicit value (see InkMath.resolveFeatherWorld) — deriving it here from a
+   *  slice makes each tile pick its own blur. */
+  feather: boolean | number = true,
 ): void {
   const n = points.length;
   if (n === 0) return;
@@ -51,16 +55,13 @@ export function drawVariableRibbon(
   ctx.globalAlpha = clamp01(alpha);
   ctx.fillStyle = color;
 
-  // Optional soft ink edge (default ON): a SHORT feather that scales WITH the
-  // stroke width (×0.25) but is capped (~0.6 world px), so thin strokes keep a
-  // subtle edge and thick strokes never grow a big blurry halo. Applies to the
-  // single union fill; hairline-slim strokes get a tiny radius.
-  if (feather) {
-    let sum = 0;
-    for (const w of widths) sum += Number.isFinite(w) ? w : 0;
-    const avgWidth = widths.length ? sum / widths.length : 0;
-    const softWorld = Math.min(0.6, avgWidth * 0.25);
-    if (softWorld > 0.05) {
+  // Optional soft ink edge. The radius comes from the caller when it is a number
+  // (already resolved for the whole stroke), otherwise it is derived from whatever
+  // widths were passed — which is only correct when those are the whole stroke.
+  const softWorld = typeof feather === 'number' ? Math.max(0, feather)
+    : feather ? autoFeatherWorld(widths) : 0;
+  {
+    if (softWorld > FEATHER_MIN_WORLD) {
       let scale = 1;
       try {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any

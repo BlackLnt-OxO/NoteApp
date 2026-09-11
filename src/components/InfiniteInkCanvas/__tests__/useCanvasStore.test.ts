@@ -9,7 +9,7 @@ beforeEach(() => {
     objects: [],
     camera: { x: 0, y: 0, zoom: 1 },
     activeTool: 'pen',
-    brushSettings: { size: 8, opacity: 1, color: 'rgba(255,255,255,0.95)', smoothing: 0.35, inkSpeed: 0.5, pressureOpacity: true, quickSizes: [8, 20, 40], eraserSize: 20, eraserQuickSizes: [12, 20, 60] },
+    brushSettings: { size: 8, opacity: 1, color: 'rgba(255,255,255,0.95)', smoothing: 0.35, inkSpeed: 0.5, pressureOpacity: true, quickSizes: [8, 20, 40], eraserSize: 20, eraserQuickSizes: [12, 20, 60], featherSize: 0.4 },
     showDotGrid: true,
     editingTextId: null,
     history: [],

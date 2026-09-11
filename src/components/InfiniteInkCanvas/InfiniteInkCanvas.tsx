@@ -619,6 +619,7 @@ const InfiniteInkCanvas: React.FC = () => {
       inkSpeed: isEraser ? undefined : state.brushSettings.inkSpeed,
       pressureOpacity: isEraser ? undefined : state.brushSettings.pressureOpacity,
       edgeFeather: isEraser ? undefined : state.brushSettings.edgeFeather,
+      featherSize: isEraser ? undefined : state.brushSettings.featherSize,
       createdAt: Date.now(),
     };
     addRawPoint(stroke, world.x, world.y, getPressure(e), e.timeStamp);

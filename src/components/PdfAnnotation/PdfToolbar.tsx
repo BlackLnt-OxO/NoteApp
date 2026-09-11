@@ -398,13 +398,26 @@ const PdfToolbar: React.FC = () => {
         <input type="range" min={0} max={20} value={Math.round(brush.smoothing * 100)} onChange={(e) => update({ smoothing: Number(e.target.value) / 100 })} style={trackStyle} />
       </div>
 
-      {/* ---- Soft edge feather toggle ---- */}
+      {/* ---- Soft edge feather: on/off, then how far it spreads ---- */}
       <div style={sectionStyle}>
         <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: fs(11, gfs), color: 'var(--text-secondary)', cursor: 'pointer' }}>
           <input type="checkbox" checked={brush.edgeFeather !== false}
             onChange={(e) => update({ edgeFeather: e.target.checked })} style={{ accentColor: 'var(--accent)' }} />
           边缘羽化
         </label>
+        {/* Radius in world px (0 - 2). Shown only while feather is on, since a
+            size has no meaning when the effect is off. */}
+        {brush.edgeFeather !== false && (
+          <>
+            <div style={labelStyle(gfs)}>
+              <span>羽化大小</span><span>{(brush.featherSize ?? 0.4).toFixed(2)}</span>
+            </div>
+            <input type="range" min={0} max={200}
+              value={Math.round((brush.featherSize ?? 0.4) * 100)}
+              onChange={(e) => update({ featherSize: Number(e.target.value) / 100 })}
+              style={trackStyle} />
+          </>
+        )}
       </div>
 
       {/* ---- Fountain-only: ink speed (fast = thin, slow = full ink) ---- */}

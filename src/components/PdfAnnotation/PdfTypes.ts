@@ -36,6 +36,9 @@ export interface PdfStroke {
   pressureOpacity?: boolean;
   /** Soft edge feather flag captured at draw time (defaults to ON). */
   edgeFeather?: boolean;
+  /** Feather radius in WORLD px, captured at draw time. Absent on legacy ink,
+   *  which falls back to the width-derived value. 0 = no feather. */
+  featherSize?: number;
   createdAt: number;
 }
 
@@ -97,6 +100,9 @@ export interface PdfBrush {
   pressureOpacity: boolean;
   /** Soft edge: apply a short, width-proportional feather to ink edges. */
   edgeFeather?: boolean;
+  /** Feather radius in WORLD px for new strokes (the 羽化大小 control).
+   *  Larger = softer edge; 0 = none. */
+  featherSize: number;
   /** Three quick-size presets (default 8 / 20 / 40). */
   quickSizes: number[];
   /**
