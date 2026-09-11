@@ -306,6 +306,9 @@ const PdfCanvas: React.FC = () => {
     /** Per-stroke bounds, cached for the whole gesture. */
     bounds: Map<string, Bounds>;
     index: InkStrokeIndex;
+    /** Eraser diameter (world units) snapshotted at pointer-down, so changing the
+     *  size mid-drag can't make the hit radius disagree with the drawn ring. */
+    radius: number;
     /** Spatial hash (cell == ink tile) so erase cost doesn't scale with the
      *  total stroke count on the page. Maintained as strokes are committed. */
     grid: Map<string, PdfStroke[]>;
@@ -707,12 +710,12 @@ const PdfCanvas: React.FC = () => {
     const wipe = strokeEraseRef.current;
     if (!wipe) return;
     const ink = wipe.index.topmost(x, y);
-    const half = PDF_ERASER_RADIUS / 2;
+    const half = wipe.radius / 2;
     for (const s of ink) {
       if (wipe.pendingIds.has(s.id) || s.compositeOperation === 'destination-out') continue;
       const bnd = wipe.bounds.get(s.id);
       if (bnd && !boundsIntersectRect(bnd, x - half, y - half, x + half, y + half)) continue;
-      if (wipe.index.hit(s, x, y, x, y)) { applyVisualErase([s]); return; }
+      if (wipe.index.hit(s, x, y, x, y, wipe.radius)) { applyVisualErase([s]); return; }
     }
   }, [applyVisualErase]);
 
@@ -737,7 +740,7 @@ const PdfCanvas: React.FC = () => {
     }
     wipe.last = all[all.length - 1];
     if (all.length < 2) return;
-    const half = PDF_ERASER_RADIUS / 2;
+    const half = wipe.radius / 2;
     let bx1 = Infinity, by1 = Infinity, bx2 = -Infinity, by2 = -Infinity;
     for (const p of all) {
       if (p.x < bx1) bx1 = p.x;
@@ -752,7 +755,7 @@ const PdfCanvas: React.FC = () => {
       if (wipe.pendingIds.has(s.id)) continue;
       if (s.compositeOperation === 'destination-out') continue;
       for (let i = 1; i < all.length; i++) {
-        if (wipe.index.hit(s, all[i - 1].x, all[i - 1].y, all[i].x, all[i].y)) {
+        if (wipe.index.hit(s, all[i - 1].x, all[i - 1].y, all[i].x, all[i].y, wipe.radius)) {
           targets.push(s);
           break;
         }
@@ -860,7 +863,9 @@ const PdfCanvas: React.FC = () => {
       strokeEraseRef.current = {
         page: st.currentPage, started: false, raf: 0,
         last: { x: world.x, y: world.y }, pending: [], pendingIds: new Set(),
-        bounds: index.bounds, grid: index.grid, index, perf: createEraserPerf(),
+        bounds: index.bounds, grid: index.grid, index,
+        radius: st.brush.eraserSize ?? PDF_ERASER_RADIUS,
+        perf: createEraserPerf(),
       };
       eraseTopmostAt(world.x, world.y);
       return;
@@ -894,7 +899,7 @@ const PdfCanvas: React.FC = () => {
       type: 'stroke',
       points: [],
       color: isEraser ? '#000000' : st.brush.color,
-      size: isEraser ? PDF_ERASER_RADIUS : st.brush.size,
+      size: isEraser ? (st.brush.eraserSize ?? PDF_ERASER_RADIUS) : st.brush.size,
       opacity: isEraser ? 1 : st.brush.opacity,
       renderVersion: !isEraser ? 2 : undefined,
       smoothing: isEraser ? 0 : st.brush.smoothing,
@@ -909,7 +914,7 @@ const PdfCanvas: React.FC = () => {
     if (isEraser) {
       eraserStrokeRef.current = stroke;
       // Erase the initial dot immediately for instant feedback.
-      eraseDotTiles(inkTilesRef.current, world.x, world.y, PDF_ERASER_RADIUS);
+      eraseDotTiles(inkTilesRef.current, world.x, world.y, stroke.size);
     } else {
       currentStrokeRef.current = stroke;
     }
@@ -1001,7 +1006,7 @@ const PdfCanvas: React.FC = () => {
         addRawPoint(es, w.x, w.y, 1, ce.timeStamp);
         if (es.points.length >= 2) {
           const a = es.points[es.points.length - 2];
-          eraseSegTiles(inkTilesRef.current, a.x, a.y, w.x, w.y, PDF_ERASER_RADIUS);
+          eraseSegTiles(inkTilesRef.current, a.x, a.y, w.x, w.y, es.size);
         }
       }
       dirtyRef.current = true;
@@ -1234,7 +1239,7 @@ const PdfCanvas: React.FC = () => {
   const imageInteractive = activeTool === 'select';
   const laserSize = Math.max(1.5, brush.size * 0.4);
   const cs = (activeTool === 'eraser'
-    ? PDF_ERASER_RADIUS
+    ? (brush.eraserSize ?? PDF_ERASER_RADIUS)
     : brushType === 'laser' ? laserSize : brush.size) * camera.zoom;
   const editingTextNode = currentItems.find((o): o is PdfTextObjectData => o.type === 'text' && o.id === editingTextId);
 

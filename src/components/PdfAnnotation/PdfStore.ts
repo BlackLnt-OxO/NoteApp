@@ -64,6 +64,8 @@ export const DEFAULT_PDF_BRUSH: PdfBrush = {
   pressureOpacity: false,
   edgeFeather: true,
   quickSizes: [8, 20, 40],
+  eraserSize: 20,
+  eraserQuickSizes: [12, 20, 60],
 };
 
 /** Defaults for a newly inserted PDF text card. bg is fixed light (a PDF page is

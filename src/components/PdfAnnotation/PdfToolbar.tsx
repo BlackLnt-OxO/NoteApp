@@ -254,7 +254,21 @@ const PdfToolbar: React.FC = () => {
 
   const theme = useNoteStore((s) => s.settings.theme);
   const isLight = theme === 'light';
-  const quick = brush.quickSizes ?? [8, 20, 40];
+
+  /**
+   * The size controls RE-TARGET on the active tool: with the eraser selected they
+   * drive the eraser's own size, otherwise the pen's. Each keeps its own value, so
+   * a 2px pen and a 40px eraser coexist and neither is overwritten on a tool
+   * switch. (Procreate/GoodNotes behave the same way.) Only the pen/eraser pair
+   * does this — select and insert have no size.
+   */
+  const sizingEraser = activeTool === 'eraser';
+  const sizeKey = sizingEraser ? 'eraserSize' : 'size';
+  const quickKey = sizingEraser ? 'eraserQuickSizes' : 'quickSizes';
+  const sizeValue = brush[sizeKey];
+  const quick = brush[quickKey] ?? (sizingEraser ? [12, 20, 60] : [8, 20, 40]);
+  const setSize = (v: number) => update({ [sizeKey]: v } as Partial<typeof brush>);
+
   const [openQuickIdx, setOpenQuickIdx] = useState<number | null>(null);
   useEffect(() => {
     if (openQuickIdx === null) return;
@@ -264,7 +278,8 @@ const PdfToolbar: React.FC = () => {
     document.addEventListener('pointerdown', h);
     return () => document.removeEventListener('pointerdown', h);
   }, [openQuickIdx]);
-  const setQuickSize = (i: number, v: number) => update({ quickSizes: quick.map((x, xi) => (xi === i ? v : x)) });
+  const setQuickSize = (i: number, v: number) =>
+    update({ [quickKey]: quick.map((x, xi) => (xi === i ? v : x)) } as Partial<typeof brush>);
 
   // Stylus/mouse micro-move tolerance: pressing a button and drifting a few px
   // (common with a pen) shouldn't swallow the tap. If the release lands off the
@@ -353,7 +368,7 @@ const PdfToolbar: React.FC = () => {
         {quick.map((v, i) => (
           <QuickSizeButton
             key={i} idx={i} value={v}
-            onSelect={(val) => update({ size: val })}
+            onSelect={(val) => setSize(val)}
             onChange={setQuickSize}
             open={openQuickIdx === i}
             setOpen={(i2) => setOpenQuickIdx(i2)}
@@ -364,8 +379,11 @@ const PdfToolbar: React.FC = () => {
 
       {/* ---- Brush Size ---- */}
       <div style={sectionStyle}>
-        <div style={labelStyle(gfs)}><span>大小</span><span>{brush.size}</span></div>
-        <input type="range" min={1} max={100} value={brush.size} onChange={(e) => update({ size: Number(e.target.value) })} style={trackStyle} />
+        <div style={labelStyle(gfs)}>
+          <span>{sizingEraser ? '橡皮大小' : '大小'}</span><span>{sizeValue}</span>
+        </div>
+        <input type="range" min={1} max={100} value={sizeValue}
+          onChange={(e) => setSize(Number(e.target.value))} style={trackStyle} />
       </div>
 
       {/* ---- Opacity ---- */}

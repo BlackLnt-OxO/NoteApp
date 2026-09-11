@@ -99,6 +99,14 @@ export interface PdfBrush {
   edgeFeather?: boolean;
   /** Three quick-size presets (default 8 / 20 / 40). */
   quickSizes: number[];
+  /**
+   * Eraser diameter in world units. The eraser has its OWN size rather than
+   * reusing `size`: the toolbar's size controls re-target on the active tool, so
+   * a 2px pen and a 40px eraser coexist and each survives a tool switch.
+   */
+  eraserSize: number;
+  /** Quick-size presets for the eraser (its own, mirroring `quickSizes`). */
+  eraserQuickSizes: number[];
 }
 
 export interface PdfCamera {

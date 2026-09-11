@@ -270,9 +270,16 @@ export function isInkStroke(it: { compositeOperation?: string }): boolean {
   return it.compositeOperation !== 'destination-out';
 }
 
-/** Hit radius (centerline distance, world units) for whole-stroke erasing. */
-export function strokeEraserRadius(strokeSize: number): number {
-  return ERASER_DISC_HALF + strokeSize / 2;
+/**
+ * Hit radius (centerline distance, world units) for whole-stroke erasing:
+ * the eraser disc's half-width plus the stroke's own half-width.
+ *
+ * `eraserDiameter` is the cursor ring's full width, which the user can now set —
+ * so the hit test is told it rather than assuming the built-in default. If the
+ * two ever disagree the ring would show one thing and erase by another.
+ */
+export function strokeEraserRadius(strokeSize: number, eraserDiameter: number = PDF_ERASER_RADIUS): number {
+  return eraserDiameter / 2 + strokeSize / 2;
 }
 
 /** Orientation sign of r relative to the directed line p→q (-1/0/1). */
@@ -318,8 +325,9 @@ export function hitTestStrokeBySegment(
   cachedBounds?: Bounds,
   start = 0,
   end = stroke.points.length - 1,
+  eraserDiameter?: number,
 ): boolean {
-  const radius = strokeEraserRadius(stroke.size);
+  const radius = strokeEraserRadius(stroke.size, eraserDiameter);
   const pts = stroke.points;
   if (pts.length === 0) return false;
   // Bounding-box prefilter: sweep rectangle inflated by the hit radius.

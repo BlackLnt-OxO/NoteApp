@@ -110,6 +110,9 @@ const InfiniteInkCanvas: React.FC = () => {
     /** Per-stroke bounds, cached for the whole gesture. */
     bounds: Map<string, Bounds>;
     index: InkStrokeIndex;
+    /** Eraser diameter (world units) snapshotted at pointer-down, so changing the
+     *  size mid-drag can't make the hit radius disagree with the drawn ring. */
+    radius: number;
     /** Spatial hash (cell == ink tile) so erase cost doesn't scale with the
      *  total stroke count on the page. Maintained as strokes are committed. */
     grid: Map<string, Stroke[]>;
@@ -334,12 +337,12 @@ const InfiniteInkCanvas: React.FC = () => {
     const wipe = strokeEraseRef.current;
     if (!wipe) return;
     const ink = wipe.index.topmost(x, y);
-    const half = ERASER_RADIUS / 2;
+    const half = wipe.radius / 2;
     for (const s of ink) {
       if (wipe.pendingIds.has(s.id) || s.compositeOperation === 'destination-out') continue;
       const bnd = wipe.bounds.get(s.id);
       if (bnd && !boundsIntersectRect(bnd, x - half, y - half, x + half, y + half)) continue;
-      if (wipe.index.hit(s, x, y, x, y)) { applyVisualErase([s]); return; }
+      if (wipe.index.hit(s, x, y, x, y, wipe.radius)) { applyVisualErase([s]); return; }
     }
   }, [applyVisualErase]);
 
@@ -364,7 +367,7 @@ const InfiniteInkCanvas: React.FC = () => {
     }
     wipe.last = all[all.length - 1];
     if (all.length < 2) return;
-    const half = ERASER_RADIUS / 2;
+    const half = wipe.radius / 2;
     let bx1 = Infinity, by1 = Infinity, bx2 = -Infinity, by2 = -Infinity;
     for (const p of all) {
       if (p.x < bx1) bx1 = p.x;
@@ -379,7 +382,7 @@ const InfiniteInkCanvas: React.FC = () => {
       if (wipe.pendingIds.has(s.id)) continue;
       if (s.compositeOperation === 'destination-out') continue;
       for (let i = 1; i < all.length; i++) {
-        if (wipe.index.hit(s, all[i - 1].x, all[i - 1].y, all[i].x, all[i].y)) {
+        if (wipe.index.hit(s, all[i - 1].x, all[i - 1].y, all[i].x, all[i].y, wipe.radius)) {
           targets.push(s);
           break;
         }
@@ -572,6 +575,7 @@ const InfiniteInkCanvas: React.FC = () => {
       strokeEraseRef.current = {
         started: false, raf: 0, last: { x: world.x, y: world.y },
         pending: [], pendingIds: new Set(), bounds: index.bounds, grid: index.grid, index,
+        radius: state.brushSettings.eraserSize ?? ERASER_RADIUS,
         perf: createEraserPerf(),
       };
       eraseTopmostAt(world.x, world.y);
@@ -606,7 +610,7 @@ const InfiniteInkCanvas: React.FC = () => {
       type: 'stroke',
       points: [],
       color: isEraser ? '#000000' : state.brushSettings.color,
-      size: isEraser ? ERASER_RADIUS : state.brushSettings.size,
+      size: isEraser ? (state.brushSettings.eraserSize ?? ERASER_RADIUS) : state.brushSettings.size,
       opacity: isEraser ? 1 : state.brushSettings.opacity,
       renderVersion: !isEraser ? 2 : undefined,
       smoothing: isEraser ? 0 : state.brushSettings.smoothing,
@@ -621,7 +625,7 @@ const InfiniteInkCanvas: React.FC = () => {
     currentStrokeRef.current = stroke;
     if (isEraser) {
       // Free eraser: erase the initial dot immediately (destination-out into tiles).
-      eraseDotTiles(inkTilesRef.current, world.x, world.y, ERASER_RADIUS);
+      eraseDotTiles(inkTilesRef.current, world.x, world.y, stroke.size);
     }
 
     dirtyRef.current = true;
@@ -715,7 +719,7 @@ const InfiniteInkCanvas: React.FC = () => {
       addRawPoint(stroke, w.x, w.y, getPressure(ce), ce.timeStamp);
       if (isEraser && stroke.points.length >= 2) {
         const a = stroke.points[stroke.points.length - 2];
-        eraseSegTiles(inkTilesRef.current, a.x, a.y, w.x, w.y, ERASER_RADIUS);
+        eraseSegTiles(inkTilesRef.current, a.x, a.y, w.x, w.y, stroke.size);
       }
     }
 
@@ -885,7 +889,7 @@ const InfiniteInkCanvas: React.FC = () => {
   // Circle diameter in screen px = world width × zoom, so it matches the drawn line.
   const laserSize = Math.max(1.5, brushSettings.size * 0.4);
   const cs = (activeTool === 'eraser'
-    ? ERASER_RADIUS
+    ? (brushSettings.eraserSize ?? ERASER_RADIUS)
     : brush === 'laser' ? laserSize : brushSettings.size) * camera.zoom;
   const isLight = theme === 'light';
   const ringBorder = isLight ? 'rgba(30,30,40,0.85)' : 'rgba(255,255,255,0.7)';

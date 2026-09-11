@@ -178,6 +178,17 @@ describe('whole-stroke eraser helpers', () => {
     return s; // size 8 → hit radius = 10 + 4 = 14
   }
 
+  it('strokeEraserRadius follows a caller-supplied eraser diameter', () => {
+    // The eraser size is user-settable, and the ring, the block prefilter and the
+    // exact segment test must all use the same radius — otherwise the cursor
+    // would show one thing and erase by another.
+    expect(strokeEraserRadius(8, 60)).toBeCloseTo(30 + 4, 6);
+    expect(strokeEraserRadius(8, 12)).toBeCloseTo(6 + 4, 6);
+    expect(strokeEraserRadius(8, 60)).toBeGreaterThan(strokeEraserRadius(8, 20));
+    // A fat stroke is reachable from further away than a thin one, same eraser.
+    expect(strokeEraserRadius(40, 20)).toBeGreaterThan(strokeEraserRadius(2, 20));
+  });
+
   it('strokeEraserRadius = disc half-width + stroke half-width', () => {
     expect(strokeEraserRadius(8)).toBeCloseTo(PDF_ERASER_RADIUS / 2 + 4, 6);
   });

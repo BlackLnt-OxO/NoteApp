@@ -1,4 +1,4 @@
-import { getStrokeBounds, boundsIntersectRect, hitTestStrokeBySegment, type Bounds } from './PdfEngine';
+import { getStrokeBounds, boundsIntersectRect, hitTestStrokeBySegment, strokeEraserRadius, type Bounds } from './PdfEngine';
 import type { PdfStroke } from './PdfTypes';
 
 const committedBounds = new WeakMap<PdfStroke, Bounds>();
@@ -69,12 +69,14 @@ export class InkStrokeIndex {
       .sort((a, b) => this.order.get(b.id)! - this.order.get(a.id)!);
   }
 
-  hit(stroke: PdfStroke, x1: number, y1: number, x2: number, y2: number): boolean {
-    const radius = 10 + stroke.size / 2;
+  /** `eraserDiameter` follows the toolbar's eraser size; the block prefilter and
+   *  the exact test must use the same radius as the drawn cursor ring. */
+  hit(stroke: PdfStroke, x1: number, y1: number, x2: number, y2: number, eraserDiameter?: number): boolean {
+    const radius = strokeEraserRadius(stroke.size, eraserDiameter);
     for (const block of this.blocks.get(stroke.id) ?? []) {
       if (!boundsIntersectRect(block.bounds, Math.min(x1, x2) - radius, Math.min(y1, y2) - radius,
         Math.max(x1, x2) + radius, Math.max(y1, y2) + radius)) continue;
-      if (hitTestStrokeBySegment(stroke, x1, y1, x2, y2, this.bounds.get(stroke.id), block.start, block.end)) return true;
+      if (hitTestStrokeBySegment(stroke, x1, y1, x2, y2, this.bounds.get(stroke.id), block.start, block.end, eraserDiameter)) return true;
     }
     return false;
   }
