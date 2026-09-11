@@ -1,9 +1,13 @@
-import React, { useRef, useEffect, useCallback, useState } from 'react';
+import { releaseStreamingInk } from '../PdfAnnotation/StreamingInkStroke';
+import React, { useRef, useEffect, useCallback } from 'react';
 import { useCanvasStore } from './useCanvasStore';
+import { getInkStrokeIndex, type InkStrokeIndex } from '../PdfAnnotation/InkStrokeIndex';
+import { useBrushCursor } from '../useBrushCursor';
+import { useInkInputActivity } from '../inkInputActivity';
 import { drawSelectionHighlight, drawSelectionRect } from './CanvasRenderer';
 import {
   drawDotGrid, getPressure, addRawPoint,
-  hitTestStroke, hitTestStrokeBySegment, getStrokeBounds, boundsIntersectRect,
+  hitTestStroke, getStrokeBounds, boundsIntersectRect,
   type Bounds,
 } from '../PdfAnnotation/PdfEngine';
 import {
@@ -14,7 +18,6 @@ import { drawAnnotatedStroke } from '../PdfAnnotation/PdfBrushRenderers';
 import { screenToWorld, clampZoom, zoomAt, ERASER_RADIUS } from './constants';
 import {
   stampStroke, eraseSegTiles, eraseDotTiles, drawVisibleTiles, rebuildTiles, removeStrokesFromTiles,
-  type InkRibbon,
 } from './InkTiles';
 import TextNode from './TextNode';
 import ImageObject from './ImageObject';
@@ -37,48 +40,6 @@ interface LaserSegment {
   end?: number;
 }
 const LASER_LIFETIME = 1800; // ms — how long a laser trail stays visible
-
-// ---- Whole-stroke-eraser spatial hash -------------------------------------
-// Strokes are hashed once per wipe gesture into cells the size of an ink tile.
-// The drag hit-scan and the tile re-stamp then only touch strokes in cells near
-// the cursor, so erase cost is independent of how many strokes the page holds.
-
-const WIPE_CELL = 512; // world units (== ink tile size, so grid keys == tile keys)
-
-/** Insert a stroke into the wipe hash (into every cell its bounds overlap). */
-function addStrokeToGrid(grid: Map<string, Stroke[]>, s: Stroke, b: Bounds): void {
-  const tx0 = Math.floor(b.minX / WIPE_CELL), tx1 = Math.floor(b.maxX / WIPE_CELL);
-  const ty0 = Math.floor(b.minY / WIPE_CELL), ty1 = Math.floor(b.maxY / WIPE_CELL);
-  for (let ty = ty0; ty <= ty1; ty++) {
-    for (let tx = tx0; tx <= tx1; tx++) {
-      const key = tx + ':' + ty;
-      let arr = grid.get(key);
-      if (!arr) { arr = []; grid.set(key, arr); }
-      arr.push(s);
-    }
-  }
-}
-
-/** Collect the distinct strokes whose grid cells overlap the given rect. */
-function collectGridStrokes(
-  grid: Map<string, Stroke[]>,
-  x1: number, y1: number, x2: number, y2: number,
-  out: Stroke[],
-): void {
-  const cx0 = Math.floor(Math.min(x1, x2) / WIPE_CELL), cx1 = Math.floor(Math.max(x1, x2) / WIPE_CELL);
-  const cy0 = Math.floor(Math.min(y1, y2) / WIPE_CELL), cy1 = Math.floor(Math.max(y1, y2) / WIPE_CELL);
-  const seen = new Set<string>();
-  for (let cy = cy0; cy <= cy1; cy++) {
-    for (let cx = cx0; cx <= cx1; cx++) {
-      const arr = grid.get(cx + ':' + cy);
-      if (!arr) continue;
-      for (const s of arr) {
-        if (!seen.has(s.id)) { seen.add(s.id); out.push(s); }
-      }
-    }
-  }
-}
-
 
 /** Draw a laser segment at the given alpha. The caller decides alpha (uniform
  *  while writing so every trail stays lit, then a group fade from the last pen
@@ -121,7 +82,6 @@ const InfiniteInkCanvas: React.FC = () => {
   const inkTilesRef = useRef<Map<string, HTMLCanvasElement>>(new Map());
   const fileInputRef = useRef<HTMLInputElement>(null);
   const insertWorldRef = useRef<{ x: number; y: number } | null>(null);
-  const [cursorScreen, setCursorScreen] = useState<{ x: number; y: number } | null>(null);
   const rafRef = useRef<number>(0);
   const dprRef = useRef(1);
   const spaceDownRef = useRef(false);
@@ -136,8 +96,8 @@ const InfiniteInkCanvas: React.FC = () => {
    *  coalesced into ONE animation-frame flush (max one erase + one repaint per
    *  frame), so the wipe never does per-pointermove work. `started` becomes true
    *  on the first removal so the whole gesture shares ONE history snapshot.
-   *  `bounds` caches each stroke's bbox for the duration of the gesture (strokes
-   *  only change by removal here), keeping the per-frame hit scan O(1) per stroke. */
+   *  `index` supplies committed bounds and segment blocks without rebuilding
+   *  them on pointer-down. */
   const strokeEraseRef = useRef<{
     started: boolean;
     raf: number;
@@ -149,14 +109,25 @@ const InfiniteInkCanvas: React.FC = () => {
     pendingIds: Set<string>;
     /** Per-stroke bounds, cached for the whole gesture. */
     bounds: Map<string, Bounds>;
+    index: InkStrokeIndex;
     /** Spatial hash (cell == ink tile) so erase cost doesn't scale with the
-     *  total stroke count on the page. Built once when the gesture starts. */
+     *  total stroke count on the page. Maintained as strokes are committed. */
     grid: Map<string, Stroke[]>;
-    /** Prepared ribbon geometry per stroke, cached for the whole gesture. */
-    ribbons: Map<string, InkRibbon>;
     /** Dev-only timing for this gesture (null in prod). */
     perf: EraserPerf | null;
   } | null>(null);
+
+  useEffect(() => () => {
+    if (currentStrokeRef.current) releaseStreamingInk(currentStrokeRef.current);
+    if (rafRef.current) cancelAnimationFrame(rafRef.current);
+    if (laserRafRef.current) cancelAnimationFrame(laserRafRef.current);
+    if (strokeEraseRef.current?.raf) cancelAnimationFrame(strokeEraseRef.current.raf);
+    // StrictMode replays effects on mount; cancelled frame IDs must not prevent
+    // the replayed sizing/render effects from scheduling their first frame.
+    rafRef.current = 0;
+    laserRafRef.current = 0;
+    if (strokeEraseRef.current) strokeEraseRef.current.raf = 0;
+  }, []);
 
   const objects = useCanvasStore((s) => s.objects);
   const camera = useCanvasStore((s) => s.camera);
@@ -174,6 +145,10 @@ const InfiniteInkCanvas: React.FC = () => {
   const tSide = useCanvasToolbarStore((s) => s.side);
   const theme = useNoteStore((s) => s.settings.theme);
   const uiScale = useNoteStore((s) => s.uiScale);
+  const { ringRef, moveCursor, hideCursor } = useBrushCursor(
+    uiScale, (activeTool === 'pen' || activeTool === 'eraser') && !isDraggingToolbar,
+  );
+  useInkInputActivity(canvasRef);
   const renderEpoch = useCanvasStore((s) => s.renderEpoch);
   const pendingImageInsert = useCanvasStore((s) => s.pendingImageInsert);
 
@@ -339,7 +314,7 @@ const InfiniteInkCanvas: React.FC = () => {
    * Erasing is VISUAL first: strokes are cleared out of the shared ink tiles
    * immediately and queued in `pendingIds`; the STORE commit happens once on
    * pointer-up (one history snapshot, no per-frame React churn). The spatial
-   * hash (`grid`) built once per gesture means every frame only touches strokes
+   * hash (`grid`) maintained at commit time means each frame only touches strokes
    * near the cursor — cost is independent of the page's total stroke count.
    */
   const applyVisualErase = useCallback((targets: Stroke[]) => {
@@ -348,7 +323,7 @@ const InfiniteInkCanvas: React.FC = () => {
     if (!wipe) return;
     for (const t of targets) wipe.pendingIds.add(t.id);
     const tRestamp = performance.now();
-    removeStrokesFromTiles(inkTilesRef.current, wipe.grid, wipe.pendingIds, targets, wipe.bounds, wipe.ribbons);
+    removeStrokesFromTiles(inkTilesRef.current, wipe.grid, wipe.pendingIds, targets, wipe.bounds);
     addEraserRestamp(wipe.perf, targets.length, performance.now() - tRestamp);
     dirtyRef.current = true;
     scheduleRender();
@@ -358,17 +333,13 @@ const InfiniteInkCanvas: React.FC = () => {
   const eraseTopmostAt = useCallback((x: number, y: number) => {
     const wipe = strokeEraseRef.current;
     if (!wipe) return;
-    const st = useCanvasStore.getState();
-    const ink = st.objects.filter(
-      (o): o is Stroke =>
-        o.type === 'stroke' && o.compositeOperation !== 'destination-out' && !wipe.pendingIds.has(o.id),
-    );
+    const ink = wipe.index.topmost(x, y);
     const half = ERASER_RADIUS / 2;
-    for (let i = ink.length - 1; i >= 0; i--) {
-      const s = ink[i];
+    for (const s of ink) {
+      if (wipe.pendingIds.has(s.id) || s.compositeOperation === 'destination-out') continue;
       const bnd = wipe.bounds.get(s.id);
       if (bnd && !boundsIntersectRect(bnd, x - half, y - half, x + half, y + half)) continue;
-      if (hitTestStrokeBySegment(s, x, y, x, y, bnd)) { applyVisualErase([s]); return; }
+      if (wipe.index.hit(s, x, y, x, y)) { applyVisualErase([s]); return; }
     }
   }, [applyVisualErase]);
 
@@ -401,16 +372,14 @@ const InfiniteInkCanvas: React.FC = () => {
       if (p.x > bx2) bx2 = p.x;
       if (p.y > by2) by2 = p.y;
     }
-    const candidates: Stroke[] = [];
     const tScan = performance.now();
-    collectGridStrokes(wipe.grid, bx1 - half, by1 - half, bx2 + half, by2 + half, candidates);
+    const candidates = wipe.index.collect(bx1 - half, by1 - half, bx2 + half, by2 + half);
     const targets: Stroke[] = [];
     for (const s of candidates) {
       if (wipe.pendingIds.has(s.id)) continue;
       if (s.compositeOperation === 'destination-out') continue;
-      const bnd = wipe.bounds.get(s.id);
       for (let i = 1; i < all.length; i++) {
-        if (hitTestStrokeBySegment(s, all[i - 1].x, all[i - 1].y, all[i].x, all[i].y, bnd)) {
+        if (wipe.index.hit(s, all[i - 1].x, all[i - 1].y, all[i].x, all[i].y)) {
           targets.push(s);
           break;
         }
@@ -424,8 +393,15 @@ const InfiniteInkCanvas: React.FC = () => {
   const scheduleWipe = useCallback(() => {
     const wipe = strokeEraseRef.current;
     if (!wipe || wipe.raf) return;
-    wipe.raf = requestAnimationFrame(flushStrokeWipe);
-  }, [flushStrokeWipe]);
+    wipe.raf = requestAnimationFrame(() => {
+      flushStrokeWipe();
+      if (dirtyRef.current) {
+        if (rafRef.current) cancelAnimationFrame(rafRef.current);
+        rafRef.current = 0;
+        doRender();
+      }
+    });
+  }, [flushStrokeWipe, doRender]);
 
   useEffect(() => {
     dirtyRef.current = true;
@@ -522,7 +498,7 @@ const InfiniteInkCanvas: React.FC = () => {
     if (!canvas) return;
     const state = useCanvasStore.getState();
     const { sx, sy } = getCanvasPos(e);
-    setCursorScreen({ x: sx, y: sy });
+    moveCursor(sx, sy);
 
     if (e.button === 1 || (e.button === 0 && spaceDownRef.current)) {
       canvas.setPointerCapture(e.pointerId);
@@ -592,24 +568,12 @@ const InfiniteInkCanvas: React.FC = () => {
     // (coalesced to one animation-frame batch).
     if (state.activeTool === 'eraser' && state.eraserMode === 'stroke') {
       canvas.setPointerCapture(e.pointerId);
+      const index = getInkStrokeIndex(inkTilesRef.current);
       strokeEraseRef.current = {
         started: false, raf: 0, last: { x: world.x, y: world.y },
-        pending: [], pendingIds: new Set(), bounds: new Map(), grid: new Map(),
-        ribbons: new Map(), perf: createEraserPerf(),
+        pending: [], pendingIds: new Set(), bounds: index.bounds, grid: index.grid, index,
+        perf: createEraserPerf(),
       };
-      // Hash every stroke once per gesture; erase cost then stays local to the
-      // cells under the cursor no matter how many strokes the page holds.
-      {
-        const w = strokeEraseRef.current!;
-        const stt = useCanvasStore.getState();
-        for (const o of stt.objects) {
-          if (o.type !== 'stroke') continue;
-          const s = o as Stroke;
-          const b = getStrokeBounds(s);
-          w.bounds.set(s.id, b);
-          addStrokeToGrid(w.grid, s, b);
-        }
-      }
       eraseTopmostAt(world.x, world.y);
       return;
     }
@@ -644,6 +608,7 @@ const InfiniteInkCanvas: React.FC = () => {
       color: isEraser ? '#000000' : state.brushSettings.color,
       size: isEraser ? ERASER_RADIUS : state.brushSettings.size,
       opacity: isEraser ? 1 : state.brushSettings.opacity,
+      renderVersion: !isEraser ? 2 : undefined,
       smoothing: isEraser ? 0 : state.brushSettings.smoothing,
       compositeOperation: isEraser ? 'destination-out' : 'source-over',
       style: isEraser ? undefined : (state.brush === 'fountain' || state.brush === 'pencil' ? state.brush : undefined),
@@ -670,7 +635,7 @@ const InfiniteInkCanvas: React.FC = () => {
     if (!canvas) return;
     const { sx, sy } = getCanvasPos(e);
     const state = useCanvasStore.getState();
-    setCursorScreen({ x: sx, y: sy });
+    moveCursor(sx, sy);
 
     if (panAnchorRef.current) {
       state.setCamera({
@@ -775,11 +740,14 @@ const InfiniteInkCanvas: React.FC = () => {
     // far — nothing touched the store mid-drag).
     const wipe = strokeEraseRef.current;
     if (wipe) {
+      if (wipe.raf) cancelAnimationFrame(wipe.raf);
+      wipe.raf = 0;
       if (wipe.pending.length > 0) flushStrokeWipe();
       if (wipe.pendingIds.size > 0) {
         const st = useCanvasStore.getState();
         if (!wipe.started) { st.beginEraseGesture(); wipe.started = true; }
         st.eraseStrokesLive([...wipe.pendingIds]);
+        wipe.index.remove(wipe.pendingIds);
       }
       logEraserPerf(wipe.perf, 'canvas');
     }
@@ -834,6 +802,8 @@ const InfiniteInkCanvas: React.FC = () => {
         if (stroke.compositeOperation !== 'destination-out') {
           // Pen: stamp into tiles. Free eraser already erased incrementally.
           stampStroke(inkTilesRef.current, stroke);
+        } else {
+          getInkStrokeIndex(inkTilesRef.current).add(stroke);
         }
       }
       currentStrokeRef.current = null;
@@ -912,7 +882,6 @@ const InfiniteInkCanvas: React.FC = () => {
     : 'default';
   const editingNode = objects.find((o): o is TextNodeData => o.type === 'text' && o.id === editingTextId);
 
-  const showCursor = (activeTool === 'pen' || activeTool === 'eraser') && cursorScreen && !isDraggingToolbar;
   // Circle diameter in screen px = world width × zoom, so it matches the drawn line.
   const laserSize = Math.max(1.5, brushSettings.size * 0.4);
   const cs = (activeTool === 'eraser'
@@ -938,7 +907,8 @@ const InfiniteInkCanvas: React.FC = () => {
       <canvas ref={canvasRef} style={{ position: 'absolute', inset: 0, touchAction: 'none', userSelect: 'none', cursor: cursorStyle }}
         onPointerDown={handlePointerDown} onPointerMove={handlePointerMove} onPointerUp={handlePointerUp}
         onPointerCancel={handlePointerUp}
-        onPointerLeave={() => setCursorScreen(null)}
+        onLostPointerCapture={handlePointerUp}
+        onPointerLeave={hideCursor}
         onWheel={handleWheel} />
 
       {/* Committed text = always-visible DOM cards (above ink). Interactive in the
@@ -949,12 +919,10 @@ const InfiniteInkCanvas: React.FC = () => {
           <TextObject key={o.id} node={o} camera={camera} interactive={interactiveText} />
         ))}
 
-      {showCursor && cursorScreen && (
-        <div style={{ position: 'absolute', left: cursorScreen.x / uiScale, top: cursorScreen.y / uiScale, width: cs / uiScale, height: cs / uiScale,
-          borderRadius: '50%', border: `1.5px solid ${ringBorder}`,
-          background: ringBg,
-          pointerEvents: 'none', zIndex: 9999, transform: 'translate(-50%, -50%)' }} />
-      )}
+      <div ref={ringRef} style={{ position: 'absolute', left: 0, top: 0, visibility: 'hidden', width: cs / uiScale, height: cs / uiScale,
+        borderRadius: '50%', border: `1.5px solid ${ringBorder}`,
+        background: ringBg,
+        pointerEvents: 'none', zIndex: 9999, transform: 'translate(-50%, -50%)' }} />
 
       {editingNode && <TextNode node={editingNode} camera={camera} />}
 

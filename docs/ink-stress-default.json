@@ -1,0 +1,151 @@
+{
+  "date": "2026-09-11T00:43:06.133Z",
+  "browser": "Edg/152.0.4191.66",
+  "cpu": "AMD Ryzen 7 7840H w/Radeon 780M Graphics",
+  "canvas": "application defaults (CPU live masks, accelerated main canvas when available)",
+  "method": "Uninterrupted retrace with growing prefix and four added points per frame; truly overlapping legacy strokes with feather enabled. Times include synchronous 1px readback, not full pointer-to-display latency. Prefix preparation and document load are outside input-frame timings.",
+  "baselineBrushSha256": "ac8082e3bf6f6178d7a4bb89d29bf4b4bdab46bc7a884286b019af0029970796",
+  "baselineEraseSha256": "a249c9c42f6d298eb85a8fd5fd0e393937312219c9d6eab2d7adce8cf0bba20f",
+  "cases": [
+    {
+      "kind": "continuous-retrace",
+      "prefixPoints": 512,
+      "newPointsPerFrame": 4,
+      "edgeFeather": true,
+      "before": {
+        "medianMs": 39.70000001788139,
+        "worstMs": 204,
+        "samples": [
+          38.900000005960464,
+          39.099999994039536,
+          39.5,
+          39.70000001788139,
+          40.30000001192093,
+          204
+        ]
+      },
+      "after": {
+        "medianMs": 3.2000000178813934,
+        "worstMs": 6.5,
+        "samples": [
+          2.199999988079071,
+          2.9000000059604645,
+          2.9000000059604645,
+          3.2000000178813934,
+          5,
+          6.5
+        ],
+        "newSamplesProcessed": 4,
+        "rasterTilesUpdated": 2
+      }
+    },
+    {
+      "kind": "continuous-retrace",
+      "prefixPoints": 4096,
+      "newPointsPerFrame": 4,
+      "edgeFeather": true,
+      "before": {
+        "medianMs": 2021.9000000059605,
+        "worstMs": 2021.9000000059605,
+        "samples": [
+          2021.9000000059605
+        ]
+      },
+      "after": {
+        "medianMs": 3.600000023841858,
+        "worstMs": 6,
+        "samples": [
+          1.800000011920929,
+          3.2000000178813934,
+          3.4000000059604645,
+          3.600000023841858,
+          5.9000000059604645,
+          6
+        ],
+        "newSamplesProcessed": 4,
+        "rasterTilesUpdated": 2
+      }
+    },
+    {
+      "kind": "continuous-retrace",
+      "prefixPoints": 16384,
+      "newPointsPerFrame": 4,
+      "edgeFeather": true,
+      "before": {
+        "medianMs": 32552.600000023842,
+        "worstMs": 32552.600000023842,
+        "samples": [
+          32552.600000023842
+        ]
+      },
+      "after": {
+        "medianMs": 3.7000000178813934,
+        "worstMs": 7.699999988079071,
+        "samples": [
+          1.600000023841858,
+          2,
+          3.199999988079071,
+          3.7000000178813934,
+          5.199999988079071,
+          7.699999988079071
+        ],
+        "newSamplesProcessed": 4,
+        "rasterTilesUpdated": 2
+      }
+    },
+    {
+      "kind": "overlapping-stroke-erase",
+      "strokes": 128,
+      "edgeFeather": true,
+      "before": {
+        "medianMs": 47.29999998211861,
+        "worstMs": 93.59999999403954,
+        "samples": [
+          46.099999994039536,
+          47.29999998211861,
+          93.59999999403954
+        ],
+        "cacheHits": 0,
+        "cacheMisses": 0
+      },
+      "after": {
+        "medianMs": 12.399999976158142,
+        "worstMs": 16.099999994039536,
+        "samples": [
+          8,
+          12.399999976158142,
+          16.099999994039536
+        ],
+        "cacheHits": 381,
+        "cacheMisses": 0
+      }
+    },
+    {
+      "kind": "overlapping-stroke-erase",
+      "strokes": 512,
+      "edgeFeather": true,
+      "before": {
+        "medianMs": 155.10000002384186,
+        "worstMs": 160.80000001192093,
+        "samples": [
+          152.69999998807907,
+          155.10000002384186,
+          160.80000001192093
+        ],
+        "cacheHits": 0,
+        "cacheMisses": 0
+      },
+      "after": {
+        "medianMs": 16.69999998807907,
+        "worstMs": 17.400000005960464,
+        "samples": [
+          12.400000005960464,
+          16.69999998807907,
+          17.400000005960464
+        ],
+        "cacheHits": 1533,
+        "cacheMisses": 0
+      }
+    }
+  ]
+}

@@ -1,0 +1,117 @@
+{
+  "date": "2026-09-11T01:18:44.849Z",
+  "browser": "Edg/152.0.4191.66",
+  "cpu": "AMD Ryzen 7 7840H w/Radeon 780M Graphics",
+  "canvas": "application defaults (CPU live masks, accelerated main canvas when available)",
+  "method": "Uninterrupted retrace with growing prefix and four added points per frame; truly overlapping legacy strokes with feather enabled. Times include synchronous 1px readback, not full pointer-to-display latency. Prefix preparation and document load are outside input-frame timings.",
+  "baselineBrushSha256": "ac8082e3bf6f6178d7a4bb89d29bf4b4bdab46bc7a884286b019af0029970796",
+  "baselineEraseSha256": "a249c9c42f6d298eb85a8fd5fd0e393937312219c9d6eab2d7adce8cf0bba20f",
+  "cases": [
+    {
+      "kind": "continuous-retrace",
+      "style": "pencil",
+      "prefixPoints": 512,
+      "newPointsPerFrame": 4,
+      "edgeFeather": true,
+      "before": {
+        "medianMs": 40.599999994039536,
+        "worstMs": 189,
+        "samples": [
+          40.19999998807907,
+          40.5,
+          40.5,
+          40.599999994039536,
+          42.19999998807907,
+          189
+        ]
+      },
+      "after": {
+        "medianMs": 7.200000017881393,
+        "worstMs": 9,
+        "samples": [
+          2.699999988079071,
+          4.4000000059604645,
+          5.700000017881393,
+          7.200000017881393,
+          7.299999982118607,
+          9
+        ],
+        "newSamplesProcessed": 4,
+        "rasterTilesUpdated": 2
+      }
+    },
+    {
+      "kind": "continuous-retrace",
+      "style": "pencil",
+      "prefixPoints": 4096,
+      "newPointsPerFrame": 4,
+      "edgeFeather": true,
+      "before": {
+        "medianMs": 2060.5,
+        "worstMs": 2060.5,
+        "samples": [
+          2060.5
+        ]
+      },
+      "after": {
+        "medianMs": 7.200000017881393,
+        "worstMs": 8.600000023841858,
+        "samples": [
+          2.4000000059604645,
+          4.100000023841858,
+          4.699999988079071,
+          7.200000017881393,
+          7.4000000059604645,
+          8.600000023841858
+        ],
+        "newSamplesProcessed": 4,
+        "rasterTilesUpdated": 2
+      }
+    },
+    {
+      "kind": "progressive-live-retrace",
+      "style": "pencil",
+      "newPointsPerFrame": 4,
+      "totalPoints": 4096,
+      "windows": [
+        {
+          "endingPoints": 1024,
+          "frames": 256,
+          "medianMs": 3.4000000059604645,
+          "p95Ms": 4.299999982118607,
+          "worstMs": 12.800000011920929,
+          "frameIntervalP95Ms": 6.199999999999818,
+          "framesOver16ms": 0
+        },
+        {
+          "endingPoints": 2048,
+          "frames": 256,
+          "medianMs": 3.300000011920929,
+          "p95Ms": 3.800000011920929,
+          "worstMs": 4.5,
+          "frameIntervalP95Ms": 6.199999999999818,
+          "framesOver16ms": 0
+        },
+        {
+          "endingPoints": 3072,
+          "frames": 256,
+          "medianMs": 3.300000011920929,
+          "p95Ms": 3.899999976158142,
+          "worstMs": 4.5999999940395355,
+          "frameIntervalP95Ms": 6.199999999999818,
+          "framesOver16ms": 0
+        },
+        {
+          "endingPoints": 4096,
+          "frames": 256,
+          "medianMs": 3.399999976158142,
+          "p95Ms": 4,
+          "worstMs": 4.5,
+          "frameIntervalP95Ms": 6.100000000000364,
+          "framesOver16ms": 0
+        }
+      ],
+      "slowFrames": []
+    }
+  ]
+}

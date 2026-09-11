@@ -316,19 +316,21 @@ export function hitTestStrokeBySegment(
   x1: number, y1: number,
   x2: number, y2: number,
   cachedBounds?: Bounds,
+  start = 0,
+  end = stroke.points.length - 1,
 ): boolean {
   const radius = strokeEraserRadius(stroke.size);
   const pts = stroke.points;
   if (pts.length === 0) return false;
   // Bounding-box prefilter: sweep rectangle inflated by the hit radius.
   const b = cachedBounds ?? getStrokeBounds(stroke);
-  if (!boundsIntersectRect(b, x1 - radius, y1 - radius, x2 + radius, y2 + radius)) {
+  if (!boundsIntersectRect(b, Math.min(x1, x2) - radius, Math.min(y1, y2) - radius, Math.max(x1, x2) + radius, Math.max(y1, y2) + radius)) {
     return false;
   }
-  if (pts.length === 1) {
-    return distToSegment(pts[0].x, pts[0].y, x1, y1, x2, y2) <= radius;
+  if (start === end) {
+    return distToSegment(pts[start].x, pts[start].y, x1, y1, x2, y2) <= radius;
   }
-  for (let i = 1; i < pts.length; i++) {
+  for (let i = start + 1; i <= end; i++) {
     if (segSegDistance(x1, y1, x2, y2, pts[i - 1].x, pts[i - 1].y, pts[i].x, pts[i].y) <= radius) {
       return true;
     }

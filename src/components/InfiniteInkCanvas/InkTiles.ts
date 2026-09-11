@@ -5,31 +5,25 @@
  * Strokes are stamped into a sparse grid of offscreen canvases (TILE×TILE world
  * units each, baked at SCALE×). Pen = source-over, free-eraser =
  * destination-out (only ever touches ink). The main canvas draws only the
- * visible tiles per frame, so writing/erasing is O(1) instead of re-rendering
- * every stroke's vector every frame.
+ * visible tiles per frame. Committed ink scales with visible tiles; live pen
+ * rendering updates new samples, and erasing replays cached local ink.
  *
  * Text nodes are NOT rasterized here — they keep their vector/DOM path.
  */
 
 import type { Camera, Stroke } from './types';
+import { stampCachedStroke } from '../PdfAnnotation/InkRasterCache';
+import { eraseStrokeRegions } from '../PdfAnnotation/InkTileErase';
 import { screenToWorld, worldToScreen } from './constants';
-import {
-  drawAnnotatedStroke,
-  prepareInkRibbon,
-  drawInkRibbonSlice,
-} from '../PdfAnnotation/PdfBrushRenderers';
 import {
   drawEraserSegment,
   drawEraserDot,
-  getStrokeBounds,
   type Bounds,
 } from '../PdfAnnotation/PdfEngine';
 
 const TILE = 512; // world units per tile
 const SCALE = 3;  // bake supersampling (matches PDF_BAKE_SCALE)
 
-/** A prepared ribbon slice geometry for one stroke (see PdfBrushRenderers). */
-export type InkRibbon = ReturnType<typeof prepareInkRibbon>;
 
 function tileKey(tx: number, ty: number): string {
   return `${tx}:${ty}`;
@@ -51,27 +45,9 @@ function tileCtx(tiles: Map<string, HTMLCanvasElement>, tx: number, ty: number):
   return getTile(tiles, tx, ty).getContext('2d')!;
 }
 
-/** Draw a stroke into whichever tiles it intersects. For ribbon pens the ribbon
- *  is prepared once, then each tile stamps only the slice overlapping it — the
- *  pixels are identical (no re-smoothing, no seams) but cost scales with the
- *  tile instead of re-rasterizing the WHOLE stroke per tile. Eraser / pencil
- *  keep the whole-stroke path. */
+/** Stamp and cache committed pixels, sharing live coverage for version 2 ink. */
 export function stampStroke(tiles: Map<string, HTMLCanvasElement>, stroke: Stroke): void {
-  const b = getStrokeBounds(stroke);
-  const tx0 = Math.floor(b.minX / TILE), tx1 = Math.floor(b.maxX / TILE);
-  const ty0 = Math.floor(b.minY / TILE), ty1 = Math.floor(b.maxY / TILE);
-  const ribbon = prepareInkRibbon(stroke);
-  for (let ty = ty0; ty <= ty1; ty++) {
-    for (let tx = tx0; tx <= tx1; tx++) {
-      const ctx = tileCtx(tiles, tx, ty);
-      ctx.setTransform(SCALE, 0, 0, SCALE, -tx * TILE * SCALE, -ty * TILE * SCALE);
-      if (ribbon) {
-        drawInkRibbonSlice(ctx, ribbon, tx * TILE, ty * TILE, (tx + 1) * TILE, (ty + 1) * TILE);
-      } else {
-        drawAnnotatedStroke(ctx, stroke);
-      }
-    }
-  }
+  stampCachedStroke(tiles, stroke, TILE, SCALE);
 }
 
 /** Erase a segment (destination-out) across the tiles it touches. */
@@ -168,91 +144,13 @@ export function rebuildTiles(
   return tiles;
 }
 
-/**
- * Whole-stroke eraser live removal: clear the pixels of the removed stroke(s)
- * out of the SHARED ink-tile map. Affected tiles are cleared, then only the
- * strokes listed in those tiles' wipe-grid cells are re-stamped (the grid was
- * built once per wipe gesture and cell size == tile size, so this never scans
- * the whole page — cost scales with the strokes near the removed one, not with
- * the total stroke count). Destination-out eraser carves are re-stamped in their
- * original order so the z-relationship matches a full rebuild. Tiles left empty
- * are dropped.
- */
+/** Repair the removed ink's dirty rectangles, retaining the rest of each tile. */
 export function removeStrokesFromTiles(
   tiles: Map<string, HTMLCanvasElement>,
   grid: Map<string, Stroke[]>,
   skipIds: Set<string>,
   removed: Stroke[],
   cachedBounds?: Map<string, Bounds>,
-  ribbons?: Map<string, InkRibbon>,
 ): void {
-  if (removed.length === 0) return;
-
-  // Reuse the wipe gesture's per-stroke bounds cache (strokes are immutable
-  // here) so removal cost is O(strokes near the erased one), not O(total points).
-  const boundsOf = (s: Stroke): Bounds => {
-    const b = cachedBounds?.get(s.id);
-    if (b) return b;
-    const nb = getStrokeBounds(s);
-    cachedBounds?.set(s.id, nb);
-    return nb;
-  };
-
-  // Tiles the removed strokes touch = the only tiles whose pixels can change.
-  const cleared = new Set<string>();
-  for (const r of removed) {
-    const b = boundsOf(r);
-    const tx0 = Math.floor(b.minX / TILE), tx1 = Math.floor(b.maxX / TILE);
-    const ty0 = Math.floor(b.minY / TILE), ty1 = Math.floor(b.maxY / TILE);
-    for (let ty = ty0; ty <= ty1; ty++) {
-      for (let tx = tx0; tx <= tx1; tx++) {
-        const key = tileKey(tx, ty);
-        if (tiles.has(key)) cleared.add(key);
-      }
-    }
-  }
-  if (cleared.size === 0) return;
-
-  for (const key of cleared) {
-    const c = tiles.get(key);
-    const ctx = c && c.getContext('2d');
-    if (!c || !ctx) continue;
-    ctx.setTransform(1, 0, 0, 1, 0, 0);
-    ctx.clearRect(0, 0, c.width, c.height);
-  }
-
-  // Re-stamp, per cleared tile, only the strokes that the wipe grid lists for
-  // that cell (except the ones erased this gesture). Mirrors stampStroke exactly.
-  const stillNeeded = new Set<string>();
-  for (const key of cleared) {
-    const c = tiles.get(key);
-    const ctx = c && c.getContext('2d');
-    if (!c || !ctx) continue;
-    const list = grid.get(key);
-    if (!list) continue;
-    const sep = key.indexOf(':');
-    const tx = Number(key.slice(0, sep)), ty = Number(key.slice(sep + 1));
-    for (const s of list) {
-      if (skipIds.has(s.id)) continue;
-      ctx.setTransform(SCALE, 0, 0, SCALE, -tx * TILE * SCALE, -ty * TILE * SCALE);
-      // Prepare the ribbon geometry once per stroke per gesture; a long stroke
-      // can be re-stamped into many cleared tiles across several erase frames.
-      let ribbon: InkRibbon;
-      if (ribbons) {
-        if (!ribbons.has(s.id)) ribbons.set(s.id, prepareInkRibbon(s));
-        ribbon = ribbons.get(s.id)!;
-      } else {
-        ribbon = prepareInkRibbon(s);
-      }
-      if (ribbon) {
-        drawInkRibbonSlice(ctx, ribbon, tx * TILE, ty * TILE, (tx + 1) * TILE, (ty + 1) * TILE);
-      } else {
-        drawAnnotatedStroke(ctx, s);
-      }
-      stillNeeded.add(key);
-    }
-  }
-  for (const key of cleared) {
-    if (!stillNeeded.has(key)) tiles.delete(key);
-  }
+  eraseStrokeRegions(tiles, grid, skipIds, removed, TILE, SCALE, cachedBounds);
 }

@@ -1,0 +1,209 @@
+{
+  "date": "2026-09-11T02:50:14.124Z",
+  "browser": "Edg/152.0.4191.66",
+  "cpu": "AMD Ryzen 7 7840H w/Radeon 780M Graphics",
+  "canvas": "application defaults (CPU live masks, accelerated main canvas when available)",
+  "method": "Current eraser only: warm, intentionally cleared, and naturally thrashing raster cache. commandMs measures synchronous JS/native calls; synchronizedMs also forces 1px readback. Initial page stamping is outside measurements. This is not actual pointer-to-display latency.",
+  "currentSourceSha256": {
+    "InkTileErase.ts": "c8b58b7242c203e7449a873e1c9b53579fee8393f50dcb4efeae967068f3f77b",
+    "InkRasterCache.ts": "cae003de686af0cc7839431c0703dc66394643653ef931e72979813d5c831975",
+    "InkStrokeIndex.ts": "cc8662820abafd85ba0bfb8797034b5b118d8d40daaa9055336c1dd3ee4859dd",
+    "StreamingInkStroke.ts": "7f7ecefae264f742e6f1c1adedcdc3cb3591fbd87c73d951d89dd0c8b96a0760",
+    "StreamingPencilGrain.ts": "9bc89a753483a45428d803dcff81923533b0b36bda92520e33152063f2b7f09b"
+  },
+  "cases": [
+    {
+      "kind": "cold-legacy",
+      "strokes": 128,
+      "pointsPerStroke": 12,
+      "samples": [
+        {
+          "condition": "warm-1",
+          "commandMs": 1,
+          "synchronizedMs": 35.099999994039536,
+          "cacheHits": 127,
+          "cacheMisses": 0,
+          "entriesBefore": 128,
+          "entriesAfter": 128,
+          "cacheMiBBefore": 3.7726364135742188,
+          "cacheMiBAfter": 3.7726364135742188
+        },
+        {
+          "condition": "warm-2",
+          "commandMs": 5.300000011920929,
+          "synchronizedMs": 19.900000005960464,
+          "cacheHits": 127,
+          "cacheMisses": 0,
+          "entriesBefore": 128,
+          "entriesAfter": 128,
+          "cacheMiBBefore": 3.7726364135742188,
+          "cacheMiBAfter": 3.7726364135742188
+        },
+        {
+          "condition": "forced-cold",
+          "commandMs": 10,
+          "synchronizedMs": 46.099999994039536,
+          "cacheHits": 0,
+          "cacheMisses": 127,
+          "entriesBefore": 0,
+          "entriesAfter": 127,
+          "cacheMiBBefore": 0,
+          "cacheMiBAfter": 3.743053436279297
+        },
+        {
+          "condition": "rewarmed",
+          "commandMs": 1.4000000059604645,
+          "synchronizedMs": 11.300000011920929,
+          "cacheHits": 127,
+          "cacheMisses": 0,
+          "entriesBefore": 127,
+          "entriesAfter": 127,
+          "cacheMiBBefore": 3.743053436279297,
+          "cacheMiBAfter": 3.743053436279297
+        }
+      ]
+    },
+    {
+      "kind": "cold-v2",
+      "strokes": 128,
+      "pointsPerStroke": 12,
+      "samples": [
+        {
+          "condition": "warm-1",
+          "commandMs": 0.5,
+          "synchronizedMs": 7.200000017881393,
+          "cacheHits": 127,
+          "cacheMisses": 0,
+          "entriesBefore": 128,
+          "entriesAfter": 128,
+          "cacheMiBBefore": 3.7726364135742188,
+          "cacheMiBAfter": 3.7726364135742188
+        },
+        {
+          "condition": "warm-2",
+          "commandMs": 1.4000000059604645,
+          "synchronizedMs": 11.700000017881393,
+          "cacheHits": 127,
+          "cacheMisses": 0,
+          "entriesBefore": 128,
+          "entriesAfter": 128,
+          "cacheMiBBefore": 3.7726364135742188,
+          "cacheMiBAfter": 3.7726364135742188
+        },
+        {
+          "condition": "forced-cold",
+          "commandMs": 339.30000001192093,
+          "synchronizedMs": 350.5,
+          "cacheHits": 0,
+          "cacheMisses": 127,
+          "entriesBefore": 0,
+          "entriesAfter": 127,
+          "cacheMiBBefore": 0,
+          "cacheMiBAfter": 3.743053436279297
+        },
+        {
+          "condition": "rewarmed",
+          "commandMs": 1.4000000059604645,
+          "synchronizedMs": 11.800000011920929,
+          "cacheHits": 127,
+          "cacheMisses": 0,
+          "entriesBefore": 127,
+          "entriesAfter": 127,
+          "cacheMiBBefore": 3.743053436279297,
+          "cacheMiBAfter": 3.743053436279297
+        }
+      ]
+    },
+    {
+      "kind": "budget-thrash",
+      "strokes": 12,
+      "pointsPerStroke": 12,
+      "samples": [
+        {
+          "condition": "normal-1",
+          "commandMs": 0.09999999403953552,
+          "synchronizedMs": 6.699999988079071,
+          "cacheHits": 11,
+          "cacheMisses": 0,
+          "entriesBefore": 12,
+          "entriesAfter": 12,
+          "cacheMiBBefore": 80.85209655761719,
+          "cacheMiBAfter": 80.85209655761719
+        },
+        {
+          "condition": "normal-2",
+          "commandMs": 1.300000011920929,
+          "synchronizedMs": 11.800000011920929,
+          "cacheHits": 11,
+          "cacheMisses": 0,
+          "entriesBefore": 12,
+          "entriesAfter": 12,
+          "cacheMiBBefore": 80.85209655761719,
+          "cacheMiBAfter": 80.85209655761719
+        },
+        {
+          "condition": "normal-3",
+          "commandMs": 1.199999988079071,
+          "synchronizedMs": 12,
+          "cacheHits": 11,
+          "cacheMisses": 0,
+          "entriesBefore": 12,
+          "entriesAfter": 12,
+          "cacheMiBBefore": 80.85209655761719,
+          "cacheMiBAfter": 80.85209655761719
+        }
+      ]
+    },
+    {
+      "kind": "long-legacy",
+      "strokes": 2,
+      "pointsPerStroke": 2048,
+      "samples": [
+        {
+          "condition": "warm-1",
+          "commandMs": 0.19999998807907104,
+          "synchronizedMs": 12.599999994039536,
+          "cacheHits": 1,
+          "cacheMisses": 0,
+          "entriesBefore": 2,
+          "entriesAfter": 2,
+          "cacheMiBBefore": 0.5663223266601562,
+          "cacheMiBAfter": 0.5663223266601562
+        },
+        {
+          "condition": "warm-2",
+          "commandMs": 1.4000000059604645,
+          "synchronizedMs": 18.5,
+          "cacheHits": 1,
+          "cacheMisses": 0,
+          "entriesBefore": 2,
+          "entriesAfter": 2,
+          "cacheMiBBefore": 0.5663223266601562,
+          "cacheMiBAfter": 0.5663223266601562
+        },
+        {
+          "condition": "forced-cold",
+          "commandMs": 557.8999999761581,
+          "synchronizedMs": 814.6999999880791,
+          "cacheHits": 0,
+          "cacheMisses": 1,
+          "entriesBefore": 0,
+          "entriesAfter": 1,
+          "cacheMiBBefore": 0,
+          "cacheMiBAfter": 0.2805633544921875
+        },
+        {
+          "condition": "rewarmed",
+          "commandMs": 1.300000011920929,
+          "synchronizedMs": 15.800000011920929,
+          "cacheHits": 1,
+          "cacheMisses": 0,
+          "entriesBefore": 1,
+          "entriesAfter": 1,
+          "cacheMiBBefore": 0.2805633544921875,
+          "cacheMiBAfter": 0.2805633544921875
+        }
+      ]
+    }
+  ]
+}

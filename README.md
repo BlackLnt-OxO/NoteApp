@@ -52,7 +52,7 @@ npx tsc --noEmit     # TypeScript 类型检查
 npm run build        # 发布构建（自动先 build:engine → vite build → electron-builder，portable exe 输出到 dist-electron/）
 ```
 
-当前测试基线：**14 个测试文件 / 225 个用例全绿**，类型检查 0 错误。
+当前测试基线：**18 个测试文件 / 283 个用例全绿**，类型检查 0 错误。
 
 ### 长截图 Python 引擎（打包说明）
 
@@ -102,6 +102,10 @@ NoteApp/
 ├── package.json / package-lock.json
 ├── tsconfig.json / vite.config.ts / vitest.config.ts / .gitignore
 ```
+
+## 手写与笔画擦除性能
+
+源码分析、优化内容、性能基准和实机复测步骤见 [手写性能分析](docs/handwriting-performance.md)。
 
 ## 数据与隐私
 

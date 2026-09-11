@@ -1,0 +1,54 @@
+{
+  "date": "2026-09-11T00:38:08.071Z",
+  "browser": "Edg/152.0.4191.66",
+  "cpu": "AMD Ryzen 7 7840H w/Radeon 780M Graphics",
+  "canvas": "willReadFrequently=true (software)",
+  "method": "Uninterrupted retrace with growing prefix and four added points per frame; truly overlapping legacy strokes with feather enabled. Times include synchronous 1px readback, not full pointer-to-display latency. Prefix preparation and document load are outside input-frame timings.",
+  "baselineBrushSha256": "ac8082e3bf6f6178d7a4bb89d29bf4b4bdab46bc7a884286b019af0029970796",
+  "baselineEraseSha256": "a249c9c42f6d298eb85a8fd5fd0e393937312219c9d6eab2d7adce8cf0bba20f",
+  "cases": [
+    {
+      "kind": "progressive-live-retrace",
+      "newPointsPerFrame": 4,
+      "totalPoints": 4096,
+      "windows": [
+        {
+          "endingPoints": 1024,
+          "frames": 256,
+          "medianMs": 2.800000011920929,
+          "p95Ms": 3.5999999940395355,
+          "worstMs": 5.0999999940395355,
+          "frameIntervalP95Ms": 6.199999999999932,
+          "framesOver16ms": 0
+        },
+        {
+          "endingPoints": 2048,
+          "frames": 256,
+          "medianMs": 3,
+          "p95Ms": 4.300000011920929,
+          "worstMs": 5.699999988079071,
+          "frameIntervalP95Ms": 6.199999999999818,
+          "framesOver16ms": 0
+        },
+        {
+          "endingPoints": 3072,
+          "frames": 256,
+          "medianMs": 3,
+          "p95Ms": 4,
+          "worstMs": 4.4000000059604645,
+          "frameIntervalP95Ms": 6.199999999999818,
+          "framesOver16ms": 0
+        },
+        {
+          "endingPoints": 4096,
+          "frames": 256,
+          "medianMs": 3,
+          "p95Ms": 3.5,
+          "worstMs": 4,
+          "frameIntervalP95Ms": 6.199999999999818,
+          "framesOver16ms": 0
+        }
+      ]
+    }
+  ]
+}

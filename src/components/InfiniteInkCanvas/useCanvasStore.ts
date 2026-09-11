@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { isInkInputBusy } from '../inkInputActivity';
 import type {
   Camera,
   BrushSettings,
@@ -376,12 +377,19 @@ export const useCanvasStore = create<CanvasStore>((set, get) => ({
 // ---- Auto-save ---------------------------------------------------------------
 
 let saveTimeout: ReturnType<typeof setTimeout>;
-useCanvasStore.subscribe(() => {
+function autoSaveCanvas(): void {
+  if (isInkInputBusy()) {
+    saveTimeout = setTimeout(autoSaveCanvas, 250);
+    return;
+  }
+  const state = useCanvasStore.getState();
+  if (state.loaded && state.currentCanvasId) state.saveCanvasData();
+}
+useCanvasStore.subscribe((state, previous) => {
+  // Tool, cursor, selection, and history-only changes do not change saved data.
+  if (state.objects === previous.objects && state.camera === previous.camera
+      && state.showDotGrid === previous.showDotGrid
+      && state.currentCanvasId === previous.currentCanvasId && state.loaded === previous.loaded) return;
   clearTimeout(saveTimeout);
-  saveTimeout = setTimeout(() => {
-    const state = useCanvasStore.getState();
-    if (state.loaded && state.currentCanvasId) {
-      state.saveCanvasData();
-    }
-  }, 1000);
+  saveTimeout = setTimeout(autoSaveCanvas, 1000);
 });

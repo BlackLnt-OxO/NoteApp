@@ -1,0 +1,83 @@
+{
+  "date": "2026-09-10T15:00:27.332Z",
+  "browser": "Edg/152.0.4191.66",
+  "cpu": "AMD Ryzen 7 7840H w/Radeon 780M Graphics",
+  "method": "Headless Chromium with willReadFrequently=true (CPU raster for stable pixel comparison), 512-world-unit tile at 3x, 12 warm samples without feather / 3 with feather, plus cold first repair; synchronous 1px readback included; not end-to-end stylus latency.",
+  "beforeSha256": "dc896536f5771b6016ada25369ce5d058d6c6b6f906ed6a5e1f98076ed2d16a4",
+  "cases": [
+    {
+      "strokes": 400,
+      "edgeFeather": false,
+      "before": {
+        "coldMs": 24.600000008940697,
+        "medianMs": 15.600000008940697,
+        "p95Ms": 16.700000002980232,
+        "preparedStrokes": 399,
+        "samples": [
+          15.099999994039536,
+          15.200000002980232,
+          15.299999997019768,
+          15.400000005960464,
+          15.5,
+          15.599999994039536,
+          15.600000008940697,
+          15.899999991059303,
+          16.299999997019768,
+          16.400000005960464,
+          16.5,
+          16.700000002980232
+        ],
+        "pixelDifferences": 0
+      },
+      "after": {
+        "coldMs": 2.7999999970197678,
+        "medianMs": 0.7999999970197678,
+        "p95Ms": 0.9000000059604645,
+        "preparedStrokes": 2,
+        "samples": [
+          0.7000000029802322,
+          0.7000000029802322,
+          0.7000000029802322,
+          0.7000000029802322,
+          0.7000000029802322,
+          0.7000000029802322,
+          0.7999999970197678,
+          0.7999999970197678,
+          0.7999999970197678,
+          0.7999999970197678,
+          0.800000011920929,
+          0.9000000059604645
+        ],
+        "pixelDifferences": 0
+      }
+    },
+    {
+      "strokes": 40,
+      "edgeFeather": true,
+      "before": {
+        "coldMs": 733,
+        "medianMs": 738.5999999940395,
+        "p95Ms": 815,
+        "preparedStrokes": 39,
+        "samples": [
+          738.5,
+          738.5999999940395,
+          815
+        ],
+        "pixelDifferences": 0
+      },
+      "after": {
+        "coldMs": 36.20000000298023,
+        "medianMs": 35.400000005960464,
+        "p95Ms": 35.5,
+        "preparedStrokes": 2,
+        "samples": [
+          35.099999994039536,
+          35.400000005960464,
+          35.5
+        ],
+        "pixelDifferences": 0
+      }
+    }
+  ]
+}

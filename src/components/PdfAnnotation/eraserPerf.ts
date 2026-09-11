@@ -16,11 +16,12 @@ export interface EraserPerf {
   scanMs: number;      // total hit-scan time
   restampMs: number;   // total tile clear/re-stamp time
   worstScanMs: number; // slowest single flush scan
+  worstRestampMs: number; // slowest repair batch (a batch may erase many strokes)
 }
 
 export function createEraserPerf(): EraserPerf | null {
   if (!import.meta.env.DEV) return null;
-  return { frames: 0, candidates: 0, targets: 0, scanMs: 0, restampMs: 0, worstScanMs: 0 };
+  return { frames: 0, candidates: 0, targets: 0, scanMs: 0, restampMs: 0, worstScanMs: 0, worstRestampMs: 0 };
 }
 
 export function addEraserScan(p: EraserPerf | null, frames: number, candidates: number, ms: number): void {
@@ -35,6 +36,7 @@ export function addEraserRestamp(p: EraserPerf | null, targets: number, ms: numb
   if (!p) return;
   p.targets += targets;
   p.restampMs += ms;
+  p.worstRestampMs = Math.max(p.worstRestampMs, ms);
 }
 
 export function logEraserPerf(p: EraserPerf | null, view: 'canvas' | 'pdf'): void {
@@ -45,6 +47,6 @@ export function logEraserPerf(p: EraserPerf | null, view: 'canvas' | 'pdf'): voi
   console.log(
     `[eraser:${view}] frames=${p.frames} scanned=${p.candidates} erased=${p.targets} ` +
     `avgScan=${(p.scanMs / n).toFixed(2)}ms/frame worstScan=${p.worstScanMs.toFixed(2)}ms ` +
-    `restamp=${(p.restampMs / perErase).toFixed(2)}ms/erase totalRestamp=${p.restampMs.toFixed(1)}ms`,
+    `restamp=${(p.restampMs / perErase).toFixed(2)}ms/erase totalRestamp=${p.restampMs.toFixed(1)}ms worstRestamp=${p.worstRestampMs.toFixed(2)}ms/batch`,
   );
 }

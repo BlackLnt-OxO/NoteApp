@@ -1,0 +1,63 @@
+{
+  "date": "2026-09-11T00:42:58.706Z",
+  "browser": "Edg/152.0.4191.66",
+  "cpu": "AMD Ryzen 7 7840H w/Radeon 780M Graphics",
+  "canvas": "application defaults (CPU live masks, accelerated main canvas when available)",
+  "method": "Uninterrupted retrace with growing prefix and four added points per frame; truly overlapping legacy strokes with feather enabled. Times include synchronous 1px readback, not full pointer-to-display latency. Prefix preparation and document load are outside input-frame timings.",
+  "baselineBrushSha256": "ac8082e3bf6f6178d7a4bb89d29bf4b4bdab46bc7a884286b019af0029970796",
+  "baselineEraseSha256": "a249c9c42f6d298eb85a8fd5fd0e393937312219c9d6eab2d7adce8cf0bba20f",
+  "cases": [
+    {
+      "kind": "progressive-live-retrace",
+      "newPointsPerFrame": 4,
+      "totalPoints": 4096,
+      "windows": [
+        {
+          "endingPoints": 1024,
+          "frames": 256,
+          "medianMs": 2.899999976158142,
+          "p95Ms": 3.699999988079071,
+          "worstMs": 53.099999994039536,
+          "frameIntervalP95Ms": 6.100000000000136,
+          "framesOver16ms": 1
+        },
+        {
+          "endingPoints": 2048,
+          "frames": 256,
+          "medianMs": 2.9000000059604645,
+          "p95Ms": 4,
+          "worstMs": 5.0999999940395355,
+          "frameIntervalP95Ms": 6.199999999999818,
+          "framesOver16ms": 0
+        },
+        {
+          "endingPoints": 3072,
+          "frames": 256,
+          "medianMs": 2.800000011920929,
+          "p95Ms": 3.800000011920929,
+          "worstMs": 4.0999999940395355,
+          "frameIntervalP95Ms": 6.199999999999818,
+          "framesOver16ms": 0
+        },
+        {
+          "endingPoints": 4096,
+          "frames": 256,
+          "medianMs": 2.9000000059604645,
+          "p95Ms": 3.5999999940395355,
+          "worstMs": 4.100000023841858,
+          "frameIntervalP95Ms": 6.199999999999818,
+          "framesOver16ms": 0
+        }
+      ],
+      "slowFrames": [
+        {
+          "frame": 0,
+          "points": 4,
+          "drawCommandsMs": 4,
+          "readbackMs": 49.099999994039536,
+          "totalMs": 53.099999994039536
+        }
+      ]
+    }
+  ]
+}

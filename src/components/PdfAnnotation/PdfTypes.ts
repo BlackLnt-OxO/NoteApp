@@ -23,6 +23,8 @@ export interface PdfStroke {
   smoothing: number;
   /** 'destination-out' marks an eraser stroke (must be applied to inkLayer only). */
   compositeOperation: 'source-over' | 'destination-out';
+  /** 2 = streaming marker/fountain/pencil coverage; absent = legacy ribbon. */
+  renderVersion?: 2;
   /**
    * Optional brush style. Legacy strokes (without this field) render as marker.
    * 'laser' is excluded here because it is transient and never committed.
