@@ -26,7 +26,8 @@ import { useBrushCursor } from '../useBrushCursor';
 import { useInkInputActivity } from '../inkInputActivity';
 import { eraseStrokeRegions, getCommittedStrokeBounds } from './InkTileErase';
 import { usePdfToolbarStore } from '../InfiniteInkCanvas/useToolbarStore';
-import { indexInkStrokes, materializeTiles } from '../InfiniteInkCanvas/InkTiles';
+import { indexInkStrokes, materializeTiles, inkTileBytes, inkTileCount, targetBakeScale } from '../InfiniteInkCanvas/InkTiles';
+import { reportInkFrame, noteCameraMove } from '../InkFrameStats';
 import { bakeDragPreview, drawDragPreview, type DragPreview } from './InkDragPreview';
 import { useNoteStore } from '../../store';
 import { themeCanvasColors } from '../../themeColors';
@@ -187,7 +188,7 @@ function drawVisibleTiles(
   vw: number,
   vh: number,
   dpr: number,
-): void {
+): number {
   const tl = screenToWorld(0, 0, cam);
   const br = screenToWorld(vw, vh, cam);
   const tx0 = Math.floor(tl.x / TILE), tx1 = Math.floor(br.x / TILE);
@@ -201,10 +202,12 @@ function drawVisibleTiles(
   ctx.imageSmoothingEnabled = true;
   ctx.imageSmoothingQuality = 'high';
 
+  let drawn = 0;
   for (let ty = ty0; ty <= ty1; ty++) {
     for (let tx = tx0; tx <= tx1; tx++) {
       const c = tiles.get(tileKey(tx, ty));
       if (!c) continue;
+      drawn++;
       // Snap shared boundaries once (see InkTiles.drawVisibleTiles) so adjacent
       // tiles share an exact edge at any zoom — no 1px seam.
       const tl = worldToScreen(tx * TILE, ty * TILE, cam);
@@ -218,6 +221,7 @@ function drawVisibleTiles(
   }
 
   ctx.restore();
+  return drawn;
 }
 
 // ---- Selection drawing helpers (world coords) ---------------------------------
@@ -443,7 +447,18 @@ const PdfCanvas: React.FC = () => {
       const bg = bgCanvasRef.current;
       if (bg) ctx.drawImage(bg, 0, 0, size.width, size.height);
 
-      drawVisibleTiles(ctx, inkTilesRef.current, cam, vw, vh, dpr);
+      const inkStart = performance.now();
+      const visibleTiles = drawVisibleTiles(ctx, inkTilesRef.current, cam, vw, vh, dpr);
+      reportInkFrame({
+        drawMs: performance.now() - inkStart,
+        visibleTiles,
+        tileCount: inkTileCount(inkTilesRef.current),
+        tileBytes: inkTileBytes(inkTilesRef.current),
+        bakeScale: targetBakeScale(inkTilesRef.current),
+        zoom: cam.zoom,
+        dpr,
+        surface: 'pdf',
+      });
 
       const strokes = strokesOnly(st.items[st.currentPage] ?? []);
 
@@ -608,6 +623,7 @@ const PdfCanvas: React.FC = () => {
   // Camera moved (pan / zoom) → the view may want tiles it has not built yet.
   // Scheduled, never materialized inline: this runs on every wheel tick.
   useEffect(() => {
+    noteCameraMove();
     scheduleMaterialize();
   }, [camera, scheduleMaterialize]);
 

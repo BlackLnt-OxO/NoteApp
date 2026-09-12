@@ -22,7 +22,7 @@ import {
   disposeTiles, indexInkStrokes, materializeTiles, setTargetBakeScale, targetBakeScale,
   evictDistantTiles, inkTileBytes, inkTileCount,
 } from './InkTiles';
-import { reportInkFrame, resetInkFrame } from '../InkFrameStats';
+import { reportInkFrame, resetInkFrame, noteCameraMove } from '../InkFrameStats';
 import { releaseDocumentInkCaches, dropRastersNotAtScale } from '../PdfAnnotation/InkRasterCache';
 import TextNode from './TextNode';
 import ImageObject from './ImageObject';
@@ -312,6 +312,9 @@ const InfiniteInkCanvas: React.FC = () => {
       tileCount: inkTileCount(inkTilesRef.current),
       tileBytes: inkTileBytes(inkTilesRef.current),
       bakeScale: targetBakeScale(inkTilesRef.current),
+      zoom: cam.zoom,
+      dpr,
+      surface: 'canvas',
     });
 
     dirtyRef.current = false;
@@ -501,6 +504,7 @@ const InfiniteInkCanvas: React.FC = () => {
 
   useEffect(() => {
     dirtyRef.current = true;
+    noteCameraMove();
     // Schedule only — never materialize synchronously here. This effect runs on
     // every camera change, i.e. on every wheel tick and pointermove of a pan, and
     // rasterizing tiles inline is what made zooming stutter.

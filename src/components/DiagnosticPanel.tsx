@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { readInkFrame, type InkFrameStats } from './InkFrameStats';
+import { readInkFrame, resetInkFrame, cameraMoving, type InkFrameStats } from './InkFrameStats';
 import { useNoteStore } from '../store';
 import { fs, fsn } from '../utils';
 import type { DiagConfig, DiagStatus, PreviewUpdate, CaptureProgress, EventLoopStats } from '../types';
@@ -41,6 +41,17 @@ const AREA_OPTIONS = [
 const PREVIEW_WIDTHS = [180, 220, 240];
 const PREVIEW_FPS = [2, 4];
 
+/** One frame-window's summary. */
+interface FrameWindow {
+  frames: number; p50Ms: number; p95Ms: number; worstMs: number; over33: number; over50: number;
+}
+interface InkLive extends InkFrameStats {
+  /** Frames captured while the camera was moving (a pan or a zoom gesture), and
+   *  while it was still. */
+  moving: FrameWindow;
+  idle: FrameWindow;
+}
+
 const DiagnosticPanel: React.FC<DiagnosticPanelProps> = ({ onClose, visible }) => {
   const settings = useNoteStore(s => s.settings);
   const gfs = settings.fontSize;
@@ -76,40 +87,48 @@ const DiagnosticPanel: React.FC<DiagnosticPanelProps> = ({ onClose, visible }) =
   /** Live ink readout: frame pacing sampled here plus what the ink layer reported
    *  for its last frame. Independent of the long-screenshot diagnostic — this is
    *  for judging whether a change helped, so it runs whenever the panel is open. */
-  const [inkLive, setInkLive] = useState<(InkFrameStats & {
-    frames: number; p50Ms: number; p95Ms: number; worstMs: number; over33: number; over50: number;
-  }) | null>(null);
+  const [inkLive, setInkLive] = useState<InkLive | null>(null);
+  const inkLiveRef = useRef<InkLive | null>(null);
 
-  // Live frame pacing + ink layer readout (see inkLive above). The sampler is its
-  // own rAF loop, so it measures the frames the app is actually presenting rather
-  // than the ones the diagnostic asked for.
+  // Live frame pacing + ink layer readout. Its own rAF loop, so it measures the
+  // frames the app is presenting rather than the ones a diagnostic asked for, and
+  // it splits them by whether the camera was moving: a pan or a zoom is the case
+  // being judged, and averaging its frames together with idle ones hides exactly
+  // the stalls worth seeing.
   useEffect(() => {
     if (!visible) { setInkLive(null); return; }
-    const intervals: number[] = [];
+    const moving: number[] = [], idle: number[] = [];
     let last = performance.now();
     let running = true;
     let rafId = requestAnimationFrame(function frame() {
       if (!running) return;
       const now = performance.now();
-      intervals.push(now - last);
+      const dt = now - last;
       last = now;
-      if (intervals.length > 240) intervals.shift();
+      const window = cameraMoving() ? moving : idle;
+      window.push(dt);
+      // Bound the windows so the numbers on screen are always about recent input.
+      if (window.length > 600) window.shift();
       rafId = requestAnimationFrame(frame);
     });
     const clamp1 = (v: number) => Math.round(v * 10) / 10;
-    const timer = setInterval(() => {
-      const sorted = [...intervals].sort((a, b) => a - b);
+    const summarize = (xs: number[]): FrameWindow => {
+      const sorted = [...xs].sort((a, b) => a - b);
       const at = (q: number) => (sorted.length ? clamp1(sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * q))]) : 0);
-      setInkLive({
-        ...readInkFrame(),
+      return {
         frames: sorted.length,
         p50Ms: at(0.5),
         p95Ms: at(0.95),
         worstMs: sorted.length ? clamp1(sorted[sorted.length - 1]) : 0,
-        over33: intervals.filter((f) => f > 33).length,
-        over50: intervals.filter((f) => f > 50).length,
-      });
-    }, 500);
+        over33: xs.filter((f) => f > 33).length,
+        over50: xs.filter((f) => f > 50).length,
+      };
+    };
+    const timer = setInterval(() => {
+      const live: InkLive = { ...readInkFrame(), moving: summarize(moving), idle: summarize(idle) };
+      setInkLive(live);
+      inkLiveRef.current = live;
+    }, 250);
     return () => { running = false; cancelAnimationFrame(rafId); clearInterval(timer); };
   }, [visible]);
 
@@ -383,6 +402,42 @@ const DiagnosticPanel: React.FC<DiagnosticPanelProps> = ({ onClose, visible }) =
         </div>
 
         <div style={{ display: 'flex', gap: fsn(12, gfs), flexDirection: 'column' }}>
+          {/* Ink zoom / pan performance. Deliberately its own section at the top:
+              it answers "is zooming slow because of the ink layer, or because the
+              frame time is going somewhere else?" — a small drawMs next to a bad
+              frame interval rules the ink layer out; a drawMs as large as the
+              interval indicts it. */}
+          <div style={{
+            background: 'rgba(0,0,0,0.3)', borderRadius: '10px', padding: fsn(10, gfs),
+            fontSize: fs(11, gfs), fontFamily: 'monospace', color: '#8f8', lineHeight: 1.6,
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: fsn(8, gfs) }}>
+              <span style={{ color: '#8ff' }}>墨迹性能（{inkLive?.surface === 'pdf' ? 'PDF' : '无限画布'}）</span>
+              <button className="glass-btn"
+                onClick={() => { resetInkFrame(); inkLiveRef.current = null; setInkLive(null); }}
+                style={{ marginLeft: 'auto', fontSize: fs(10, gfs), padding: `${fs(2, gfs)} ${fs(8, gfs)}` }}>
+                重置
+              </button>
+            </div>
+            {inkLive ? (
+              <>
+                <div>{`缩放 ${inkLive.zoom.toFixed(2)}x · dpr ${inkLive.dpr} · 烘焙 ${inkLive.bakeScale}x · tile ${inkLive.tileCount}（屏上 ${inkLive.visibleTiles}） · ${(inkLive.tileBytes / 1048576).toFixed(1)} MiB`}</div>
+                <div>{`平移/缩放帧间隔: p50=${inkLive.moving.p50Ms}ms p95=${inkLive.moving.p95Ms}ms worst=${inkLive.moving.worstMs}ms · >33ms=${inkLive.moving.over33} · >50ms=${inkLive.moving.over50}（${inkLive.moving.frames} 帧）`}</div>
+                <div>{`静止帧间隔: p50=${inkLive.idle.p50Ms}ms worst=${inkLive.idle.worstMs}ms（${inkLive.idle.frames} 帧）`}</div>
+                <div>{`墨迹绘制: 上一帧 ${inkLive.drawMs.toFixed(1)}ms · 移动中最差 ${inkLive.movingWorstDrawMs.toFixed(1)}ms · 全局最差 ${inkLive.worstDrawMs.toFixed(1)}ms`}</div>
+                <div style={{ color: '#fc8' }}>
+                  {inkLive.moving.frames < 5
+                    ? '→ 先在画布上滚动/缩放几下，才能采到移动中的帧'
+                    : inkLive.movingWorstDrawMs >= inkLive.moving.p50Ms * 0.6
+                      ? '→ 帧时间主要花在墨迹绘制上'
+                      : '→ 帧时间大部分不在墨迹绘制上（去看别的组件或系统限流）'}
+                </div>
+              </>
+            ) : (
+              <div style={{ color: '#888' }}>（采样中…）</div>
+            )}
+          </div>
+
           {/* Mode selector */}
           <div>
             <label style={{ display: 'block', fontSize: fs(11, gfs), color: 'var(--text-secondary)', marginBottom: fs(4, gfs) }}>
@@ -574,16 +629,6 @@ const DiagnosticPanel: React.FC<DiagnosticPanelProps> = ({ onClose, visible }) =
                 &gt;33ms={rafStats.over33}次 |
                 &gt;50ms={rafStats.over50}次 |
                 &gt;100ms={rafStats.over100}次
-              </div>
-            )}
-
-            {inkLive && (
-              <div style={{ whiteSpace: 'pre-line' }}>
-                {`Ink frame: p50=${inkLive.p50Ms}ms p95=${inkLive.p95Ms}ms worst=${inkLive.worstMs}ms over33=${inkLive.over33} over50=${inkLive.over50} (${inkLive.frames} frames)
-`
-                  + `Ink layer: draw=${inkLive.drawMs.toFixed(1)}ms (worst ${inkLive.worstDrawMs.toFixed(1)}ms) | `
-                  + `tiles=${inkLive.tileCount} (${inkLive.visibleTiles} on screen) | `
-                  + `${(inkLive.tileBytes / 1048576).toFixed(1)} MiB | bake=${inkLive.bakeScale}x`}
               </div>
             )}
 
