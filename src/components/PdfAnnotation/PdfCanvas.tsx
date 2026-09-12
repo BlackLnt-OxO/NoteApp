@@ -1251,19 +1251,31 @@ const PdfCanvas: React.FC = () => {
 
   // ---- Wheel ------------------------------------------------------------------
 
-  const handleWheel = useCallback((e: React.WheelEvent<HTMLCanvasElement>) => {
-    e.preventDefault();
-    const st = usePdfStore.getState();
-    const { sx, sy } = getCanvasPos(e as unknown as React.PointerEvent);
-    if (e.ctrlKey) {
-      st.setCamera({ x: st.camera.x - e.deltaX, y: st.camera.y - e.deltaY });
-    } else {
-      const newZoom = clampZoom(st.camera.zoom * (1 - e.deltaY * 0.001));
-      st.setCamera(zoomAt(st.camera, sx, sy, newZoom));
-    }
-    dirtyRef.current = true;
-    scheduleRender();
-  }, [getCanvasPos, scheduleRender]);
+  // Attached natively, NOT via React's `onWheel`: React registers wheel listeners
+  // as PASSIVE at the root, where preventDefault() is ignored — Chrome warns
+  // ("Unable to preventDefault inside passive event listener") and the event's
+  // default action still runs, so ctrl+wheel would zoom the whole app window as
+  // well as panning the page.
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const onWheel = (e: WheelEvent) => {
+      e.preventDefault();
+      const st = usePdfStore.getState();
+      const rect = canvas.getBoundingClientRect();
+      const sx = e.clientX - rect.left, sy = e.clientY - rect.top;
+      if (e.ctrlKey) {
+        st.setCamera({ x: st.camera.x - e.deltaX, y: st.camera.y - e.deltaY });
+      } else {
+        const newZoom = clampZoom(st.camera.zoom * (1 - e.deltaY * 0.001));
+        st.setCamera(zoomAt(st.camera, sx, sy, newZoom));
+      }
+      dirtyRef.current = true;
+      scheduleRender();
+    };
+    canvas.addEventListener('wheel', onWheel, { passive: false });
+    return () => canvas.removeEventListener('wheel', onWheel);
+  }, [scheduleRender]);
 
   // ---- Insert: pick image files, downscale + place page-scaled at the click -----
   const downscaleImage = useCallback(
@@ -1365,7 +1377,6 @@ const PdfCanvas: React.FC = () => {
         onPointerCancel={handlePointerUp}
         onLostPointerCapture={handlePointerUp}
         onPointerLeave={hideCursor}
-        onWheel={handleWheel}
       />
 
       {/* Insert tool: hidden image picker (opened on an insert-image click). */}

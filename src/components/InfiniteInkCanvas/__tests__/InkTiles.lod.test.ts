@@ -43,6 +43,10 @@ function stroke(id: string, seed = 0, patch: Partial<Stroke> = {}): Stroke {
   };
 }
 
+// These build whole tile layers and compare them pixel by pixel on a software
+// canvas, which is slow — and slower still when the suite runs files in parallel.
+vi.setConfig({ testTimeout: 120000 });
+
 beforeEach(() => {
   clearInkRasterCache();
   clearStreamingInk();
@@ -127,7 +131,7 @@ describe('baking at the display density', () => {
       for (let i = 3; i < d.length; i += 4) if (d[i] > 0) ink++;
     }
     expect(ink).toBeGreaterThan(500); // the strokes are actually in there
-  }, 120000);
+  });
 
   it('re-bakes a tile in place when the display outgrows it, identically to a fresh build', () => {
     const strokes = [stroke('a'), stroke('b', 1), stroke('c', 2), stroke('d', 3)];
@@ -147,7 +151,7 @@ describe('baking at the display density', () => {
     for (const [key, expected] of fresh) {
       expectSamePixels(upgraded.get(key)!, expected, `re-baked tile ${key}`);
     }
-  }, 120000);
+  });
 
   it('keeps the target scale per layer, and defaults to the legacy 3x', () => {
     const layer = new Map<string, HTMLCanvasElement>();

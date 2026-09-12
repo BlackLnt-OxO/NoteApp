@@ -955,17 +955,32 @@ const InfiniteInkCanvas: React.FC = () => {
 
   // ---- Wheel ------------------------------------------------------------------
 
-  const handleWheel = useCallback((e: React.WheelEvent<HTMLCanvasElement>) => {
-    e.preventDefault();
-    const state = useCanvasStore.getState();
-    const { sx, sy } = getCanvasPos(e as unknown as React.PointerEvent);
-    if (e.ctrlKey) {
-      state.setCamera({ x: state.camera.x - e.deltaX, y: state.camera.y - e.deltaY });
-    } else {
-      const newZoom = clampZoom(state.camera.zoom * (1 - e.deltaY * 0.001));
-      state.setCamera(zoomAt(state.camera, sx, sy, newZoom));
-    }
-  }, [getCanvasPos]);
+  // Attached natively, NOT via React's `onWheel`: React registers wheel listeners
+  // as PASSIVE at the root, where preventDefault() is ignored — Chrome warns
+  // ("Unable to preventDefault inside passive event listener") and the event's
+  // default action still runs. Here that means the browser's own ctrl+wheel page
+  // zoom is not suppressed, so ctrl+wheel would zoom the whole app window as well
+  // as panning the canvas.
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const onWheel = (e: WheelEvent) => {
+      e.preventDefault();
+      const state = useCanvasStore.getState();
+      const rect = canvas.getBoundingClientRect();
+      const sx = e.clientX - rect.left, sy = e.clientY - rect.top;
+      if (e.ctrlKey) {
+        state.setCamera({ x: state.camera.x - e.deltaX, y: state.camera.y - e.deltaY });
+      } else {
+        const newZoom = clampZoom(state.camera.zoom * (1 - e.deltaY * 0.001));
+        state.setCamera(zoomAt(state.camera, sx, sy, newZoom));
+      }
+      dirtyRef.current = true;
+      scheduleRender();
+    };
+    canvas.addEventListener('wheel', onWheel, { passive: false });
+    return () => canvas.removeEventListener('wheel', onWheel);
+  }, [scheduleRender]);
 
   // Insert → image: read the picked file(s), downscale each, and place them at
   // the click point. Multiple picks cascade (each offset down-right) so they
@@ -1046,8 +1061,7 @@ const InfiniteInkCanvas: React.FC = () => {
         onPointerDown={handlePointerDown} onPointerMove={handlePointerMove} onPointerUp={handlePointerUp}
         onPointerCancel={handlePointerUp}
         onLostPointerCapture={handlePointerUp}
-        onPointerLeave={hideCursor}
-        onWheel={handleWheel} />
+        onPointerLeave={hideCursor} />
 
       {/* Committed text = always-visible DOM cards (above ink). Interactive in the
           select / insert-text tools; the one being edited is rendered by TextNode. */}

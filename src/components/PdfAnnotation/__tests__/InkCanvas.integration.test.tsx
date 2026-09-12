@@ -58,6 +58,38 @@ beforeEach(() => {
 });
 afterEach(() => { cleanup(); clearInkRasterCache(); clearStreamingInk(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 
+describe('wheel input', () => {
+  // React registers `onWheel` as a PASSIVE listener at the root, where
+  // preventDefault() is ignored (Chrome: "Unable to preventDefault inside passive
+  // event listener") and the browser's own ctrl+wheel page zoom is not suppressed.
+  // The canvas must therefore attach its own NON-passive listener — and exactly
+  // one, or every wheel tick would zoom twice.
+  it.each(['canvas', 'pdf'] as const)('%s zooms through a single non-passive listener', async (view) => {
+    if (view === 'pdf') usePdfStore.setState({ pdfDoc: {} as never, currentPage: 1, pageSizes: { 1: { width: 600, height: 800 } } });
+    const addSpy = vi.spyOn(HTMLCanvasElement.prototype, 'addEventListener');
+    let root!: ReturnType<typeof render>;
+    await act(async () => { root = render(view === 'canvas' ? <InfiniteInkCanvas /> : <PdfCanvas />); });
+    const canvas = root.container.querySelector('canvas')!;
+
+    const wheelRegistrations = addSpy.mock.calls.filter((c) => c[0] === 'wheel');
+    expect(wheelRegistrations).toHaveLength(1);
+    expect((wheelRegistrations[0][2] as AddEventListenerOptions)?.passive).toBe(false);
+
+    const camera = () => (view === 'canvas' ? useCanvasStore.getState() : usePdfStore.getState()).camera;
+    // The PDF fits the page to its container on load, and jsdom's container is
+    // 0x0 — which clamps to MIN_ZOOM. Start from a known zoom.
+    act(() => {
+      if (view === 'canvas') useCanvasStore.setState({ camera: { x: 0, y: 0, zoom: 1 } });
+      else usePdfStore.setState({ camera: { x: 0, y: 0, zoom: 1 } });
+    });
+    act(() => {
+      canvas.dispatchEvent(new WheelEvent('wheel', { deltaY: 100, clientX: 10, clientY: 10, bubbles: true, cancelable: true }));
+    });
+    // One event, one zoom step: 1 * (1 - 100*0.001) = 0.9.
+    expect(camera().zoom).toBeCloseTo(0.9, 5);
+  });
+});
+
 describe('canvas input integration', () => {
   it.each([['canvas', 'marker'], ['pdf', 'marker'], ['canvas', 'pencil'], ['pdf', 'pencil']] as const)('%s %s commits versioned ink, erases the topmost stroke, and rebuilds its index on undo', async (view, style) => {
     useCanvasStore.setState({ brush: style });
