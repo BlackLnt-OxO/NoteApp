@@ -22,7 +22,7 @@ import {
   disposeTiles, indexInkStrokes, materializeTiles, setTargetBakeScale, targetBakeScale,
   evictDistantTiles, inkTileBytes, inkTileCount,
 } from './InkTiles';
-import { reportInkFrame, resetInkFrame, noteCameraMove } from '../InkFrameStats';
+import { reportInkFrame, resetInkFrame, noteCameraMove, noteInkFrame } from '../InkFrameStats';
 import { releaseDocumentInkCaches, dropRastersNotAtScale } from '../PdfAnnotation/InkRasterCache';
 import TextNode from './TextNode';
 import ImageObject from './ImageObject';
@@ -241,6 +241,9 @@ const InfiniteInkCanvas: React.FC = () => {
     if (!canvas) return;
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
+    // Frame-interval sampling rides on the render loop (see InkFrameStats): free,
+    // and it measures only frames the app actually painted.
+    noteInkFrame();
     const state = useCanvasStore.getState();
     const container = containerRef.current;
     if (!container) return;

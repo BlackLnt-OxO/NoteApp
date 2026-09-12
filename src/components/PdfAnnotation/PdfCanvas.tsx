@@ -27,7 +27,7 @@ import { useInkInputActivity } from '../inkInputActivity';
 import { eraseStrokeRegions, getCommittedStrokeBounds } from './InkTileErase';
 import { usePdfToolbarStore } from '../InfiniteInkCanvas/useToolbarStore';
 import { indexInkStrokes, materializeTiles, inkTileBytes, inkTileCount, targetBakeScale } from '../InfiniteInkCanvas/InkTiles';
-import { reportInkFrame, noteCameraMove } from '../InkFrameStats';
+import { reportInkFrame, noteCameraMove, noteInkFrame } from '../InkFrameStats';
 import { bakeDragPreview, drawDragPreview, type DragPreview } from './InkDragPreview';
 import { useNoteStore } from '../../store';
 import { themeCanvasColors } from '../../themeColors';
@@ -421,6 +421,8 @@ const PdfCanvas: React.FC = () => {
     if (!canvas) return;
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
+    // Frame-interval sampling rides on the render loop (see InkFrameStats).
+    noteInkFrame();
     const st = usePdfStore.getState();
     const container = containerRef.current;
     if (!container) return;

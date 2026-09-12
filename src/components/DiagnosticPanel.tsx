@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { readInkFrame, resetInkFrame, cameraMoving, type InkFrameStats } from './InkFrameStats';
+import { readInkFrame, readFrameWindows, resetInkFrame, type FrameWindow, type InkFrameStats } from './InkFrameStats';
 import { useNoteStore } from '../store';
 import { fs, fsn } from '../utils';
 import type { DiagConfig, DiagStatus, PreviewUpdate, CaptureProgress, EventLoopStats } from '../types';
@@ -41,15 +41,11 @@ const AREA_OPTIONS = [
 const PREVIEW_WIDTHS = [180, 220, 240];
 const PREVIEW_FPS = [2, 4];
 
-/** One frame-window's summary. */
-interface FrameWindow {
-  frames: number; p50Ms: number; p95Ms: number; worstMs: number; over33: number; over50: number;
-}
 interface InkLive extends InkFrameStats {
-  /** Frames captured while the camera was moving (a pan or a zoom gesture), and
-   *  while it was still. */
+  /** Frame intervals painted while the camera was moving (a pan or a zoom) and
+   *  while it was not (writing, erasing, transient repaints). */
   moving: FrameWindow;
-  idle: FrameWindow;
+  other: FrameWindow;
 }
 
 const DiagnosticPanel: React.FC<DiagnosticPanelProps> = ({ onClose, visible }) => {
@@ -88,48 +84,20 @@ const DiagnosticPanel: React.FC<DiagnosticPanelProps> = ({ onClose, visible }) =
    *  for its last frame. Independent of the long-screenshot diagnostic — this is
    *  for judging whether a change helped, so it runs whenever the panel is open. */
   const [inkLive, setInkLive] = useState<InkLive | null>(null);
-  const inkLiveRef = useRef<InkLive | null>(null);
 
-  // Live frame pacing + ink layer readout. Its own rAF loop, so it measures the
-  // frames the app is presenting rather than the ones a diagnostic asked for, and
-  // it splits them by whether the camera was moving: a pan or a zoom is the case
-  // being judged, and averaging its frames together with idle ones hides exactly
-  // the stalls worth seeing.
+  // Poll the ink readout. The SAMPLING happens in the ink layer's render loop
+  // (see InkFrameStats), not here: the panel is an overlay, so with it open the
+  // canvas cannot be scrolled at all — anything that only sampled while this was
+  // visible would measure nothing. In practice: use the canvas, then open this.
   useEffect(() => {
     if (!visible) { setInkLive(null); return; }
-    const moving: number[] = [], idle: number[] = [];
-    let last = performance.now();
-    let running = true;
-    let rafId = requestAnimationFrame(function frame() {
-      if (!running) return;
-      const now = performance.now();
-      const dt = now - last;
-      last = now;
-      const window = cameraMoving() ? moving : idle;
-      window.push(dt);
-      // Bound the windows so the numbers on screen are always about recent input.
-      if (window.length > 600) window.shift();
-      rafId = requestAnimationFrame(frame);
-    });
-    const clamp1 = (v: number) => Math.round(v * 10) / 10;
-    const summarize = (xs: number[]): FrameWindow => {
-      const sorted = [...xs].sort((a, b) => a - b);
-      const at = (q: number) => (sorted.length ? clamp1(sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * q))]) : 0);
-      return {
-        frames: sorted.length,
-        p50Ms: at(0.5),
-        p95Ms: at(0.95),
-        worstMs: sorted.length ? clamp1(sorted[sorted.length - 1]) : 0,
-        over33: xs.filter((f) => f > 33).length,
-        over50: xs.filter((f) => f > 50).length,
-      };
+    const poll = () => {
+      const { moving, other } = readFrameWindows();
+      setInkLive({ ...readInkFrame(), moving, other });
     };
-    const timer = setInterval(() => {
-      const live: InkLive = { ...readInkFrame(), moving: summarize(moving), idle: summarize(idle) };
-      setInkLive(live);
-      inkLiveRef.current = live;
-    }, 250);
-    return () => { running = false; cancelAnimationFrame(rafId); clearInterval(timer); };
+    poll();
+    const timer = setInterval(poll, 250);
+    return () => clearInterval(timer);
   }, [visible]);
 
   // Load modes list
@@ -414,7 +382,7 @@ const DiagnosticPanel: React.FC<DiagnosticPanelProps> = ({ onClose, visible }) =
             <div style={{ display: 'flex', alignItems: 'center', gap: fsn(8, gfs) }}>
               <span style={{ color: '#8ff' }}>墨迹性能（{inkLive?.surface === 'pdf' ? 'PDF' : '无限画布'}）</span>
               <button className="glass-btn"
-                onClick={() => { resetInkFrame(); inkLiveRef.current = null; setInkLive(null); }}
+                onClick={() => { resetInkFrame(); setInkLive(null); }}
                 style={{ marginLeft: 'auto', fontSize: fs(10, gfs), padding: `${fs(2, gfs)} ${fs(8, gfs)}` }}>
                 重置
               </button>
@@ -423,14 +391,14 @@ const DiagnosticPanel: React.FC<DiagnosticPanelProps> = ({ onClose, visible }) =
               <>
                 <div>{`缩放 ${inkLive.zoom.toFixed(2)}x · dpr ${inkLive.dpr} · 烘焙 ${inkLive.bakeScale}x · tile ${inkLive.tileCount}（屏上 ${inkLive.visibleTiles}） · ${(inkLive.tileBytes / 1048576).toFixed(1)} MiB`}</div>
                 <div>{`平移/缩放帧间隔: p50=${inkLive.moving.p50Ms}ms p95=${inkLive.moving.p95Ms}ms worst=${inkLive.moving.worstMs}ms · >33ms=${inkLive.moving.over33} · >50ms=${inkLive.moving.over50}（${inkLive.moving.frames} 帧）`}</div>
-                <div>{`静止帧间隔: p50=${inkLive.idle.p50Ms}ms worst=${inkLive.idle.worstMs}ms（${inkLive.idle.frames} 帧）`}</div>
+                <div>{`写字/其它重绘帧间隔: p50=${inkLive.other.p50Ms}ms worst=${inkLive.other.worstMs}ms（${inkLive.other.frames} 帧）`}</div>
                 <div>{`墨迹绘制: 上一帧 ${inkLive.drawMs.toFixed(1)}ms · 移动中最差 ${inkLive.movingWorstDrawMs.toFixed(1)}ms · 全局最差 ${inkLive.worstDrawMs.toFixed(1)}ms`}</div>
                 <div style={{ color: '#fc8' }}>
                   {inkLive.moving.frames < 5
-                    ? '→ 先在画布上滚动/缩放几下，才能采到移动中的帧'
+                    ? '→ 先在画布上滚动/缩放几下（不用开这个面板），再回来看'
                     : inkLive.movingWorstDrawMs >= inkLive.moving.p50Ms * 0.6
-                      ? '→ 帧时间主要花在墨迹绘制上'
-                      : '→ 帧时间大部分不在墨迹绘制上（去看别的组件或系统限流）'}
+                      ? '→ 移动中帧时间主要花在墨迹绘制上'
+                      : '→ 移动中帧时间大部分不在墨迹绘制上（去看别的组件或系统限流）'}
                 </div>
               </>
             ) : (
