@@ -17,7 +17,11 @@ interface Props {
 }
 
 const ImageObject: React.FC<Props> = ({ obj, camera }) => {
-  const { updateImageObject, deleteObject, pushHistory } = useCanvasStore();
+  // Per-field selectors (matching the PDF overlay): a whole-store subscription
+  // re-rendered every image on every camera nudge and every committed stroke.
+  const updateImageObject = useCanvasStore((s) => s.updateImageObject);
+  const deleteObject = useCanvasStore((s) => s.deleteObject);
+  const pushHistory = useCanvasStore((s) => s.pushHistory);
   const uiScale = useNoteStore((s) => s.uiScale);
   const [hover, setHover] = useState(false);
   const [lightbox, setLightbox] = useState(false);

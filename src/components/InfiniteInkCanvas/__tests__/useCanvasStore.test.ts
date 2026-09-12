@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { useCanvasStore } from '../useCanvasStore';
-import { canvasDataKey } from '../constants';
+import { canvasDataKey, canvasViewKey } from '../constants';
 import type { Stroke, TextNodeData } from '../types';
 
 // Reset store before each test
@@ -214,6 +214,43 @@ describe('useCanvasStore', () => {
       expect(state.camera.x).toBe(5);
       expect(state.camera.zoom).toBe(2);
       expect(state.showDotGrid).toBe(false);
+    });
+
+    it('keeps the view under its own key so a pan never rewrites the strokes', async () => {
+      useCanvasStore.setState({ loaded: true, currentCanvasId: 'c1' });
+      useCanvasStore.getState().addStroke(makeStroke('s1'));
+      await useCanvasStore.getState().saveCanvasData();
+
+      const body = localStorage.getItem(canvasDataKey('c1'));
+      const view = localStorage.getItem(canvasViewKey('c1'));
+      expect(JSON.parse(body!).objects).toHaveLength(1);
+      expect(JSON.parse(view!).camera).toEqual({ x: 0, y: 0, zoom: 1 });
+
+      // A pan (camera-only change) must not touch the body at all — on a dense
+      // page that write is ~100 ms of serialization plus a blocking storage hop.
+      useCanvasStore.getState().setCamera({ x: 40, y: 40 });
+      await useCanvasStore.getState().saveCanvasData();
+      expect(localStorage.getItem(canvasDataKey('c1'))).toBe(body);
+      expect(localStorage.getItem(canvasViewKey('c1'))).not.toBe(view);
+
+      // …and the pan is what a reload sees.
+      await useCanvasStore.getState().loadCanvasData('c1');
+      expect(useCanvasStore.getState().camera.x).toBe(40);
+      expect(useCanvasStore.getState().objects).toHaveLength(1);
+    });
+
+    it('does not write at all when neither half changed', async () => {
+      useCanvasStore.setState({ loaded: true, currentCanvasId: 'c1' });
+      useCanvasStore.getState().addStroke(makeStroke('s1'));
+      await useCanvasStore.getState().saveCanvasData();
+
+      // Wiping both keys and saving again proves nothing is written: an
+      // unchanged save leaves the store exactly as it found it.
+      localStorage.removeItem(canvasDataKey('c1'));
+      localStorage.removeItem(canvasViewKey('c1'));
+      await useCanvasStore.getState().saveCanvasData();
+      expect(localStorage.getItem(canvasDataKey('c1'))).toBeNull();
+      expect(localStorage.getItem(canvasViewKey('c1'))).toBeNull();
     });
 
     it('handles empty localStorage on load', async () => {

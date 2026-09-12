@@ -242,14 +242,32 @@ function QuickSizeButton({
 
 const PdfToolbar: React.FC = () => {
   const gfs = useNoteStore((s) => s.settings.fontSize);
-  const {
-    activeTool, brushType, brush, eraserMode, selectionMode, history, redoStack, currentPage, showDotGrid,
-    insertMode, setActiveTool, setBrushType, setBrush, setEraserMode, setSelectionMode, setShowDotGrid,
-    setInsertMode, undo, redo, clearPage,
-  } = usePdfStore();
+  // Subscribed FIELD BY FIELD, never as the whole store: a whole-store
+  // subscription re-renders this entire panel — palette, swatches, sliders and
+  // icons — on every camera nudge and every committed stroke. Actions are stable
+  // identities in the store, so selecting them individually is free; the undo /
+  // redo flags are reduced to booleans here so they re-render only on a flip.
+  const activeTool = usePdfStore((s) => s.activeTool);
+  const brushType = usePdfStore((s) => s.brushType);
+  const brush = usePdfStore((s) => s.brush);
+  const eraserMode = usePdfStore((s) => s.eraserMode);
+  const selectionMode = usePdfStore((s) => s.selectionMode);
+  const currentPage = usePdfStore((s) => s.currentPage);
+  const showDotGrid = usePdfStore((s) => s.showDotGrid);
+  const insertMode = usePdfStore((s) => s.insertMode);
+  const setActiveTool = usePdfStore((s) => s.setActiveTool);
+  const setBrushType = usePdfStore((s) => s.setBrushType);
+  const setBrush = usePdfStore((s) => s.setBrush);
+  const setEraserMode = usePdfStore((s) => s.setEraserMode);
+  const setSelectionMode = usePdfStore((s) => s.setSelectionMode);
+  const setShowDotGrid = usePdfStore((s) => s.setShowDotGrid);
+  const setInsertMode = usePdfStore((s) => s.setInsertMode);
+  const undo = usePdfStore((s) => s.undo);
+  const redo = usePdfStore((s) => s.redo);
+  const clearPage = usePdfStore((s) => s.clearPage);
+  const canUndo = usePdfStore((s) => (s.history[s.currentPage]?.length ?? 0) > 0);
+  const canRedo = usePdfStore((s) => (s.redoStack[s.currentPage]?.length ?? 0) > 0);
 
-  const canUndo = (history[currentPage]?.length ?? 0) > 0;
-  const canRedo = (redoStack[currentPage]?.length ?? 0) > 0;
   const update = (p: Partial<typeof brush>) => setBrush(p);
 
   const theme = useNoteStore((s) => s.settings.theme);

@@ -244,14 +244,30 @@ function QuickSizeButton({
 
 const Toolbar: React.FC = () => {
   const gfs = useNoteStore((s) => s.settings.fontSize);
-  const {
-    activeTool, brush, brushSettings, showDotGrid, selectionMode, eraserMode, insertMode,
-    setActiveTool, setBrush, setBrushSettings, setShowDotGrid, setSelectionMode, setEraserMode, setInsertMode,
-    undo, redo, history, redoStack,
-  } = useCanvasStore();
+  // Subscribed FIELD BY FIELD, never as the whole store: a whole-store
+  // subscription re-renders this entire panel — palette, swatches, sliders and
+  // icons — on every camera nudge and every committed stroke. Actions are stable
+  // identities in the store, so selecting them individually is free; the undo /
+  // redo flags are reduced to booleans here so they re-render only on a flip.
+  const activeTool = useCanvasStore((s) => s.activeTool);
+  const brush = useCanvasStore((s) => s.brush);
+  const brushSettings = useCanvasStore((s) => s.brushSettings);
+  const showDotGrid = useCanvasStore((s) => s.showDotGrid);
+  const selectionMode = useCanvasStore((s) => s.selectionMode);
+  const eraserMode = useCanvasStore((s) => s.eraserMode);
+  const insertMode = useCanvasStore((s) => s.insertMode);
+  const setActiveTool = useCanvasStore((s) => s.setActiveTool);
+  const setBrush = useCanvasStore((s) => s.setBrush);
+  const setBrushSettings = useCanvasStore((s) => s.setBrushSettings);
+  const setShowDotGrid = useCanvasStore((s) => s.setShowDotGrid);
+  const setSelectionMode = useCanvasStore((s) => s.setSelectionMode);
+  const setEraserMode = useCanvasStore((s) => s.setEraserMode);
+  const setInsertMode = useCanvasStore((s) => s.setInsertMode);
+  const undo = useCanvasStore((s) => s.undo);
+  const redo = useCanvasStore((s) => s.redo);
+  const canUndo = useCanvasStore((s) => s.history.length > 0);
+  const canRedo = useCanvasStore((s) => s.redoStack.length > 0);
 
-  const canUndo = history.length > 0;
-  const canRedo = redoStack.length > 0;
   const update = (p: Partial<typeof brushSettings>) => setBrushSettings(p);
 
   const theme = useNoteStore((s) => s.settings.theme);

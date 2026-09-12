@@ -12,7 +12,12 @@ interface Props {
 const TextNode: React.FC<Props> = ({ node, camera }) => {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
-  const { updateTextNode, deleteTextNode, setEditingTextId, pushHistory } = useCanvasStore();
+  // Per-field selectors (matching the PDF overlay): a whole-store subscription
+  // re-rendered the card on every camera nudge and every committed stroke.
+  const updateTextNode = useCanvasStore((s) => s.updateTextNode);
+  const deleteTextNode = useCanvasStore((s) => s.deleteTextNode);
+  const setEditingTextId = useCanvasStore((s) => s.setEditingTextId);
+  const pushHistory = useCanvasStore((s) => s.pushHistory);
   const uiScale = useNoteStore((s) => s.uiScale);
   const [content, setContent] = useState(node.content);
 

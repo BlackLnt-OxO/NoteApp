@@ -8,15 +8,17 @@
  *   immutable, so an undo snapshot is just the previous array reference — the
  *   memory cost is effectively zero no matter how many pages / items exist.
  * - `renderEpoch` is bumped ONLY by structural ops (undo / redo / delete /
- *   clear / commitStrokesPoints / moveStrokes) so the canvas knows when to
- *   rebuild its inkLayer from the vector source of truth. Additive stroke
+ *   clear / moveStrokes) so the canvas knows when to rebuild its inkLayer from
+ *   the vector source of truth. Additive stroke commits, drag-move point
  *   commits and text/image object edits do NOT bump it — the canvas already
- *   rasterized strokes incrementally, and objects are DOM-only.
+ *   rasterized those strokes itself (and re-stamps just the moved ones), and
+ *   objects are DOM-only.
  * - PDF default color is FIXED (PDF_ANNOTATION_BLUE) and never theme-flipped;
  *   only the canvas default brush follows the theme.
  */
 
 import { create } from 'zustand';
+import { loadQuickSizes, saveQuickSizes } from '../inkToolPrefs';
 import type {
   PdfBrush,
   PdfCamera,
@@ -68,6 +70,18 @@ export const DEFAULT_PDF_BRUSH: PdfBrush = {
   eraserSize: 20,
   eraserQuickSizes: [12, 20, 60],
 };
+
+/** The quick-size swatches are a tool preference, remembered across launches
+ *  and across documents (per surface — the PDF toolbar keeps its own, separate
+ *  from the infinite canvas). */
+const QUICK_SIZES_KEY = 'stickynotes-pdf-quick-sizes';
+
+/** The brush a document starts with: the fixed PDF defaults, plus the user's
+ *  remembered quick sizes. Also used when a document closes — a tool
+ *  preference must not be reset by closing a file. */
+function defaultPdfBrush(): PdfBrush {
+  return { ...DEFAULT_PDF_BRUSH, ...loadQuickSizes(QUICK_SIZES_KEY, DEFAULT_PDF_BRUSH) };
+}
 
 /** Defaults for a newly inserted PDF text card. bg is fixed light (a PDF page is
  *  always light) so blue text stays readable even in a dark app theme. */
@@ -284,7 +298,7 @@ export const usePdfStore = create<PdfStore>((set, get) => ({
 
   activeTool: 'pen',
   brushType: 'marker',
-  brush: { ...DEFAULT_PDF_BRUSH },
+  brush: defaultPdfBrush(),
   eraserMode: 'free',
   selectionMode: 'box',
   selectedIds: [],
@@ -446,7 +460,16 @@ export const usePdfStore = create<PdfStore>((set, get) => ({
 
   setBrushType: (t) => set({ brushType: t }),
 
-  setBrush: (partial) => set((s) => ({ brush: { ...s.brush, ...partial } })),
+  setBrush: (partial) => {
+    set((s) => ({ brush: { ...s.brush, ...partial } }));
+    // Only the quick-size swatches are a cross-session preference (see
+    // inkToolPrefs) — the rest of the brush is per-session, and the PDF ink
+    // colour is deliberately fixed.
+    if (partial.quickSizes || partial.eraserQuickSizes) {
+      const { quickSizes, eraserQuickSizes } = get().brush;
+      saveQuickSizes(QUICK_SIZES_KEY, { quickSizes, eraserQuickSizes });
+    }
+  },
 
   setEraserMode: (m) => set({ eraserMode: m }),
 
@@ -600,10 +623,12 @@ export const usePdfStore = create<PdfStore>((set, get) => ({
     const map = new Map(entries.map((e) => [e.id, e.points]));
     const cur = get().items[page] ?? [];
     const next = cur.map((o) => (o.type === 'stroke' && map.has(o.id) ? { ...o, points: map.get(o.id)! } as PdfStroke : o));
+    // No renderEpoch bump: PdfCanvas already cleared the moved strokes' pixels at
+    // drag start and stamps only those strokes back — a page-wide rebuild here
+    // would make dropping a selection on a dense page take seconds.
     set((s) => ({
       items: { ...s.items, [page]: next },
       redoStack: { ...s.redoStack, [page]: [] },
-      renderEpoch: get().renderEpoch + 1,
       dirty: true,
     }));
   },
@@ -824,7 +849,7 @@ export const usePdfStore = create<PdfStore>((set, get) => ({
       renderEpoch: 0,
       activeTool: 'pen',
       brushType: 'marker',
-      brush: { ...DEFAULT_PDF_BRUSH },
+      brush: defaultPdfBrush(),
       eraserMode: 'free',
       selectionMode: 'box',
       selectedIds: [],

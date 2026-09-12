@@ -25,6 +25,16 @@ export const STORAGE_KEY = 'stickynotes-inkcanvas'; // legacy single-canvas key 
 
 export const CANVAS_LIST_KEY = 'stickynotes-inkcanvas-list';
 export const canvasDataKey = (id: string): string => `stickynotes-inkcanvas-${id}`;
+/**
+ * A canvas is persisted under TWO keys: its body (the strokes, which reaches
+ * tens of megabytes — one measured document is 24 MB of JSON) and its view
+ * state (camera + dot grid, a few dozen bytes).
+ *
+ * They are separate because the camera changes on every pan, and writing them
+ * together meant one pan re-serialized and re-wrote the whole document a second
+ * later — a freeze the user has no reason to connect to scrolling.
+ */
+export const canvasViewKey = (id: string): string => `stickynotes-inkcanvas-${id}-view`;
 
 export const ERASER_RADIUS = 20; // world units
 

@@ -11,6 +11,184 @@ const PIXELS = (CELL + 2 * GUTTER) * SCALE;
 /** Bytes per tile canvas — the unit the live cache below is budgeted in. */
 const BYTES_PER_CANVAS = PIXELS * PIXELS * 4;
 interface Sample { x: number; y: number; p: number; t: number; width: number; ema: number }
+
+/**
+ * One sample of the stroke's own width/smoothing chain — the single source of
+ * truth shared by the incremental raster (below) and the one-pass raster
+ * (`renderStrokeOnce`), so a stroke's shape can never depend on which path
+ * happened to draw it. `prev` is the previous FILTERED sample; `tip` marks the
+ * replaceable live pen tip, which is never filtered.
+ */
+function samplePoint(stroke: PdfStroke, raw: PdfPoint, prev: Sample | null, tip: boolean, grainy: boolean): Sample {
+  let x = Number.isFinite(raw.x) ? raw.x : prev?.x ?? 0;
+  let y = Number.isFinite(raw.y) ? raw.y : prev?.y ?? 0;
+  let p = Number.isFinite(raw.pressure) ? clamp01(raw.pressure) : 0.5;
+  const t = Number.isFinite(raw.t) ? raw.t : prev?.t ?? 0;
+  const dt = prev ? (t - prev.t) / 1000 : 0;
+  if (prev && !tip && dt > 0 && dt <= 1) {
+    const cutoff = smoothingToMinCutoff(stroke.smoothing) + 0.007 * Math.hypot(x - prev.x, y - prev.y) / dt;
+    const a = 1 / (1 + 1 / (2 * Math.PI * cutoff * dt));
+    x = prev.x + (x - prev.x) * a;
+    y = prev.y + (y - prev.y) * a;
+    p = prev.p + (p - prev.p) * a;
+  }
+  const ema = prev ? prev.ema + (p - prev.ema) * 0.42 : p;
+  let width = pressureToWidth(ema, stroke.size);
+  if (grainy) width = Math.max(0.6, stroke.size * (0.28 + p * 0.42));
+  if (stroke.style === 'fountain') {
+    const speed = prev && dt > 0 ? Math.hypot(x - prev.x, y - prev.y) / (dt * 1000) : 0;
+    width *= (0.5 + 0.5 * clamp01(stroke.inkSpeed ?? 0.5)) * (1 - clamp01(speed) * 0.42);
+  }
+  const floor = Math.max(0.15, stroke.size * 0.015);
+  width = Math.max(floor, width);
+  if (prev) width = Math.max(prev.width - Math.max(0.25, stroke.size * 0.11),
+    Math.min(prev.width + Math.max(0.35, stroke.size * 0.16), width));
+  return { x, y, p, t, width, ema };
+}
+
+/**
+ * Rasterize a stroke's ENTIRE coverage in one pass, returning a `scale`-times
+ * raster of exactly the world rect [minX..maxX]×[minY..maxY] (or null when the
+ * stroke cannot reach it).
+ *
+ * The incremental raster below exists so that drawing a stroke costs only its
+ * NEW samples each frame. A stroke restored from storage has no new samples —
+ * it is drawn once, whole — and the per-cell mask/image canvases it allocates
+ * (2 CPU surfaces of ~640 KiB per cell, plus a per-cell blur) cost ~7× the time
+ * and ~12× the memory of painting the same ribbon in a single fill. Opening a
+ * dense canvas builds every stroke that way, which is what made it take tens of
+ * seconds.
+ *
+ * The steps are deliberately the SAME as the incremental compositor's, in the
+ * same order, so the result is the same pixels and not merely a similar look:
+ * opaque coverage → `source-in` the stroke colour → blur + alpha at IDENTITY
+ * transform. The blur must not be applied under the bake transform — `ctx.filter`
+ * lengths are scaled by the current transform in some engines and not others, so
+ * only an identity transform makes the radius mean one thing everywhere.
+ *
+ * Pencil is deliberately excluded — its grain comes from `StreamingPencilGrain`,
+ * whose mark sequence is only defined incrementally, so pencil keeps the
+ * incremental raster above.
+ */
+export function renderStrokeOnce(
+  stroke: PdfStroke,
+  scale: number,
+  minX: number,
+  minY: number,
+  maxX: number,
+  maxY: number,
+): HTMLCanvasElement | null {
+  const pts = stroke.points;
+  const n = pts.length;
+  if (n === 0) return null;
+
+  const samples: Sample[] = new Array(n);
+  let prev: Sample | null = null;
+  let pressureSum = 0, widthSum = 0, maxWidth = 0;
+  for (let i = 0; i < n; i++) {
+    const s = samplePoint(stroke, pts[i], prev, i === n - 1, false);
+    samples[i] = s;
+    if (i < n - 1) { pressureSum += s.p; widthSum += s.width; }
+    if (s.width > maxWidth) maxWidth = s.width;
+    prev = s;
+  }
+
+  // Only the contiguous run of segments that can reach the rect contributes
+  // pixels there, and every quad/disc in that run is part of the same union — so
+  // drawing the run is pixel-identical to drawing the whole stroke (this is what
+  // keeps a long stroke cheap when it only crosses a corner of the raster).
+  //
+  // The run is chosen by SEGMENT, not by sample: a fast flick between two
+  // distant samples crosses the rect with BOTH endpoints far outside it, and a
+  // sample-based filter would find nothing and silently drop the ink.
+  const reach = maxWidth / 2 + 2;
+  const near = (a: { x: number; y: number }, b: { x: number; y: number }) =>
+    Math.min(a.x, b.x) - reach <= maxX && Math.max(a.x, b.x) + reach >= minX &&
+    Math.min(a.y, b.y) - reach <= maxY && Math.max(a.y, b.y) + reach >= minY;
+
+  let lo = -1, hi = -1; // first / last SEGMENT index that can reach the rect
+  for (let i = 0; i + 1 < n; i++) {
+    if (!near(samples[i], samples[i + 1])) continue;
+    if (lo === -1) lo = i;
+    hi = i;
+  }
+  if (lo === -1) {
+    // No segment reaches the rect — a lone sample (a dot, or a run of coincident
+    // samples) still can.
+    hi = samples.findIndex((s) => s.x >= minX - reach && s.x <= maxX + reach
+      && s.y >= minY - reach && s.y <= maxY + reach);
+    if (hi === -1) return null;
+    lo = hi;
+  } else {
+    // Draw one segment past the run: the LAST sample of a run is also the start
+    // of the next segment, and the incremental compositor paints that disc twice
+    // (once per segment it joins). Stopping at the run would leave that one disc
+    // a level lighter than the same ink drawn live.
+    hi = Math.min(n - 1, hi + 2);
+  }
+
+  const count = hi - lo + 1;
+  const drawPts = new Array<{ x: number; y: number }>(count);
+  const drawWidths = new Array<number>(count);
+  for (let i = 0; i < count; i++) {
+    const s = samples[lo + i];
+    drawPts[i] = { x: s.x, y: s.y };
+    drawWidths[i] = s.width;
+  }
+
+  const width = Math.max(1, Math.round((maxX - minX) * scale));
+  const height = Math.max(1, Math.round((maxY - minY) * scale));
+
+  // 1. Opaque coverage, crisply (no feather yet). Drawn one segment at a time,
+  //    in the incremental compositor's exact order and multiplicity: a seed disc
+  //    on the first sample, then `quad(sample[i-1], sample[i])` with a disc on
+  //    each end. Drawing the whole union in one pass instead would compute
+  //    antialiasing once over the outline rather than accumulating it per
+  //    segment, shifting the round caps' edge pixels by a level or two — enough
+  //    for ink to visibly change the moment it is reloaded.
+  const coverage = document.createElement('canvas');
+  coverage.width = width; coverage.height = height;
+  const cctx = coverage.getContext('2d')!;
+  cctx.setTransform(scale, 0, 0, scale, -minX * scale, -minY * scale);
+  drawVariableRibbon(cctx, [drawPts[0], drawPts[0]], [drawWidths[0], drawWidths[0]],
+    '#000000', 1, 'source-over', 0, 0, false);
+  for (let i = 1; i < count; i++) {
+    drawVariableRibbon(cctx, [drawPts[i - 1], drawPts[i]], [drawWidths[i - 1], drawWidths[i]],
+      '#000000', 1, 'source-over', 0, 0, false);
+  }
+  // 2. Colour it in.
+  cctx.setTransform(1, 0, 0, 1, 0, 0);
+  cctx.globalCompositeOperation = 'source-in';
+  cctx.fillStyle = stroke.color;
+  cctx.fillRect(0, 0, width, height);
+
+  // 3. Feather, then 4. whole-stroke alpha. Both steps are separate composites
+  //    because that is what the incremental path does — it blurs each cell with
+  //    no alpha, then applies `globalAlpha` when compositing the cell in. Each
+  //    composite rounds to 8 bits, so folding the two together would shift edge
+  //    pixels by a level. Identity transform, so `blur(n px)` means n device px
+  //    whatever the engine does with filter lengths under a transform.
+  const avgWidth = (widthSum + samples[n - 1].width) / n;
+  const blurPx = Math.round(resolveFeatherWorld(stroke, [avgWidth]) * SCALE * 16) / 16;
+  const alpha = markerStrokeAlpha(
+    stroke.opacity,
+    (pressureSum + samples[n - 1].p) / n,
+    stroke.pressureOpacity === true,
+  );
+  const blurred = document.createElement('canvas');
+  blurred.width = width; blurred.height = height;
+  const bctx = blurred.getContext('2d')!;
+  if (blurPx >= 1 / 16) bctx.filter = `blur(${blurPx}px)`;
+  bctx.drawImage(coverage, 0, 0);
+  if (alpha >= 1) return blurred;
+
+  const out = document.createElement('canvas');
+  out.width = width; out.height = height;
+  const octx = out.getContext('2d')!;
+  octx.globalAlpha = alpha;
+  octx.drawImage(blurred, 0, 0);
+  return out;
+}
 interface Tile { x: number; y: number; mask: HTMLCanvasElement; image: HTMLCanvasElement; grain?: HTMLCanvasElement; dirty: boolean }
 const canvas = () => {
   const c = document.createElement('canvas');
@@ -58,31 +236,7 @@ export class StreamingInkStroke {
   }
 
   private sample(raw: PdfPoint, tip: boolean): Sample {
-    const prev = this.last;
-    let x = Number.isFinite(raw.x) ? raw.x : prev?.x ?? 0;
-    let y = Number.isFinite(raw.y) ? raw.y : prev?.y ?? 0;
-    let p = Number.isFinite(raw.pressure) ? clamp01(raw.pressure) : 0.5;
-    const t = Number.isFinite(raw.t) ? raw.t : prev?.t ?? 0;
-    const dt = prev ? (t - prev.t) / 1000 : 0;
-    if (prev && !tip && dt > 0 && dt <= 1) {
-      const cutoff = smoothingToMinCutoff(this.stroke.smoothing) + 0.007 * Math.hypot(x - prev.x, y - prev.y) / dt;
-      const a = 1 / (1 + 1 / (2 * Math.PI * cutoff * dt));
-      x = prev.x + (x - prev.x) * a;
-      y = prev.y + (y - prev.y) * a;
-      p = prev.p + (p - prev.p) * a;
-    }
-    const ema = prev ? prev.ema + (p - prev.ema) * 0.42 : p;
-    let width = pressureToWidth(ema, this.stroke.size);
-    if (this.grain) width = Math.max(0.6, this.stroke.size * (0.28 + p * 0.42));
-    if (this.stroke.style === 'fountain') {
-      const speed = prev && dt > 0 ? Math.hypot(x - prev.x, y - prev.y) / (dt * 1000) : 0;
-      width *= (0.5 + 0.5 * clamp01(this.stroke.inkSpeed ?? 0.5)) * (1 - clamp01(speed) * 0.42);
-    }
-    const floor = Math.max(0.15, this.stroke.size * 0.015);
-    width = Math.max(floor, width);
-    if (prev) width = Math.max(prev.width - Math.max(0.25, this.stroke.size * 0.11),
-      Math.min(prev.width + Math.max(0.35, this.stroke.size * 0.16), width));
-    return { x, y, p, t, width, ema };
+    return samplePoint(this.stroke, raw, this.last, tip, this.grain !== null);
   }
 
   private tile(tx: number, ty: number): Tile {

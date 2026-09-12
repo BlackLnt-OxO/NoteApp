@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { isInkInputBusy } from '../inkInputActivity';
+import { loadQuickSizes, saveQuickSizes } from '../inkToolPrefs';
 import type {
   Camera,
   BrushSettings,
@@ -17,6 +18,7 @@ import {
   DEFAULT_CAMERA,
   DEFAULT_BRUSH,
   canvasDataKey,
+  canvasViewKey,
   TEXT_DEFAULTS,
   MAX_HISTORY,
 } from './constants';
@@ -91,7 +93,10 @@ export interface CanvasStore {
    *  pixels out of its ink tiles locally (no page-wide rebuild per stroke). The
    *  full rebuild happens once when the gesture is undone. */
   eraseStrokesLive: (ids: string[]) => void;
-  /** Batch-replace stroke points (drag-move drop). Structural → rebuilds tiles. */
+  /** Batch-replace stroke points (drag-move drop). NOT structural: the canvas
+   *  already erased the moved strokes out of its tiles at drag start and stamps
+   *  only those strokes back here — a page-wide rebuild would make dropping a
+   *  selection on a dense canvas take seconds. */
   commitStrokesPoints: (entries: { id: string; points: StrokePoint[] }[]) => void;
   saveCanvasData: () => Promise<void>;
   loadCanvasData: (canvasId?: string) => Promise<void>;
@@ -105,6 +110,17 @@ function makeId(prefix: string): string {
   return `${prefix}_${Date.now()}_${Math.random().toString(36).substring(2, 11)}`;
 }
 
+/** The quick-size swatches are a tool preference, remembered across launches
+ *  (per surface — the canvas keeps its own, independent of the PDF toolbar). */
+const QUICK_SIZES_KEY = 'stickynotes-inkcanvas-quick-sizes';
+
+// What the last successful save actually wrote, so a change to one half of the
+// persisted state never re-writes the other. Compared by REFERENCE — the store
+// replaces `objects`/`camera` whenever they change and shares the reference
+// otherwise (the history model depends on exactly that).
+let savedBody: { id: string | null; objects: CanvasObject[] | null } = { id: null, objects: null };
+let savedView: { id: string | null; camera: Camera | null; grid: boolean | null } = { id: null, camera: null, grid: null };
+
 // ---- Store -------------------------------------------------------------------
 
 export const useCanvasStore = create<CanvasStore>((set, get) => ({
@@ -113,7 +129,7 @@ export const useCanvasStore = create<CanvasStore>((set, get) => ({
   camera: { ...DEFAULT_CAMERA },
   activeTool: 'pen',
   brush: 'marker',
-  brushSettings: { ...DEFAULT_BRUSH },
+  brushSettings: { ...DEFAULT_BRUSH, ...loadQuickSizes(QUICK_SIZES_KEY, DEFAULT_BRUSH) },
   showDotGrid: true,
   editingTextId: null,
   textCommitReturnTool: null,
@@ -287,11 +303,8 @@ export const useCanvasStore = create<CanvasStore>((set, get) => ({
     const next = get().objects.map((o) =>
       o.type === 'stroke' && map.has(o.id) ? { ...o, points: map.get(o.id)! } : o,
     );
-    set((s) => ({
-      objects: next,
-      redoStack: [],
-      renderEpoch: get().renderEpoch + 1,
-    }));
+    // No renderEpoch bump — see the interface comment.
+    set(() => ({ objects: next, redoStack: [] }));
   },
 
   // --- Simple setters ---
@@ -303,8 +316,15 @@ export const useCanvasStore = create<CanvasStore>((set, get) => ({
 
   setBrush: (brush) => set({ brush }),
 
-  setBrushSettings: (partial) =>
-    set((s) => ({ brushSettings: { ...s.brushSettings, ...partial } })),
+  setBrushSettings: (partial) => {
+    set((s) => ({ brushSettings: { ...s.brushSettings, ...partial } }));
+    // Only the quick-size swatches are a cross-session preference; the rest of
+    // the brush is per-session (and the colour follows the theme by default).
+    if (partial.quickSizes || partial.eraserQuickSizes) {
+      const { quickSizes, eraserQuickSizes } = get().brushSettings;
+      saveQuickSizes(QUICK_SIZES_KEY, { quickSizes, eraserQuickSizes });
+    }
+  },
 
   setShowDotGrid: (show) => set({ showDotGrid: show }),
 
@@ -335,7 +355,17 @@ export const useCanvasStore = create<CanvasStore>((set, get) => ({
     try {
       const { objects, camera, showDotGrid, currentCanvasId } = get();
       if (!currentCanvasId) return;
-      localStorage.setItem(canvasDataKey(currentCanvasId), JSON.stringify({ objects, camera, showDotGrid }));
+      // The body is written only when it actually changed. Serializing a dense
+      // canvas is ~100 ms of main-thread work and the write is another blocking
+      // hop to the storage process, so it must not ride along with a pan.
+      if (savedBody.id !== currentCanvasId || savedBody.objects !== objects) {
+        localStorage.setItem(canvasDataKey(currentCanvasId), JSON.stringify({ objects }));
+        savedBody = { id: currentCanvasId, objects };
+      }
+      if (savedView.id !== currentCanvasId || savedView.camera !== camera || savedView.grid !== showDotGrid) {
+        localStorage.setItem(canvasViewKey(currentCanvasId), JSON.stringify({ camera, showDotGrid }));
+        savedView = { id: currentCanvasId, camera, grid: showDotGrid };
+      }
     } catch (e) {
       console.error('Failed to save canvas data:', e);
     }
@@ -348,12 +378,18 @@ export const useCanvasStore = create<CanvasStore>((set, get) => ({
       let data = null;
       const raw = localStorage.getItem(canvasDataKey(id));
       if (raw) data = JSON.parse(raw);
+      // The view lives under its own key; documents written before that split
+      // carried it in the body, so fall back to the body's copy.
+      let view = null;
+      const rawView = localStorage.getItem(canvasViewKey(id));
+      if (rawView) { try { view = JSON.parse(rawView); } catch { view = null; } }
+      savedBody = { id, objects: data?.objects || [] };
       set({
         loaded: true,
         currentCanvasId: id,
         objects: data?.objects || [],
-        camera: { ...DEFAULT_CAMERA, ...data?.camera },
-        showDotGrid: data?.showDotGrid ?? true,
+        camera: { ...DEFAULT_CAMERA, ...(view?.camera ?? data?.camera) },
+        showDotGrid: view?.showDotGrid ?? data?.showDotGrid ?? true,
         history: [],
         redoStack: [],
         selectedIds: [],

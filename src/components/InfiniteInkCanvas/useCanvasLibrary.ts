@@ -2,8 +2,8 @@
  * useCanvasLibrary — persisted library of ink canvases (home screen).
  *
  * Mirrors PdfLibrary: a small metadata list in localStorage (id/name/timestamps)
- * while each canvas's {objects, camera, showDotGrid} lives under its own
- * `stickynotes-inkcanvas-<id>` key.
+ * while each canvas's strokes live under `stickynotes-inkcanvas-<id>` and its
+ * view state (camera + dot grid) under `<id>-view` — see canvasViewKey.
  *
  * Migration: the pre-multi-canvas build stored a single document at the legacy
  * `stickynotes-inkcanvas` key. On first load, if that key exists and the list is
@@ -12,7 +12,7 @@
 
 import { create } from 'zustand';
 import type { CanvasCategory, CanvasMeta } from './types';
-import { CANVAS_LIST_KEY, canvasDataKey, STORAGE_KEY } from './constants';
+import { CANVAS_LIST_KEY, canvasDataKey, canvasViewKey, STORAGE_KEY } from './constants';
 
 export interface CanvasLibraryStore {
   canvases: CanvasMeta[];
@@ -110,7 +110,10 @@ export const useCanvasLibrary = create<CanvasLibraryStore>((set, get) => ({
     })),
 
   deleteCanvas: (id) => {
-    try { localStorage.removeItem(canvasDataKey(id)); } catch { /* ignore */ }
+    try {
+      localStorage.removeItem(canvasDataKey(id));
+      localStorage.removeItem(canvasViewKey(id));
+    } catch { /* ignore */ }
     set((s) => ({
       canvases: s.canvases.filter((c) => c.id !== id),
       currentCanvasId: s.currentCanvasId === id ? null : s.currentCanvasId,

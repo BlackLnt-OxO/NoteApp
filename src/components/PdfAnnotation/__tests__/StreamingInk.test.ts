@@ -1,6 +1,6 @@
 import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest';
 import { createCanvas } from '@napi-rs/canvas';
-import { StreamingInkStroke, getStreamingInk, releaseStreamingInk, clearStreamingInk, streamingInkStats } from '../StreamingInkStroke';
+import { StreamingInkStroke, getStreamingInk, releaseStreamingInk, clearStreamingInk, streamingInkStats, renderStrokeOnce } from '../StreamingInkStroke';
 import { clearInkRasterCache, getStrokeRaster, inkRasterCacheStats } from '../InkRasterCache';
 import { StreamingPencilGrain } from '../StreamingPencilGrain';
 import { InkStrokeIndex } from '../InkStrokeIndex';
@@ -28,6 +28,34 @@ function expectPixels(a: HTMLCanvasElement, b: HTMLCanvasElement) {
   let different = 0;
   for (let i = 0; i < pa.length; i++) if (pa[i] !== pb[i]) different++;
   expect(different).toBe(0);
+}
+/**
+ * Restoring a version-2 marker/fountain stroke paints it in ONE pass
+ * (`renderStrokeOnce`) instead of rebuilding its incremental cell raster — the
+ * cell surfaces are what made reopening a dense canvas take tens of seconds.
+ *
+ * The two agree everywhere except in a narrow band on the incremental
+ * renderer's own CELL boundaries (every 128 world units), where it composites
+ * each cell from that cell's pixels. Measured against the incremental raster
+ * over a corpus of strokes — widths 1–43, opacities 0.15–1, feather on and
+ * off, smoothing 0–0.2, and deliberate fast flicks that drop most samples — the
+ * worst single pixel moves 14/255 and the mean moves 0.003/255, i.e. a handful
+ * of antialiased edge pixels. Bounded here (with headroom) so it can never
+ * silently grow into a visible change.
+ */
+const RESTORE_MAX_ALPHA_DRIFT = 16;  // /255, at any single pixel (corpus worst: 14)
+const RESTORE_MAX_MEAN_DRIFT = 0.01; // /255, averaged over the raster (corpus worst: 0.003)
+function expectPixelsRestored(a: HTMLCanvasElement, b: HTMLCanvasElement) {
+  const pa = pixels(a), pb = pixels(b);
+  expect(pa.length).toBe(pb.length);
+  let worst = 0, sum = 0;
+  for (let i = 0; i < pa.length; i += 4) {
+    const d = Math.abs(pa[i + 3] - pb[i + 3]);
+    if (d > worst) worst = d;
+    sum += d;
+  }
+  expect(worst).toBeLessThanOrEqual(RESTORE_MAX_ALPHA_DRIFT);
+  expect(sum / (pa.length / 4)).toBeLessThan(RESTORE_MAX_MEAN_DRIFT);
 }
 function raster(ink: StreamingInkStroke) {
   const c = document.createElement('canvas'); c.width = c.height = 1536;
@@ -81,7 +109,11 @@ describe('continuous retracing marker', () => {
     }
     const preview = raster(live);
     const restored = rebuildTiles([JSON.parse(JSON.stringify(whole)) as PdfStroke]);
-    expectPixels(preview, restored.get('0:0')!);
+    // Pencil still restores through the incremental raster (its grain is only
+    // defined step by step), so it must stay bit-identical; marker/fountain are
+    // repainted in one pass and hold to the documented bound instead.
+    if (style === 'pencil') expectPixels(preview, restored.get('0:0')!);
+    else expectPixelsRestored(preview, restored.get('0:0')!);
     live.dispose();
   });
 });
@@ -127,20 +159,20 @@ describe('dense whole-stroke erase', () => {
   });
 });
 
-describe('retained streaming ink', () => {
-  it('keeps committed tiles so a dense erase re-composites instead of re-processing', () => {
+describe('restoring and repairing ink', () => {
+  it('repairs a dense erase without building an incremental raster per stroke', () => {
     const strokes = Array.from({ length: 6 }, (_, i) => line(`keep${i}`, 60, { size: 10 }));
     const tiles = rebuildTiles(strokes);
 
-    // Committing a stroke must no longer throw its streaming tiles away — that
-    // release is what made every raster-cache miss re-process a whole stroke.
-    expect(streamingInkStats().entries).toBeGreaterThan(0);
-    const processed = strokes.map(s => getStreamingInk(s).stats.processedPoints);
-    expect(processed.every(p => p > 0)).toBe(true);
+    // Restoring a canvas must NOT build incremental rasters for its strokes: it
+    // repaints them in one pass instead, which is what keeps opening a dense
+    // canvas cheap. A stroke being written right now is the only thing that
+    // keeps one (see PdfBrushRenderers.drawAnnotatedStroke).
+    expect(streamingInkStats().entries).toBe(0);
 
     // Evict every cropped raster, then erase one stroke. The repair must MISS
-    // the raster cache and re-composite the survivors from their live streaming
-    // tiles rather than re-processing them from their raw points.
+    // the raster cache and repaint the survivors from their raw points — which
+    // is only affordable because that repaint is one pass, not a cell rebuild.
     clearInkRasterCache();
     const index = new InkStrokeIndex();
     strokes.forEach(s => index.add(s));
@@ -148,10 +180,97 @@ describe('retained streaming ink', () => {
     const missesBefore = inkRasterCacheStats().misses;
     removeStrokesFromTiles(tiles, index.grid, new Set([removed.id]), [removed], index.bounds);
     expect(inkRasterCacheStats().misses).toBeGreaterThan(missesBefore);
+    expect(streamingInkStats().entries).toBe(0);
+  });
 
-    const survivors = strokes.filter(s => s !== removed);
-    expect(survivors.map(s => getStreamingInk(s).stats.processedPoints))
-      .toEqual(processed.filter((_, i) => i !== 3));
+  it('repaints a stroke from raw points in one pass, not per cell', () => {
+    // A cell-spanning stroke is the worst case for the incremental raster: its
+    // cells would each allocate a mask + image surface. The one-pass painter
+    // must touch no incremental raster at all and still land the ink.
+    const s = line('oneshot', 300);
+    const raster = getStrokeRaster(s, 0, 0, 512, 3);
+    expect(streamingInkStats().entries).toBe(0);
+    let ink = 0;
+    const data = pixels(raster.image);
+    for (let i = 3; i < data.length; i += 4) if (data[i] > 0) ink++;
+    expect(ink).toBeGreaterThan(1000);
+  });
+
+  it('paints nothing — and builds nothing — for a tile the stroke only brackets', () => {
+    // An "L": along the top (y=100) then down the right (x=1500). Its BOUNDING
+    // BOX spans 9 tiles, but the path never enters the middle one — that tile
+    // must come out empty without building an incremental raster to find out.
+    const s = line('bracket', 3, {
+      points: [
+        { x: 100, y: 100, pressure: 1, t: 0 },
+        { x: 1500, y: 100, pressure: 1, t: 200 },
+        { x: 1500, y: 1500, pressure: 1, t: 400 },
+      ],
+    });
+    const empty = getStrokeRaster(s, 1, 1, 512, 3);
+    expect(streamingInkStats().entries).toBe(0);
+    let ink = 0;
+    const data = pixels(empty.image);
+    for (let i = 3; i < data.length; i += 4) if (data[i] > 0) ink++;
+    expect(ink).toBe(0);
+    // The tiles the path DOES cross still get their ink.
+    for (const [tx, ty] of [[1, 0], [2, 1]]) {
+      let crossed = 0;
+      const d = pixels(getStrokeRaster(s, tx, ty, 512, 3).image);
+      for (let i = 3; i < d.length; i += 4) if (d[i] > 0) crossed++;
+      expect(crossed).toBeGreaterThan(100);
+    }
+    expect(streamingInkStats().entries).toBe(0);
+  });
+
+  it('holds the restore bound across widths, pressures, feather settings and fast flicks', () => {
+    // One fixed stroke proves little: the one-pass painter slices the stroke to
+    // the rect, and a FAST FLICK (a long segment between two distant samples)
+    // can cross a rect with both endpoints outside it. Exercised here so a
+    // regression shows up as dropped ink or an out-of-bound edge, not as a
+    // surprise on the user's dense canvas.
+    for (let i = 0; i < 12; i++) {
+      const n = 20 + (i * 37) % 130;
+      const span = 420 / n;
+      const points = [];
+      for (let k = 0; k < n; k++) {
+        if (i % 5 === 0 && k % 12 !== 0) continue; // fast flick: most samples gone
+        points.push({
+          x: 30 + k * span, y: 150 + Math.sin(k * 0.2 + i) * (4 + (i % 7) * 4) + (i % 3) * 60,
+          pressure: 0.05 + ((k * 7 + i) % 23) / 23, t: k * (3 + (i % 4)),
+        });
+      }
+      const s: PdfStroke = {
+        id: `sweep${i}`, type: 'stroke', renderVersion: 2, size: 1 + (i % 14) * 3,
+        color: '#1267cb', opacity: 0.15 + ((i * 13) % 85) / 100, smoothing: [0, 0.05, 0.2][i % 3],
+        compositeOperation: 'source-over', createdAt: 0,
+        style: (['marker', 'fountain', undefined] as const)[i % 3],
+        pressureOpacity: i % 2 === 0, edgeFeather: i % 7 !== 0,
+        points,
+      };
+      const restored = renderStrokeOnce(s, 3, 0, 0, 512, 512);
+      expect(restored).not.toBeNull(); // never drop the ink
+      const live = { ...s, points: [] } as PdfStroke;
+      const ink = new StreamingInkStroke(live);
+      for (let k = 0; k < s.points.length; k += 7) { live.points.push(...s.points.slice(k, k + 7)); ink.update(); }
+      const preview = raster(ink);
+      ink.dispose();
+      const target = createCanvas(1536, 1536) as unknown as HTMLCanvasElement;
+      const tctx = target.getContext('2d')!;
+      tctx.scale(3, 3);
+      tctx.drawImage(restored!, 0, 0, restored!.width / 3, restored!.height / 3);
+      expectPixelsRestored(preview, target);
+    }
+  }, 120000);
+
+  it('does not depend on which tile is asked for first', () => {
+    // A raster must be a function of (stroke, tile) alone — never of the order
+    // tiles happened to be built in, or the same ink would look different
+    // depending on where the user looked first.
+    const s = line('order', 300);
+    const a = getStrokeRaster(s, 0, 0, 512, 3);
+    const second = getStrokeRaster(s, 0, 0, 512, 3); // now a cache hit
+    expect(pixels(second.image)).toEqual(pixels(a.image));
   });
 
   it('bounds retained streaming ink, evicting least-recently-used strokes', () => {

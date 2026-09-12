@@ -17,8 +17,10 @@ import {
 import { drawAnnotatedStroke } from '../PdfAnnotation/PdfBrushRenderers';
 import { screenToWorld, clampZoom, zoomAt, ERASER_RADIUS } from './constants';
 import {
-  stampStroke, eraseSegTiles, eraseDotTiles, drawVisibleTiles, rebuildTiles, removeStrokesFromTiles,
+  stampStroke, eraseSegTiles, eraseDotTiles, drawVisibleTiles, removeStrokesFromTiles,
+  disposeTiles, indexInkStrokes, materializeTiles,
 } from './InkTiles';
+import { releaseDocumentInkCaches } from '../PdfAnnotation/InkRasterCache';
 import TextNode from './TextNode';
 import ImageObject from './ImageObject';
 import TextObject from './TextObject';
@@ -78,8 +80,20 @@ const InfiniteInkCanvas: React.FC = () => {
   const panAnchorRef = useRef<{ sx: number; sy: number; camX: number; camY: number } | null>(null);
   const selectAnchorRef = useRef<{ x: number; y: number } | null>(null);
   const selectionRectRef = useRef<{ x1: number; y1: number; x2: number; y2: number } | null>(null);
-  const selectDragRef = useRef<{ start: { x: number; y: number }; ids: string[]; snapshots: Map<string, StrokePoint[]>; dx: number; dy: number } | null>(null);
+  /** Active select-drag. `strokes` holds the ORIGINAL stroke objects (kept so
+   *  the live preview can be drawn with a `dx/dy` offset rather than a rebuilt
+   *  copy of every point each frame — see doRender). */
+  const selectDragRef = useRef<{
+    start: { x: number; y: number };
+    ids: string[];
+    snapshots: Map<string, StrokePoint[]>;
+    strokes: Stroke[];
+    dx: number;
+    dy: number;
+  } | null>(null);
   const inkTilesRef = useRef<Map<string, HTMLCanvasElement>>(new Map());
+  /** Pending frame of the lazy tile materialization chain (see InkTiles). */
+  const materializeRafRef = useRef(0);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const insertWorldRef = useRef<{ x: number; y: number } | null>(null);
   const rafRef = useRef<number>(0);
@@ -125,10 +139,19 @@ const InfiniteInkCanvas: React.FC = () => {
     if (rafRef.current) cancelAnimationFrame(rafRef.current);
     if (laserRafRef.current) cancelAnimationFrame(laserRafRef.current);
     if (strokeEraseRef.current?.raf) cancelAnimationFrame(strokeEraseRef.current.raf);
+    if (materializeRafRef.current) cancelAnimationFrame(materializeRafRef.current);
+    // Leaving the editor = leaving the document. Free its rasterized ink and the
+    // shared pixel caches NOW: together they are ~1 GiB on a dense canvas, and
+    // leaving them to the GC made the NEXT canvas — however light — open slowly,
+    // because allocating its tiles meant evicting all of them first.
+    disposeTiles(inkTilesRef.current);
+    inkTilesRef.current = new Map();
+    releaseDocumentInkCaches();
     // StrictMode replays effects on mount; cancelled frame IDs must not prevent
     // the replayed sizing/render effects from scheduling their first frame.
     rafRef.current = 0;
     laserRafRef.current = 0;
+    materializeRafRef.current = 0;
     if (strokeEraseRef.current) strokeEraseRef.current.raf = 0;
   }, []);
 
@@ -236,15 +259,14 @@ const InfiniteInkCanvas: React.FC = () => {
     // Text nodes are now always-interactive DOM cards rendered ABOVE the canvas
     // (TextObject) — they are intentionally NOT drawn into the vector canvas.
 
-    // Live drag-move of selected strokes (snapshot + delta).
+    // Live drag-move of selected strokes. The strokes are drawn from their
+    // ORIGINAL objects with the drag delta, never from a rebuilt copy: cloning
+    // the points each frame is O(points) per frame, and handing the renderer a
+    // new stroke object each frame misses its cached coverage every time, so a
+    // drag re-rasterized the whole selection 60 times a second.
     if (selectDragRef.current) {
       const d = selectDragRef.current;
-      const byId = new Map(state.objects.map((o) => [o.id, o]));
-      for (const [id, snap] of d.snapshots) {
-        const orig = byId.get(id);
-        if (!orig || orig.type !== 'stroke') continue;
-        drawAnnotatedStroke(ctx, { ...orig, points: snap.map((p) => ({ ...p, x: p.x + d.dx, y: p.y + d.dy })) });
-      }
+      for (const s of d.strokes) drawAnnotatedStroke(ctx, s, d.dx, d.dy);
     } else if (state.selectedIds.length > 0) {
       drawSelectionHighlight(ctx, state.objects, state.selectedIds);
     }
@@ -406,20 +428,54 @@ const InfiniteInkCanvas: React.FC = () => {
     });
   }, [flushStrokeWipe, doRender]);
 
+  // Materialize the tiles the viewport needs, in one pass per call; if the view
+  // needs more than one pass' budget (wide zoom-out), keep going frame by frame
+  // rather than blocking on the whole document at once.
+  const runMaterialize = useCallback((): number => {
+    const container = containerRef.current;
+    if (!container) return 0;
+    const rect = container.getBoundingClientRect();
+    const { camera: cam } = useCanvasStore.getState();
+    const { materialized, remaining } = materializeTiles(inkTilesRef.current, cam, rect.width, rect.height);
+    if (materialized > 0) dirtyRef.current = true;
+    return remaining;
+  }, []);
+
+  const scheduleMaterialize = useCallback(() => {
+    if (materializeRafRef.current) return;
+    const step = () => {
+      materializeRafRef.current = 0;
+      if (runMaterialize() > 0) materializeRafRef.current = requestAnimationFrame(step);
+      dirtyRef.current = true;
+      if (rafRef.current) { cancelAnimationFrame(rafRef.current); rafRef.current = 0; }
+      doRender();
+    };
+    materializeRafRef.current = requestAnimationFrame(step);
+  }, [runMaterialize, doRender]);
+
   useEffect(() => {
     dirtyRef.current = true;
+    if (runMaterialize() > 0) scheduleMaterialize();
     scheduleRender();
-  }, [objects, camera, activeTool, brushSettings, showDotGrid, editingTextId, selectedIds, selectionMode, scheduleRender]);
+  }, [objects, camera, activeTool, brushSettings, showDotGrid, editingTextId, selectedIds, selectionMode,
+      runMaterialize, scheduleMaterialize, scheduleRender]);
 
   // Structural ops (undo/redo/delete/move/clear/load) → rebuild ink tiles from
-  // the vector source of truth.
+  // the vector source of truth. The document is INDEXED whole but RASTERIZED
+  // only where it is looked at (see InkTiles): on a dense canvas about a quarter
+  // of the strokes are on screen, and the rest must not be paid for on open.
   useEffect(() => {
     const state = useCanvasStore.getState();
     const strokes = state.objects.filter((o): o is Stroke => o.type === 'stroke');
-    inkTilesRef.current = rebuildTiles(strokes);
+    const previous = inkTilesRef.current;
+    const tiles = new Map<string, HTMLCanvasElement>();
+    indexInkStrokes(tiles, strokes);
+    inkTilesRef.current = tiles;
+    disposeTiles(previous);
     dirtyRef.current = true;
+    if (runMaterialize() > 0) scheduleMaterialize();
     scheduleRender();
-  }, [renderEpoch, scheduleRender]);
+  }, [renderEpoch, runMaterialize, scheduleMaterialize, scheduleRender]);
 
   // Drop a queued screenshot at the current viewport center (world coords).
   // The image object stays a DOM layer BELOW the canvas so ink overdraws it.
@@ -481,15 +537,23 @@ const InfiniteInkCanvas: React.FC = () => {
 
   const startSelectDrag = (ids: string[], world: { x: number; y: number }) => {
     const state = useCanvasStore.getState();
+    const idSet = new Set(ids);
     const snapshots = new Map<string, StrokePoint[]>();
+    const strokes: Stroke[] = [];
     for (const o of state.objects) {
-      if (o.type === 'stroke' && ids.includes(o.id)) snapshots.set(o.id, o.points.map((p) => ({ ...p })));
+      if (o.type === 'stroke' && idSet.has(o.id)) { snapshots.set(o.id, o.points.map((p) => ({ ...p }))); strokes.push(o); }
     }
     state.pushHistory(); // record state before move (for undo)
-    selectDragRef.current = { start: world, ids, snapshots, dx: 0, dy: 0 };
-    // Remove the selected strokes from the tiles — they're drawn live during drag.
-    const strokes = state.objects.filter((o): o is Stroke => o.type === 'stroke');
-    inkTilesRef.current = rebuildTiles(strokes, new Set(ids));
+    // The dragged strokes are drawn live on top of the tiles for the whole
+    // gesture, so their committed pixels must come out of the tiles first — but
+    // ONLY their own pixels: repainting the whole page (every stroke, every
+    // tile) here is what made a drag on a dense canvas stall for seconds before
+    // it even started. This repairs just the rectangles they occupied.
+    const tiles = inkTilesRef.current;
+    const index = getInkStrokeIndex(tiles);
+    removeStrokesFromTiles(tiles, index.grid, idSet, strokes, index.bounds);
+    index.remove(idSet);
+    selectDragRef.current = { start: world, ids, snapshots, strokes, dx: 0, dy: 0 };
     dirtyRef.current = true;
     scheduleRender();
   };
@@ -775,13 +839,20 @@ const InfiniteInkCanvas: React.FC = () => {
       return;
     }
 
-    // End select-drag: commit final positions (bumps epoch → rebuild tiles).
+    // End select-drag: commit the final positions, then stamp ONLY the moved
+    // strokes back into the tiles. A page-wide rebuild here would undo the whole
+    // point of the local erase at drag start.
     if (selectDragRef.current) {
       const d = selectDragRef.current;
       selectDragRef.current = null;
       const entries = [...d.snapshots.entries()]
         .map(([id, snap]) => ({ id, points: snap.map((p) => ({ ...p, x: p.x + d.dx, y: p.y + d.dy })) }));
       useCanvasStore.getState().commitStrokesPoints(entries);
+      const tiles = inkTilesRef.current;
+      const movedIds = new Set(d.snapshots.keys());
+      for (const o of useCanvasStore.getState().objects) {
+        if (o.type === 'stroke' && movedIds.has(o.id)) stampStroke(tiles, o);
+      }
       dirtyRef.current = true;
       scheduleRender();
       return;

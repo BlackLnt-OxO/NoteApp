@@ -21,7 +21,7 @@ import { releaseStreamingInk } from './StreamingInkStroke';
 import React, { useRef, useEffect, useCallback } from 'react';
 import { usePdfStore } from './PdfStore';
 import { getInkStrokeIndex, type InkStrokeIndex } from './InkStrokeIndex';
-import { stampCachedStroke } from './InkRasterCache';
+import { stampCachedStroke, releaseDocumentInkCaches } from './InkRasterCache';
 import { useBrushCursor } from '../useBrushCursor';
 import { useInkInputActivity } from '../inkInputActivity';
 import { eraseStrokeRegions, getCommittedStrokeBounds } from './InkTileErase';
@@ -106,6 +106,13 @@ function drawLaser(ctx: CanvasRenderingContext2D, seg: LaserSegment, alpha: numb
 
 // ---- Tiling -------------------------------------------------------------------
 
+/** Release a page's tile pixels as soon as they are replaced or abandoned. A
+ *  tile is 1536² at 3× bake (9.4 MiB), and a dense page is dozens of them. */
+function disposeTiles(tiles: Map<string, HTMLCanvasElement>): void {
+  for (const c of tiles.values()) c.width = 0;
+  tiles.clear();
+}
+
 const TILE = 512; // world units per tile
 const SCALE = PDF_BAKE_SCALE;
 /** Background canvases always kept hot: every anchored page + the current page. */
@@ -114,22 +121,6 @@ const BG_CACHE_MAX = 8;
 
 function tileKey(tx: number, ty: number): string {
   return `${tx}:${ty}`;
-}
-
-function getTile(tiles: Map<string, HTMLCanvasElement>, tx: number, ty: number): HTMLCanvasElement {
-  const key = tileKey(tx, ty);
-  let c = tiles.get(key);
-  if (!c) {
-    c = document.createElement('canvas');
-    c.width = Math.round(TILE * SCALE);
-    c.height = Math.round(TILE * SCALE);
-    tiles.set(key, c);
-  }
-  return c;
-}
-
-function tileCtx(tiles: Map<string, HTMLCanvasElement>, tx: number, ty: number): CanvasRenderingContext2D {
-  return getTile(tiles, tx, ty).getContext('2d')!;
 }
 
 /** Stamp and cache committed pixels, sharing live coverage for version 2 ink. */
@@ -148,6 +139,10 @@ function removeStrokesFromInk(
   eraseStrokeRegions(tiles, grid, skipIds, removed, TILE, SCALE, cachedBounds);
 }
 
+// The free eraser only ever carves tiles that ALREADY exist: a tile with no
+// canvas holds no ink, so there is nothing to carve, and creating one to carve
+// nothing just allocates an empty tile everywhere the disc brushed past.
+
 /** Erase a segment (destination-out) across the tiles it touches. */
 function eraseSegTiles(tiles: Map<string, HTMLCanvasElement>, x1: number, y1: number, x2: number, y2: number, size: number): void {
   const pad = size / 2 + 2;
@@ -155,7 +150,9 @@ function eraseSegTiles(tiles: Map<string, HTMLCanvasElement>, x1: number, y1: nu
   const ty0 = Math.floor((Math.min(y1, y2) - pad) / TILE), ty1 = Math.floor((Math.max(y1, y2) + pad) / TILE);
   for (let ty = ty0; ty <= ty1; ty++) {
     for (let tx = tx0; tx <= tx1; tx++) {
-      const ctx = tileCtx(tiles, tx, ty);
+      const tile = tiles.get(tileKey(tx, ty));
+      if (!tile) continue;
+      const ctx = tile.getContext('2d')!;
       ctx.setTransform(SCALE, 0, 0, SCALE, -tx * TILE * SCALE, -ty * TILE * SCALE);
       drawEraserSegment(ctx, x1, y1, x2, y2, size);
     }
@@ -169,7 +166,9 @@ function eraseDotTiles(tiles: Map<string, HTMLCanvasElement>, x: number, y: numb
   const ty0 = Math.floor((y - pad) / TILE), ty1 = Math.floor((y + pad) / TILE);
   for (let ty = ty0; ty <= ty1; ty++) {
     for (let tx = tx0; tx <= tx1; tx++) {
-      const ctx = tileCtx(tiles, tx, ty);
+      const tile = tiles.get(tileKey(tx, ty));
+      if (!tile) continue;
+      const ctx = tile.getContext('2d')!;
       ctx.setTransform(SCALE, 0, 0, SCALE, -tx * TILE * SCALE, -ty * TILE * SCALE);
       drawEraserDot(ctx, x, y, size);
     }
@@ -280,10 +279,13 @@ const PdfCanvas: React.FC = () => {
   const selectAnchorRef = useRef<{ x: number; y: number } | null>(null);
   const selectionRectRef = useRef<{ x1: number; y1: number; x2: number; y2: number } | null>(null);
   // Drag-move state: absolute snapshots + live delta (no cumulative drift).
+  // `strokes` holds the ORIGINAL objects so the live preview can be drawn with a
+  // dx/dy offset instead of a rebuilt copy of every point each frame.
   const selectDragRef = useRef<{
     start: { x: number; y: number };
     ids: string[];
     snapshots: Map<string, PdfPoint[]>;
+    strokes: PdfStroke[];
     dx: number;
     dy: number;
   } | null>(null);
@@ -321,6 +323,12 @@ const PdfCanvas: React.FC = () => {
     if (rafRef.current) cancelAnimationFrame(rafRef.current);
     if (laserRafRef.current) cancelAnimationFrame(laserRafRef.current);
     if (strokeEraseRef.current?.raf) cancelAnimationFrame(strokeEraseRef.current.raf);
+    // Leaving the editor = leaving the document. Free its rasterized ink and the
+    // shared pixel caches immediately; leaving them to the GC made the next
+    // document (on EITHER surface) start by evicting all of it.
+    disposeTiles(inkTilesRef.current);
+    inkTilesRef.current = new Map();
+    releaseDocumentInkCaches();
     // StrictMode replays effects on mount; cancelled frame IDs must not prevent
     // the replayed sizing/render effects from scheduling their first frame.
     rafRef.current = 0;
@@ -429,19 +437,25 @@ const PdfCanvas: React.FC = () => {
       const strokes = strokesOnly(st.items[st.currentPage] ?? []);
 
       // Live drag-move: selected strokes are excluded from tiles and drawn here
-      // at their snapped positions (snapshot + delta), so they track the cursor.
+      // from their ORIGINAL objects plus the drag delta, so they track the cursor
+      // without cloning their points (or missing the renderer's cached coverage)
+      // on every frame.
       if (selectDragRef.current) {
         const d = selectDragRef.current;
-        const byId = new Map(strokes.map((s) => [s.id, s]));
-        const moved: PdfStroke[] = [];
-        for (const id of d.ids) {
-          const orig = byId.get(id);
-          const snap = d.snapshots.get(id);
-          if (!orig || !snap) continue;
-          moved.push({ ...orig, points: snap.map((p) => ({ ...p, x: p.x + d.dx, y: p.y + d.dy })) });
+        for (const s of d.strokes) drawAnnotatedStroke(ctx, s, d.dx, d.dy);
+        if (st.selectedIds.length > 0) {
+          // Outline the cached bounds translated by the delta — rebuilding the
+          // strokes just to measure them would re-scan every point per frame.
+          ctx.save();
+          ctx.strokeStyle = '#6b5ce7';
+          ctx.lineWidth = 1.5 / (ctx.getTransform().a || 1);
+          ctx.setLineDash([5, 4]);
+          for (const s of d.strokes) {
+            const b = getCommittedStrokeBounds(s);
+            ctx.strokeRect(b.minX + d.dx, b.minY + d.dy, b.maxX - b.minX, b.maxY - b.minY);
+          }
+          ctx.restore();
         }
-        for (const m of moved) drawAnnotatedStroke(ctx, m);
-        if (st.selectedIds.length > 0) drawSelectionHighlight(ctx, moved, st.selectedIds);
       } else if (st.selectedIds.length > 0) {
         drawSelectionHighlight(ctx, strokes, st.selectedIds);
       }
@@ -511,7 +525,11 @@ const PdfCanvas: React.FC = () => {
       if (excludeIds?.has(s.id)) continue;
       stampStroke(tiles, s);
     }
+    const previous = inkTilesRef.current;
     inkTilesRef.current = tiles;
+    // Free the replaced tiles' pixels now rather than leaving a dense page's
+    // ~1 GiB of surfaces for the GC while the new ones are allocated.
+    disposeTiles(previous);
   }, []);
 
   // Structural changes (undo/redo/delete/move/clear) → rebuild tiles
@@ -834,14 +852,21 @@ const PdfCanvas: React.FC = () => {
         if (!alreadySelected) st.setSelectedIds(ids);
 
         // Snapshot the selected strokes' points (absolute), record history once.
+        const idSet = new Set(ids);
         const snapshots = new Map<string, PdfPoint[]>();
+        const dragged: PdfStroke[] = [];
         for (const s of strokes) {
-          if (ids.includes(s.id)) snapshots.set(s.id, s.points.map((p) => ({ ...p })));
+          if (idSet.has(s.id)) { snapshots.set(s.id, s.points.map((p) => ({ ...p }))); dragged.push(s); }
         }
         st.pushHistory(st.currentPage);
-        selectDragRef.current = { start: world, ids, snapshots, dx: 0, dy: 0 };
-        // Hide the selected strokes from tiles; they're drawn live during drag.
-        rebuildInk(new Set(ids));
+        selectDragRef.current = { start: world, ids, snapshots, strokes: dragged, dx: 0, dy: 0 };
+        // Hide the selected strokes from the tiles — they're drawn live during
+        // the drag. Clear ONLY their own pixels: rebuilding the page's tiles here
+        // is what made dragging on a dense page stall for seconds.
+        const tiles = inkTilesRef.current;
+        const index = getInkStrokeIndex(tiles);
+        removeStrokesFromInk(tiles, index.grid, idSet, dragged, index.bounds);
+        index.remove(idSet);
         dirtyRef.current = true;
         scheduleRender();
       } else if (st.selectionMode === 'click') {
@@ -1076,7 +1101,9 @@ const PdfCanvas: React.FC = () => {
       return;
     }
 
-    // End drag-move: commit final positions (bumps epoch → rebuild tiles).
+    // End drag-move: commit the final positions, then stamp ONLY the moved
+    // strokes back into the tiles (a page-wide rebuild would undo the local
+    // erase done at drag start).
     if (selectDragRef.current) {
       const d = selectDragRef.current;
       selectDragRef.current = null;
@@ -1088,6 +1115,13 @@ const PdfCanvas: React.FC = () => {
         })
         .filter((x): x is { id: string; points: PdfPoint[] } => x !== null);
       st.commitStrokesPoints(st.currentPage, entries);
+      const tiles = inkTilesRef.current;
+      const movedIds = new Set(d.snapshots.keys());
+      for (const o of usePdfStore.getState().items[st.currentPage] ?? []) {
+        if (o.type === 'stroke' && movedIds.has(o.id)) stampStroke(tiles, o);
+      }
+      dirtyRef.current = true;
+      scheduleRender();
       return;
     }
 
