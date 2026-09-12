@@ -2,6 +2,7 @@ import { releaseStreamingInk } from '../PdfAnnotation/StreamingInkStroke';
 import React, { useRef, useEffect, useCallback } from 'react';
 import { useCanvasStore } from './useCanvasStore';
 import { getInkStrokeIndex, type InkStrokeIndex } from '../PdfAnnotation/InkStrokeIndex';
+import { bakeDragPreview, drawDragPreview, type DragPreview } from '../PdfAnnotation/InkDragPreview';
 import { useBrushCursor } from '../useBrushCursor';
 import { useInkInputActivity } from '../inkInputActivity';
 import { drawSelectionHighlight, drawSelectionRect } from './CanvasRenderer';
@@ -18,9 +19,11 @@ import { drawAnnotatedStroke } from '../PdfAnnotation/PdfBrushRenderers';
 import { screenToWorld, clampZoom, zoomAt, ERASER_RADIUS } from './constants';
 import {
   stampStroke, eraseSegTiles, eraseDotTiles, drawVisibleTiles, removeStrokesFromTiles,
-  disposeTiles, indexInkStrokes, materializeTiles,
+  disposeTiles, indexInkStrokes, materializeTiles, setTargetBakeScale, targetBakeScale,
+  evictDistantTiles, inkTileBytes, inkTileCount,
 } from './InkTiles';
-import { releaseDocumentInkCaches } from '../PdfAnnotation/InkRasterCache';
+import { reportInkFrame, resetInkFrame } from '../InkFrameStats';
+import { releaseDocumentInkCaches, dropRastersNotAtScale } from '../PdfAnnotation/InkRasterCache';
 import TextNode from './TextNode';
 import ImageObject from './ImageObject';
 import TextObject from './TextObject';
@@ -80,14 +83,18 @@ const InfiniteInkCanvas: React.FC = () => {
   const panAnchorRef = useRef<{ sx: number; sy: number; camX: number; camY: number } | null>(null);
   const selectAnchorRef = useRef<{ x: number; y: number } | null>(null);
   const selectionRectRef = useRef<{ x1: number; y1: number; x2: number; y2: number } | null>(null);
-  /** Active select-drag. `strokes` holds the ORIGINAL stroke objects (kept so
-   *  the live preview can be drawn with a `dx/dy` offset rather than a rebuilt
-   *  copy of every point each frame — see doRender). */
+  /** Active select-drag. `strokes` holds the ORIGINAL stroke objects and
+   *  `preview` a raster of them baked once at drag start — so a frame of the drag
+   *  costs one drawImage instead of re-rendering the whole selection. Re-rendering
+   *  per frame is not just O(points): a version-2 stroke goes through the live
+   *  cache, whose budget a large selection blows, so every frame re-processed the
+   *  point lists it had just evicted. */
   const selectDragRef = useRef<{
     start: { x: number; y: number };
     ids: string[];
     snapshots: Map<string, StrokePoint[]>;
     strokes: Stroke[];
+    preview: DragPreview | null;
     dx: number;
     dy: number;
   } | null>(null);
@@ -147,6 +154,7 @@ const InfiniteInkCanvas: React.FC = () => {
     disposeTiles(inkTilesRef.current);
     inkTilesRef.current = new Map();
     releaseDocumentInkCaches();
+    resetInkFrame();
     // StrictMode replays effects on mount; cancelled frame IDs must not prevent
     // the replayed sizing/render effects from scheduling their first frame.
     rafRef.current = 0;
@@ -254,19 +262,23 @@ const InfiniteInkCanvas: React.FC = () => {
     ctx.scale(cam.zoom, cam.zoom);
 
     // Rasterized ink tiles (O(1) per frame).
-    drawVisibleTiles(ctx, inkTilesRef.current, cam, vw, vh, dpr);
+    const inkStart = performance.now();
+    const visibleTiles = drawVisibleTiles(ctx, inkTilesRef.current, cam, vw, vh, dpr);
 
     // Text nodes are now always-interactive DOM cards rendered ABOVE the canvas
     // (TextObject) — they are intentionally NOT drawn into the vector canvas.
 
-    // Live drag-move of selected strokes. The strokes are drawn from their
-    // ORIGINAL objects with the drag delta, never from a rebuilt copy: cloning
-    // the points each frame is O(points) per frame, and handing the renderer a
-    // new stroke object each frame misses its cached coverage every time, so a
-    // drag re-rasterized the whole selection 60 times a second.
+    // Live drag-move of selected strokes: one blit of the raster baked at drag
+    // start. If a mid-drag zoom has moved the bake scale on, the preview is the
+    // wrong density — fall back to drawing the strokes, which is always right.
     if (selectDragRef.current) {
       const d = selectDragRef.current;
-      for (const s of d.strokes) drawAnnotatedStroke(ctx, s, d.dx, d.dy);
+      const p = d.preview;
+      if (p && p.scale === targetBakeScale(inkTilesRef.current)) {
+        drawDragPreview(ctx, p, d.dx, d.dy);
+      } else {
+        for (const s of d.strokes) drawAnnotatedStroke(ctx, s, d.dx, d.dy);
+      }
     } else if (state.selectedIds.length > 0) {
       drawSelectionHighlight(ctx, state.objects, state.selectedIds);
     }
@@ -293,6 +305,15 @@ const InfiniteInkCanvas: React.FC = () => {
     }
 
     ctx.restore();
+
+    reportInkFrame({
+      drawMs: performance.now() - inkStart,
+      visibleTiles,
+      tileCount: inkTileCount(inkTilesRef.current),
+      tileBytes: inkTileBytes(inkTilesRef.current),
+      bakeScale: targetBakeScale(inkTilesRef.current),
+    });
+
     dirtyRef.current = false;
   }, []);
 
@@ -428,37 +449,66 @@ const InfiniteInkCanvas: React.FC = () => {
     });
   }, [flushStrokeWipe, doRender]);
 
+  /** True while a pointer gesture owns the tiles. Rasterizing or reclaiming them
+   *  then would be wrong: a wipe's erased strokes are still in the index (only
+   *  suppressed via pendingIds until pointer-up), and a free-eraser carve is not
+   *  committed to the store until pointer-up either — so a rebuild would
+   *  resurrect erased ink. Nothing needs it either, since a gesture does not move
+   *  the camera. */
+  const inkGestureActive = useCallback(() => (
+    currentStrokeRef.current !== null || strokeEraseRef.current !== null
+    || selectDragRef.current !== null || isDrawingRef.current
+  ), []);
+
   // Materialize the tiles the viewport needs, in one pass per call; if the view
-  // needs more than one pass' budget (wide zoom-out), keep going frame by frame
-  // rather than blocking on the whole document at once.
+  // needs more than one pass' budget (wide zoom-out, or a re-bake after zooming),
+  // keep going frame by frame rather than blocking on the whole document at once.
   const runMaterialize = useCallback((): number => {
     const container = containerRef.current;
-    if (!container) return 0;
+    if (!container || inkGestureActive()) return 0;
     const rect = container.getBoundingClientRect();
     const { camera: cam } = useCanvasStore.getState();
-    const { materialized, remaining } = materializeTiles(inkTilesRef.current, cam, rect.width, rect.height);
-    if (materialized > 0) dirtyRef.current = true;
-    return remaining;
-  }, []);
+    const res = materializeTiles(inkTilesRef.current, cam, rect.width, rect.height, dprRef.current);
+    if (res.materialized > 0) dirtyRef.current = true;
+    return res.remaining;
+  }, [inkGestureActive]);
 
   const scheduleMaterialize = useCallback(() => {
     if (materializeRafRef.current) return;
     const step = () => {
       materializeRafRef.current = 0;
-      if (runMaterialize() > 0) materializeRafRef.current = requestAnimationFrame(step);
+      const remaining = runMaterialize();
+      if (remaining === 0) {
+        // Reclaim tiles the camera has left behind, and rasters of a bake scale
+        // we no longer use — only once the view is settled and no gesture is in
+        // flight, so a pan or a wipe never does book-keeping work mid-flight.
+        const container = containerRef.current;
+        const { camera: cam } = useCanvasStore.getState();
+        if (container && !inkGestureActive()) {
+          const rect = container.getBoundingClientRect();
+          evictDistantTiles(inkTilesRef.current, cam, rect.width, rect.height);
+          dropRastersNotAtScale(targetBakeScale(inkTilesRef.current));
+        }
+      } else {
+        materializeRafRef.current = requestAnimationFrame(step);
+      }
       dirtyRef.current = true;
       if (rafRef.current) { cancelAnimationFrame(rafRef.current); rafRef.current = 0; }
       doRender();
     };
     materializeRafRef.current = requestAnimationFrame(step);
-  }, [runMaterialize, doRender]);
+  }, [runMaterialize, inkGestureActive, doRender]);
 
   useEffect(() => {
     dirtyRef.current = true;
-    if (runMaterialize() > 0) scheduleMaterialize();
+    // Schedule only — never materialize synchronously here. This effect runs on
+    // every camera change, i.e. on every wheel tick and pointermove of a pan, and
+    // rasterizing tiles inline is what made zooming stutter.
+    setTargetBakeScale(inkTilesRef.current, useCanvasStore.getState().camera.zoom * dprRef.current);
+    scheduleMaterialize();
     scheduleRender();
   }, [objects, camera, activeTool, brushSettings, showDotGrid, editingTextId, selectedIds, selectionMode,
-      runMaterialize, scheduleMaterialize, scheduleRender]);
+      scheduleMaterialize, scheduleRender]);
 
   // Structural ops (undo/redo/delete/move/clear/load) → rebuild ink tiles from
   // the vector source of truth. The document is INDEXED whole but RASTERIZED
@@ -470,12 +520,20 @@ const InfiniteInkCanvas: React.FC = () => {
     const previous = inkTilesRef.current;
     const tiles = new Map<string, HTMLCanvasElement>();
     indexInkStrokes(tiles, strokes);
+    setTargetBakeScale(tiles, state.camera.zoom * dprRef.current);
     inkTilesRef.current = tiles;
     disposeTiles(previous);
+    // Any in-flight gesture captured the OLD layer's index/grid/bounds. Its
+    // repairs would write into disposed canvases (`width = 0`), which silently
+    // turns the repair into a no-op — an erase that appears to do nothing. Drop
+    // the gesture instead: the next pointermove falls through its empty branch
+    // and pointer-up cannot commit stale state.
+    strokeEraseRef.current = null;
+    selectDragRef.current = null;
     dirtyRef.current = true;
-    if (runMaterialize() > 0) scheduleMaterialize();
+    scheduleMaterialize();
     scheduleRender();
-  }, [renderEpoch, runMaterialize, scheduleMaterialize, scheduleRender]);
+  }, [renderEpoch, scheduleMaterialize, scheduleRender]);
 
   // Drop a queued screenshot at the current viewport center (world coords).
   // The image object stays a DOM layer BELOW the canvas so ink overdraws it.
@@ -553,7 +611,11 @@ const InfiniteInkCanvas: React.FC = () => {
     const index = getInkStrokeIndex(tiles);
     removeStrokesFromTiles(tiles, index.grid, idSet, strokes, index.bounds);
     index.remove(idSet);
-    selectDragRef.current = { start: world, ids, snapshots, strokes, dx: 0, dy: 0 };
+    selectDragRef.current = {
+      start: world, ids, snapshots, strokes,
+      preview: bakeDragPreview(strokes, targetBakeScale(tiles)),
+      dx: 0, dy: 0,
+    };
     dirtyRef.current = true;
     scheduleRender();
   };

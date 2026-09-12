@@ -168,8 +168,13 @@ export function renderStrokeOnce(
   //    composite rounds to 8 bits, so folding the two together would shift edge
   //    pixels by a level. Identity transform, so `blur(n px)` means n device px
   //    whatever the engine does with filter lengths under a transform.
+  //
+  //    The radius is the stroke's WORLD feather converted with THIS raster's own
+  //    px-per-world factor — the raster's scale, never the live layer's. Using
+  //    the wrong one is invisible while the two are equal and gives a 3×-to-12×
+  //    too-large halo as soon as a tile is baked at another density.
   const avgWidth = (widthSum + samples[n - 1].width) / n;
-  const blurPx = Math.round(resolveFeatherWorld(stroke, [avgWidth]) * SCALE * 16) / 16;
+  const blurPx = Math.round(resolveFeatherWorld(stroke, [avgWidth]) * scale * 16) / 16;
   const alpha = markerStrokeAlpha(
     stroke.opacity,
     (pressureSum + samples[n - 1].p) / n,
@@ -178,7 +183,11 @@ export function renderStrokeOnce(
   const blurred = document.createElement('canvas');
   blurred.width = width; blurred.height = height;
   const bctx = blurred.getContext('2d')!;
-  if (blurPx >= 1 / 16) bctx.filter = `blur(${blurPx}px)`;
+  // 1/64 px, not 1/16: a thin stroke's width-derived feather is ~0.04 world px,
+  // which is 0.12 px at a 3x bake but only 0.04 px at 1x. A coarse threshold
+  // would silently drop the feather from committed hairlines exactly when the
+  // tile is baked at the display's density.
+  if (blurPx >= 1 / 64) bctx.filter = `blur(${blurPx}px)`;
   bctx.drawImage(coverage, 0, 0);
   if (alpha >= 1) return blurred;
 
@@ -355,7 +364,7 @@ export class StreamingInkStroke {
       out.clearRect(0, 0, PIXELS, PIXELS);
       out.save();
       if (this.grain) out.globalAlpha = clamp01(this.stroke.opacity * 0.85);
-      if (blur >= 1 / 16) out.filter = `blur(${blur}px)`;
+      if (blur >= 1 / 64) out.filter = `blur(${blur}px)`;
       out.drawImage(this.scratch, 0, 0);
       out.restore();
       if (this.grain && (tile.grain || this.grainPreview.has(key))) {

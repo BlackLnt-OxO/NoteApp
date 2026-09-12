@@ -1,7 +1,7 @@
 import { boundsIntersectRect, type Bounds } from './PdfEngine';
 import type { PdfStroke } from './PdfTypes';
 import { getCommittedStrokeBounds } from './InkStrokeIndex';
-import { getStrokeRaster, drawStrokeRaster } from './InkRasterCache';
+import { getStrokeRaster, drawStrokeRaster, tileScaleOf } from './InkRasterCache';
 export { getCommittedStrokeBounds } from './InkStrokeIndex';
 
 
@@ -71,23 +71,31 @@ export function eraseStrokeRegions(
     if (!target) continue;
     const survivors = (grid.get(key) ?? []).filter(s => !skipIds.has(s.id));
     if (survivors.length === 0) { tiles.delete(key); continue; }
+    // The repair rectangle and every raster that goes back in are in THIS tile's
+    // own pixel space. The `scale` argument is only the requested/default one —
+    // tiles at another bake scale coexist, so read the tile's (see tileScaleOf).
+    const s = tileScaleOf(canvas);
+    // Align repairs to the tile's baked pixels, and keep the margin meaningful at
+    // any density: 3 world units is below the brush-blur fringe at 3× but only
+    // 1.5 px at 0.5×, which would clip the repaired edge.
+    const edge = Math.max(pad, pad / s);
     const scratch = getRepairCanvas(canvas.width, canvas.height);
     const ctx = scratch.getContext('2d')!;
     const sep = key.indexOf(':');
     const ox = Number(key.slice(0, sep)) * tileSize;
     const oy = Number(key.slice(sep + 1)) * tileSize;
-    const x = Math.round((region.minX - ox) * scale);
-    const y = Math.round((region.minY - oy) * scale);
-    const width = Math.round((region.maxX - region.minX) * scale);
-    const height = Math.round((region.maxY - region.minY) * scale);
+    const x = Math.round((region.minX - ox) * s);
+    const y = Math.round((region.minY - oy) * s);
+    const width = Math.round((region.maxX - region.minX) * s);
+    const height = Math.round((region.maxY - region.minY) * s);
     ctx.save();
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.clearRect(0, 0, scratch.width, scratch.height);
-    ctx.setTransform(scale, 0, 0, scale, -ox * scale, -oy * scale);
+    ctx.setTransform(s, 0, 0, s, -ox * s, -oy * s);
     for (const stroke of survivors) {
-      if (!boundsIntersectRect(boundsOf(stroke), region.minX - pad, region.minY - pad, region.maxX + pad, region.maxY + pad)) continue;
-      const raster = getStrokeRaster(stroke, ox / tileSize, oy / tileSize, tileSize, scale);
-      drawStrokeRaster(ctx, stroke, raster, scale);
+      if (!boundsIntersectRect(boundsOf(stroke), region.minX - edge, region.minY - edge, region.maxX + edge, region.maxY + edge)) continue;
+      const raster = getStrokeRaster(stroke, ox / tileSize, oy / tileSize, tileSize, s);
+      drawStrokeRaster(ctx, stroke, raster, s);
     }
     ctx.restore();
     target.save();

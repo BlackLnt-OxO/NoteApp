@@ -21,11 +21,13 @@ import { releaseStreamingInk } from './StreamingInkStroke';
 import React, { useRef, useEffect, useCallback } from 'react';
 import { usePdfStore } from './PdfStore';
 import { getInkStrokeIndex, type InkStrokeIndex } from './InkStrokeIndex';
-import { stampCachedStroke, releaseDocumentInkCaches } from './InkRasterCache';
+import { stampCachedStroke, releaseDocumentInkCaches, tileScaleOf } from './InkRasterCache';
 import { useBrushCursor } from '../useBrushCursor';
 import { useInkInputActivity } from '../inkInputActivity';
 import { eraseStrokeRegions, getCommittedStrokeBounds } from './InkTileErase';
 import { usePdfToolbarStore } from '../InfiniteInkCanvas/useToolbarStore';
+import { indexInkStrokes, materializeTiles } from '../InfiniteInkCanvas/InkTiles';
+import { bakeDragPreview, drawDragPreview, type DragPreview } from './InkDragPreview';
 import { useNoteStore } from '../../store';
 import { themeCanvasColors } from '../../themeColors';
 import {
@@ -152,8 +154,9 @@ function eraseSegTiles(tiles: Map<string, HTMLCanvasElement>, x1: number, y1: nu
     for (let tx = tx0; tx <= tx1; tx++) {
       const tile = tiles.get(tileKey(tx, ty));
       if (!tile) continue;
+      const s = tileScaleOf(tile);
       const ctx = tile.getContext('2d')!;
-      ctx.setTransform(SCALE, 0, 0, SCALE, -tx * TILE * SCALE, -ty * TILE * SCALE);
+      ctx.setTransform(s, 0, 0, s, -tx * TILE * s, -ty * TILE * s);
       drawEraserSegment(ctx, x1, y1, x2, y2, size);
     }
   }
@@ -168,8 +171,9 @@ function eraseDotTiles(tiles: Map<string, HTMLCanvasElement>, x: number, y: numb
     for (let tx = tx0; tx <= tx1; tx++) {
       const tile = tiles.get(tileKey(tx, ty));
       if (!tile) continue;
+      const s = tileScaleOf(tile);
       const ctx = tile.getContext('2d')!;
-      ctx.setTransform(SCALE, 0, 0, SCALE, -tx * TILE * SCALE, -ty * TILE * SCALE);
+      ctx.setTransform(s, 0, 0, s, -tx * TILE * s, -ty * TILE * s);
       drawEraserDot(ctx, x, y, size);
     }
   }
@@ -260,6 +264,8 @@ const PdfCanvas: React.FC = () => {
   const bgCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const bgCacheRef = useRef<Map<number, HTMLCanvasElement>>(new Map());
   const inkTilesRef = useRef<Map<string, HTMLCanvasElement>>(new Map());
+  /** Pending frame of the lazy tile materialization chain (see InkTiles). */
+  const materializeRafRef = useRef(0);
 
   const dprRef = useRef(1);
   const rafRef = useRef(0);
@@ -286,6 +292,9 @@ const PdfCanvas: React.FC = () => {
     ids: string[];
     snapshots: Map<string, PdfPoint[]>;
     strokes: PdfStroke[];
+    /** Raster of the dragged strokes, baked once at drag start — see
+     *  InkDragPreview. */
+    preview: DragPreview | null;
     dx: number;
     dy: number;
   } | null>(null);
@@ -323,6 +332,7 @@ const PdfCanvas: React.FC = () => {
     if (rafRef.current) cancelAnimationFrame(rafRef.current);
     if (laserRafRef.current) cancelAnimationFrame(laserRafRef.current);
     if (strokeEraseRef.current?.raf) cancelAnimationFrame(strokeEraseRef.current.raf);
+    if (materializeRafRef.current) cancelAnimationFrame(materializeRafRef.current);
     // Leaving the editor = leaving the document. Free its rasterized ink and the
     // shared pixel caches immediately; leaving them to the GC made the next
     // document (on EITHER surface) start by evicting all of it.
@@ -333,6 +343,7 @@ const PdfCanvas: React.FC = () => {
     // the replayed sizing/render effects from scheduling their first frame.
     rafRef.current = 0;
     laserRafRef.current = 0;
+    materializeRafRef.current = 0;
     if (strokeEraseRef.current) strokeEraseRef.current.raf = 0;
   }, []);
 
@@ -442,7 +453,10 @@ const PdfCanvas: React.FC = () => {
       // on every frame.
       if (selectDragRef.current) {
         const d = selectDragRef.current;
-        for (const s of d.strokes) drawAnnotatedStroke(ctx, s, d.dx, d.dy);
+        // One blit of the raster baked at drag start; the strokes themselves are
+        // only drawn when the raster was refused (too large).
+        if (d.preview) drawDragPreview(ctx, d.preview, d.dx, d.dy);
+        else for (const s of d.strokes) drawAnnotatedStroke(ctx, s, d.dx, d.dy);
         if (st.selectedIds.length > 0) {
           // Outline the cached bounds translated by the delta — rebuilding the
           // strokes just to measure them would re-scan every point per frame.
@@ -517,20 +531,71 @@ const PdfCanvas: React.FC = () => {
 
   // ---- Rebuild ink tiles from vector source of truth --------------------------
 
-  const rebuildInk = useCallback((excludeIds?: Set<string>) => {
+  /** True while a pointer gesture owns the tiles (see the canvas's twin). */
+  const inkGestureActive = useCallback(() => (
+    currentStrokeRef.current !== null || eraserStrokeRef.current !== null
+    || strokeEraseRef.current !== null || selectDragRef.current !== null || isDrawingRef.current
+  ), []);
+
+  /** Bring the tiles the camera is looking at up to date; one budgeted pass per
+   *  call. Returns how many still need work, so the caller can continue on the
+   *  next frame instead of blocking this one. */
+  const materializePage = useCallback((): number => {
+    const container = containerRef.current;
+    if (!container || inkGestureActive()) return 0;
+    const st = usePdfStore.getState();
+    if (!st.pageSizes[st.currentPage]) return 0;
+    const rect = container.getBoundingClientRect();
+    const res = materializeTiles(
+      inkTilesRef.current,
+      { x: st.camera.x, y: st.camera.y, zoom: st.camera.zoom },
+      rect.width, rect.height, dprRef.current,
+      { fixedScale: SCALE },
+    );
+    if (res.materialized > 0) dirtyRef.current = true;
+    return res.remaining;
+  }, [inkGestureActive]);
+
+  const scheduleMaterialize = useCallback(() => {
+    if (materializeRafRef.current) return;
+    const step = () => {
+      materializeRafRef.current = 0;
+      if (materializePage() > 0) materializeRafRef.current = requestAnimationFrame(step);
+      dirtyRef.current = true;
+      if (rafRef.current) { cancelAnimationFrame(rafRef.current); rafRef.current = 0; }
+      doRender();
+    };
+    materializeRafRef.current = requestAnimationFrame(step);
+  }, [materializePage, doRender]);
+
+  /**
+   * Re-index the page and rasterize ONLY the tiles the camera is looking at.
+   *
+   * This used to stamp every stroke into tiles on every structural change, so
+   * deleting one annotation on a heavily annotated page re-rasterized the whole
+   * page — the same cost the infinite canvas had. Indexing is cheap (bounds and
+   * segment blocks, no pixels) and a lazily built tile is byte-identical to an
+   * eagerly built one, so the page can be indexed whole and rasterized where it
+   * is seen. The PDF keeps a FIXED bake scale: a page is a handful of tiles, and
+   * its background is baked at PDF_BAKE_SCALE, so ink at a coarser density would
+   * look softer than the page text beside it.
+   */
+  const rebuildInk = useCallback(() => {
     const st = usePdfStore.getState();
     const strokes = strokesOnly(st.items[st.currentPage] ?? []);
     const tiles = new Map<string, HTMLCanvasElement>();
-    for (const s of strokes) {
-      if (excludeIds?.has(s.id)) continue;
-      stampStroke(tiles, s);
-    }
+    indexInkStrokes(tiles, strokes);
     const previous = inkTilesRef.current;
     inkTilesRef.current = tiles;
     // Free the replaced tiles' pixels now rather than leaving a dense page's
     // ~1 GiB of surfaces for the GC while the new ones are allocated.
     disposeTiles(previous);
-  }, []);
+    // A gesture captured the OLD layer's index/grid/bounds; its repairs would now
+    // write into disposed canvases, which silently becomes a no-op. Drop it.
+    strokeEraseRef.current = null;
+    selectDragRef.current = null;
+    scheduleMaterialize();
+  }, [scheduleMaterialize]);
 
   // Structural changes (undo/redo/delete/move/clear) → rebuild tiles
   useEffect(() => {
@@ -539,6 +604,12 @@ const PdfCanvas: React.FC = () => {
     dirtyRef.current = true;
     scheduleRender();
   }, [renderEpoch, pdfDoc, rebuildInk, scheduleRender]);
+
+  // Camera moved (pan / zoom) → the view may want tiles it has not built yet.
+  // Scheduled, never materialized inline: this runs on every wheel tick.
+  useEffect(() => {
+    scheduleMaterialize();
+  }, [camera, scheduleMaterialize]);
 
   // Dot-grid toggle → repaint
   useEffect(() => {
@@ -576,6 +647,7 @@ const PdfCanvas: React.FC = () => {
       // half-rendered (or just-cleared) page mid-switch.
       bgCanvasRef.current = bg;
       rebuildInk();
+      scheduleMaterialize();
       dirtyRef.current = true;
       scheduleRender();
       // Background is ready — drop the open/rendering overlay.
@@ -859,7 +931,11 @@ const PdfCanvas: React.FC = () => {
           if (idSet.has(s.id)) { snapshots.set(s.id, s.points.map((p) => ({ ...p }))); dragged.push(s); }
         }
         st.pushHistory(st.currentPage);
-        selectDragRef.current = { start: world, ids, snapshots, strokes: dragged, dx: 0, dy: 0 };
+        selectDragRef.current = {
+          start: world, ids, snapshots, strokes: dragged,
+          preview: bakeDragPreview(dragged, SCALE),
+          dx: 0, dy: 0,
+        };
         // Hide the selected strokes from the tiles — they're drawn live during
         // the drag. Clear ONLY their own pixels: rebuilding the page's tiles here
         // is what made dragging on a dense page stall for seconds.

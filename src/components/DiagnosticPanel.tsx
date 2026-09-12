@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
+import { readInkFrame, type InkFrameStats } from './InkFrameStats';
 import { useNoteStore } from '../store';
 import { fs, fsn } from '../utils';
 import type { DiagConfig, DiagStatus, PreviewUpdate, CaptureProgress, EventLoopStats } from '../types';
@@ -72,6 +73,45 @@ const DiagnosticPanel: React.FC<DiagnosticPanelProps> = ({ onClose, visible }) =
   const [rendererLoopStats, setRendererLoopStats] = useState<{ p95Ms: number; maxMs: number; over50ms: number } | null>(null);
   const [rafStats, setRafStats] = useState<{ maxFrameMs: number; over33: number; over50: number; over100: number } | null>(null);
   const [mouseDelay, setMouseDelay] = useState<{ p95Ms: number; maxMs: number } | null>(null);
+  /** Live ink readout: frame pacing sampled here plus what the ink layer reported
+   *  for its last frame. Independent of the long-screenshot diagnostic — this is
+   *  for judging whether a change helped, so it runs whenever the panel is open. */
+  const [inkLive, setInkLive] = useState<(InkFrameStats & {
+    frames: number; p50Ms: number; p95Ms: number; worstMs: number; over33: number; over50: number;
+  }) | null>(null);
+
+  // Live frame pacing + ink layer readout (see inkLive above). The sampler is its
+  // own rAF loop, so it measures the frames the app is actually presenting rather
+  // than the ones the diagnostic asked for.
+  useEffect(() => {
+    if (!visible) { setInkLive(null); return; }
+    const intervals: number[] = [];
+    let last = performance.now();
+    let running = true;
+    let rafId = requestAnimationFrame(function frame() {
+      if (!running) return;
+      const now = performance.now();
+      intervals.push(now - last);
+      last = now;
+      if (intervals.length > 240) intervals.shift();
+      rafId = requestAnimationFrame(frame);
+    });
+    const clamp1 = (v: number) => Math.round(v * 10) / 10;
+    const timer = setInterval(() => {
+      const sorted = [...intervals].sort((a, b) => a - b);
+      const at = (q: number) => (sorted.length ? clamp1(sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * q))]) : 0);
+      setInkLive({
+        ...readInkFrame(),
+        frames: sorted.length,
+        p50Ms: at(0.5),
+        p95Ms: at(0.95),
+        worstMs: sorted.length ? clamp1(sorted[sorted.length - 1]) : 0,
+        over33: intervals.filter((f) => f > 33).length,
+        over50: intervals.filter((f) => f > 50).length,
+      });
+    }, 500);
+    return () => { running = false; cancelAnimationFrame(rafId); clearInterval(timer); };
+  }, [visible]);
 
   // Load modes list
   useEffect(() => {
@@ -534,6 +574,16 @@ const DiagnosticPanel: React.FC<DiagnosticPanelProps> = ({ onClose, visible }) =
                 &gt;33ms={rafStats.over33}次 |
                 &gt;50ms={rafStats.over50}次 |
                 &gt;100ms={rafStats.over100}次
+              </div>
+            )}
+
+            {inkLive && (
+              <div style={{ whiteSpace: 'pre-line' }}>
+                {`Ink frame: p50=${inkLive.p50Ms}ms p95=${inkLive.p95Ms}ms worst=${inkLive.worstMs}ms over33=${inkLive.over33} over50=${inkLive.over50} (${inkLive.frames} frames)
+`
+                  + `Ink layer: draw=${inkLive.drawMs.toFixed(1)}ms (worst ${inkLive.worstDrawMs.toFixed(1)}ms) | `
+                  + `tiles=${inkLive.tileCount} (${inkLive.visibleTiles} on screen) | `
+                  + `${(inkLive.tileBytes / 1048576).toFixed(1)} MiB | bake=${inkLive.bakeScale}x`}
               </div>
             )}
 

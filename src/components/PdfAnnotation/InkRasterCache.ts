@@ -25,6 +25,50 @@ let bytes = 0, hits = 0, misses = 0;
 
 export function inkRasterCacheStats() { return { bytes, limit: LIMIT, hits, misses, entries: lru.size }; }
 
+// ---- Per-tile bake scale ------------------------------------------------------
+//
+// Each tile canvas records the scale it was rasterized at, because tiles at
+// different scales coexist in normal use: the materialization chain, a pen-up
+// stamp and a pan all create tiles while others are still at the previous
+// density. Every writer must use the scale OF THE TILE IT IS WRITING INTO —
+// the dirty-region repair computes its copy-back rectangle in that tile's pixel
+// space, so a mismatched scale moves ink rather than blurring it.
+//
+// It cannot be a property of the tile MAP for the same reason. Lives here
+// because this is the lowest module that creates tiles (see stampCachedStroke).
+
+const tileScales = new WeakMap<HTMLCanvasElement, number>();
+
+export function registerTileScale(canvas: HTMLCanvasElement, scale: number): void {
+  tileScales.set(canvas, scale);
+}
+
+/** The scale a tile was rasterized at. Tiles made before the scale was tracked
+ *  (or by a caller that does not track it) were baked at the legacy 3×. */
+export function tileScaleOf(canvas: HTMLCanvasElement): number {
+  return tileScales.get(canvas) ?? LEGACY_BAKE_SCALE;
+}
+
+/** The bake scale every tile used before it became adaptive, and still the
+ *  fallback for surfaces that keep a fixed one (the PDF page). */
+export const LEGACY_BAKE_SCALE = 3;
+
+/**
+ * Drop cached per-stroke rasters that were rendered for another bake scale.
+ *
+ * The cache key already includes the scale, so a stale raster can never be drawn
+ * at the wrong size — but it IS still counted against the byte ceiling, so after
+ * a re-bake two or three scales' worth of the same strokes compete for the same
+ * budget and evict each other during a repair. A miss is cheap now (one pass),
+ * so throwing them away on a scale change is strictly better than LRU thrash.
+ */
+export function dropRastersNotAtScale(scale: number): void {
+  for (const entry of [...lru.keys()]) {
+    if (entry.key.endsWith(`:${scale}`)) continue;
+    bytes -= entry.bytes; lru.delete(entry); entry.owner.delete(entry.key); entry.image.width = 0;
+  }
+}
+
 /**
  * Drop every pixel cache both ink surfaces share.
  *
@@ -55,10 +99,14 @@ export function getStrokeRaster(stroke: PdfStroke, tx: number, ty: number, tileS
   if (cached) { hits++; lru.delete(cached); lru.set(cached, true); return cached; }
   misses++;
   const b = getCommittedStrokeBounds(stroke), ox = tx * tileSize, oy = ty * tileSize;
-  const x0 = Math.max(0, Math.floor((b.minX - ox - 3) * scale));
-  const y0 = Math.max(0, Math.floor((b.minY - oy - 3) * scale));
-  const x1 = Math.min(tileSize * scale, Math.ceil((b.maxX - ox + 3) * scale));
-  const y1 = Math.min(tileSize * scale, Math.ceil((b.maxY - oy + 3) * scale));
+  // Pad the crop by at least 3 world units (the blur's fringe, capped at 0.6
+  // world px) and at least 3 BAKED pixels — at a 0.25× bake the world figure
+  // alone would be a single pixel, which the feathered edge would spill past.
+  const cropPad = Math.max(3, 3 / scale);
+  const x0 = Math.max(0, Math.floor((b.minX - ox - cropPad) * scale));
+  const y0 = Math.max(0, Math.floor((b.minY - oy - cropPad) * scale));
+  const x1 = Math.min(tileSize * scale, Math.ceil((b.maxX - ox + cropPad) * scale));
+  const y1 = Math.min(tileSize * scale, Math.ceil((b.maxY - oy + cropPad) * scale));
   const w = Math.max(1, x1 - x0), h = Math.max(1, y1 - y0);
   // World-space rect this raster covers — what the renderers slice to.
   const minX = ox + x0 / scale, minY = oy + y0 / scale;
@@ -133,12 +181,19 @@ export function stampCachedStroke(tiles: Map<string, HTMLCanvasElement>, stroke:
       const key = `${tx}:${ty}`;
       let tile = tiles.get(key);
       if (!tile) {
-        tile = document.createElement('canvas'); tile.width = tile.height = Math.round(tileSize * scale); tiles.set(key, tile);
+        tile = document.createElement('canvas');
+        tile.width = tile.height = Math.round(tileSize * scale);
+        registerTileScale(tile, scale);
+        tiles.set(key, tile);
       }
-      const raster = getStrokeRaster(stroke, tx, ty, tileSize, scale, prepare);
+      // An EXISTING tile keeps its own density: writing into it at another scale
+      // would place this stroke at the wrong size within the tile. It gets
+      // upgraded as a whole by the materialization chain, not piecemeal here.
+      const s = tileScaleOf(tile);
+      const raster = getStrokeRaster(stroke, tx, ty, tileSize, s, prepare);
       const ctx = tile.getContext('2d')!;
-      ctx.setTransform(scale, 0, 0, scale, -tx * tileSize * scale, -ty * tileSize * scale);
-      drawStrokeRaster(ctx, stroke, raster, scale);
+      ctx.setTransform(s, 0, 0, s, -tx * tileSize * s, -ty * tileSize * s);
+      drawStrokeRaster(ctx, stroke, raster, s);
     }
   }
   // Streaming ink is deliberately NOT released here. Keeping it lets a later
