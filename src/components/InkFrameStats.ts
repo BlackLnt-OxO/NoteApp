@@ -59,6 +59,13 @@ export interface InkFrameStats {
  *  cover one wheel gesture's momentum, not so long that idle frames join in. */
 export const CAMERA_MOVE_WINDOW_MS = 150;
 
+/** How long the camera must be still before the ink layer may spend real time on
+ *  it — re-rasterizing tiles at a sharper bake scale, reclaiming distant tiles.
+ *  Long enough to cover the gaps inside one wheel/pan gesture (so a gesture is
+ *  never interrupted), short enough that the sharpening lands while the user is
+ *  still looking at the spot they zoomed to. */
+export const CAMERA_SETTLE_MS = 220;
+
 /** ~10 s at 60 Hz. Bounded so the numbers on screen are always about recent use
  *  and the arrays cannot grow without limit. */
 const WINDOW = 600;
@@ -111,6 +118,16 @@ export function noteCameraMove(): void {
  *  pan or a zoom gesture rather than to writing or a cursor blink. */
 export function cameraMoving(): boolean {
   return performance.now() - cameraMovedAt < CAMERA_MOVE_WINDOW_MS;
+}
+
+/** Milliseconds since the last camera change (Infinity if there has been none). */
+export function msSinceCameraMove(): number {
+  return performance.now() - cameraMovedAt;
+}
+
+/** Whether the camera has been still long enough to do expensive work for it. */
+export function cameraSettled(): boolean {
+  return msSinceCameraMove() >= CAMERA_SETTLE_MS;
 }
 
 function summarize(frames: number[]): FrameWindow {

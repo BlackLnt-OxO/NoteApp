@@ -235,13 +235,13 @@ export function rebuildTiles(
 /** Tiles kept rasterized beyond the viewport, so a short pan doesn't have to
  *  wait for a new tile to be built. */
 const MATERIALIZE_MARGIN = 1;
-/** Work allowed per materialization pass. A BYTE budget, because "32 tiles" is
- *  300 MiB at a 3× bake and 2 MiB at 0.25× — the pass must not blow the frame
- *  budget at one density and crawl at another. A dense tile can still overshoot
- *  on its own (slicing could only happen between tiles), but it shrinks with the
- *  square of the bake scale. */
-const MATERIALIZE_BUDGET_BYTES = 12 * 1024 * 1024;
-const MATERIALIZE_MAX_TILES = 64;
+/** Time a materialization pass may spend rasterizing, in ms. TIME, not a tile
+ *  count or a byte count: the cost of a tile depends on how much ink is in it,
+ *  which varies by orders of magnitude across a document — a byte budget bounds
+ *  MEMORY but lets one dense tile block the frame for as long as it takes, which
+ *  is exactly the "crossing a zoom level stalls for seconds" symptom. A build is
+ *  therefore sliced BY STROKE across frames (see TileBuild). */
+const MATERIALIZE_BUDGET_MS = 6;
 /** Tiles this far outside the viewport may be reclaimed once the layer exceeds
  *  its budget. Comfortably beyond MATERIALIZE_MARGIN so a short pan never
  *  discards what it is about to need. */
@@ -263,8 +263,17 @@ export function indexInkStrokes(
 
 export interface MaterializeOptions {
   margin?: number;
-  budgetBytes?: number;
-  maxTiles?: number;
+  /** Rasterization time this pass may use (default MATERIALIZE_BUDGET_MS). */
+  budgetMs?: number;
+  /** Re-rasterize tiles that are already built, at the current bake scale.
+   *
+   *  The editor turns this OFF while the camera is moving. Crossing a bake step
+   *  means every visible tile has to be re-rasterized at up to 9× the pixels, and
+   *  paying that during the gesture is felt as a stall — while the ink already on
+   *  screen is only slightly soft. So the upgrade waits for the view to settle;
+   *  absent tiles are built either way, since there is nothing to show without
+   *  them. */
+  rebake?: boolean;
   /** Strokes the caller has erased VISUALLY but not yet committed to the store.
    *  They are still in the index, so re-rasterizing their tile would resurrect
    *  them — see the gesture gate in InfiniteInkCanvas, which normally means this
@@ -278,51 +287,75 @@ export interface MaterializeOptions {
 }
 
 /**
- * Rasterize ONE tile from the index's tile bucket (which preserves document
- * order, so a free-eraser carve lands on top of exactly what it covered), at
- * `scale` pixels per world unit.
+ * A tile rasterization in progress. Built up stroke by stroke across as many
+ * frames as it takes, so no single frame is ever stuck behind one dense tile.
  *
- * The new canvas is rasterized COMPLETELY before it replaces the old one, so a
- * re-bake never shows a half-built or blank tile: the old tile keeps rendering
- * until the replacement is ready, and is freed the moment it is swapped out.
- * Returns false when there is nothing to put in this tile.
+ * The strokes come from the index's tile bucket, which preserves document order
+ * — so a free-eraser carve lands on top of exactly what it covered — and the
+ * finished canvas replaces the old tile only once it is COMPLETE. Until then the
+ * old tile keeps rendering, so a re-bake never shows a blank or half-built tile.
  */
-function materializeTile(
-  tiles: Map<string, HTMLCanvasElement>,
+interface TileBuild {
+  key: string;
+  tx: number;
+  ty: number;
+  scale: number;
+  canvas: HTMLCanvasElement;
+  ctx: CanvasRenderingContext2D;
+  strokes: Stroke[];
+  /** Next stroke to rasterize. */
+  next: number;
+  /** Whether anything was actually drawn (skipIds can suppress every stroke). */
+  drew: boolean;
+}
+
+const buildStates = new WeakMap<Map<string, HTMLCanvasElement>, Map<string, TileBuild>>();
+
+function buildsFor(tiles: Map<string, HTMLCanvasElement>): Map<string, TileBuild> {
+  let builds = buildStates.get(tiles);
+  if (!builds) { builds = new Map(); buildStates.set(tiles, builds); }
+  return builds;
+}
+
+function startBuild(
+  index: InkStrokeIndex,
   tx: number,
   ty: number,
   scale: number,
-  skipIds?: Set<string>,
-): boolean {
-  const strokes = getInkStrokeIndex(tiles).grid.get(tileKey(tx, ty));
-  if (!strokes || strokes.length === 0) return false;
-  const tile = document.createElement('canvas');
-  tile.width = tile.height = Math.max(1, Math.round(TILE * scale));
-  const ctx = tile.getContext('2d')!;
+): TileBuild | null {
+  const strokes = index.grid.get(tileKey(tx, ty));
+  if (!strokes || strokes.length === 0) return null;
+  const canvas = document.createElement('canvas');
+  canvas.width = canvas.height = Math.max(1, Math.round(TILE * scale));
+  const ctx = canvas.getContext('2d')!;
   ctx.setTransform(scale, 0, 0, scale, -tx * TILE * scale, -ty * TILE * scale);
-  let drew = false;
-  for (const s of strokes) {
+  return { key: tileKey(tx, ty), tx, ty, scale, canvas, ctx, strokes, next: 0, drew: false };
+}
+
+/** Rasterize strokes of `build` until the deadline, leaving it resumable. The
+ *  only unit that can be sliced is a stroke — the smallest thing a dense tile is
+ *  made of — so the clock is checked between strokes (every few, to keep the
+ *  check itself negligible). */
+function advanceBuild(build: TileBuild, deadline: number, skipIds?: Set<string>): void {
+  while (build.next < build.strokes.length) {
+    const s = build.strokes[build.next++];
     if (skipIds?.has(s.id)) continue;
-    drawStrokeRaster(ctx, s, getStrokeRaster(s, tx, ty, TILE, scale), scale);
-    drew = true;
+    drawStrokeRaster(build.ctx, s, getStrokeRaster(s, build.tx, build.ty, TILE, build.scale), build.scale);
+    build.drew = true;
+    if ((build.next & 7) === 0 && performance.now() >= deadline) break;
   }
-  if (!drew) return false;
-  registerTileScale(tile, scale);
-  const key = tileKey(tx, ty);
-  const previous = tiles.get(key);
-  tiles.set(key, tile);
-  if (previous) previous.width = 0;
-  return true;
 }
 
 /**
  * Bring the tiles covering the viewport (plus `margin`) up to date, nearest the
- * centre first, within this pass' budget. Returns how many tiles still need
+ * centre first, within this pass' time budget. Returns how many tiles still need
  * work, so the caller can finish over the next frames.
  *
- * A tile needs work when it is absent, or was baked at a different scale than
- * the display now wants — the same call therefore both fills in new ground and
- * re-bakes after a zoom, with no separate invalidation path.
+ * A tile needs work when it is absent, or (if `rebake`) was baked at a different
+ * scale than the display now wants — the same call therefore both fills in new
+ * ground and re-bakes after a zoom, with no separate invalidation path. Work is
+ * resumable per tile, so crossing a bake step costs a few extra frames of
+ * soft-ish ink rather than one multi-second freeze.
  */
 export function materializeTiles(
   tiles: Map<string, HTMLCanvasElement>,
@@ -333,46 +366,77 @@ export function materializeTiles(
   opts: MaterializeOptions = {},
 ): { materialized: number; remaining: number; scale: number } {
   const margin = opts.margin ?? MATERIALIZE_MARGIN;
-  const budgetBytes = opts.budgetBytes ?? MATERIALIZE_BUDGET_BYTES;
-  const maxTiles = opts.maxTiles ?? MATERIALIZE_MAX_TILES;
-  // Device pixels per world unit. `uiScale` must NOT appear: the backing store is
-  // layout × uiScale × dpr while the viewport is measured in visual (layout ×
-  // uiScale) px and drawn under a dpr transform — the uiScale terms cancel.
+  const rebake = opts.rebake ?? true;
+  // The scale is tracked even when a re-bake is deferred: new tiles must be born
+  // at the density the display wants, whatever happens to the existing ones.
   const scale = opts.fixedScale ?? setTargetBakeScale(tiles, cam.zoom * dpr);
   if (opts.fixedScale) layerBakeScale.set(tiles, opts.fixedScale);
   const index = getInkStrokeIndex(tiles);
+  const builds = buildsFor(tiles);
   const tl = screenToWorld(0, 0, cam);
   const br = screenToWorld(vw, vh, cam);
   const tx0 = Math.floor(tl.x / TILE) - margin, tx1 = Math.floor(br.x / TILE) + margin;
   const ty0 = Math.floor(tl.y / TILE) - margin, ty1 = Math.floor(br.y / TILE) + margin;
   const cx = (tl.x + br.x) / 2, cy = (tl.y + br.y) / 2;
+  const inView = (tx: number, ty: number) => tx >= tx0 && tx <= tx1 && ty >= ty0 && ty <= ty1;
 
-  const due: { tx: number; ty: number; d: number }[] = [];
+  // Abandon builds that became pointless — the density target moved, or the tile
+  // scrolled away. They restart if either changes back.
+  for (const [key, build] of [...builds]) {
+    if (build.scale !== scale || !inView(build.tx, build.ty)) builds.delete(key);
+  }
+
+  // Work list: builds already part-rasterized first (they are part-paid for),
+  // then newly due tiles nearest the centre.
+  const work: { tx: number; ty: number; d: number }[] = [...builds.values()]
+    .map((b) => ({ tx: b.tx, ty: b.ty, d: -1 }));
   for (let ty = ty0; ty <= ty1; ty++) {
     for (let tx = tx0; tx <= tx1; tx++) {
       const key = tileKey(tx, ty);
+      if (builds.has(key)) continue;
       const strokes = index.grid.get(key);
       if (!strokes || strokes.length === 0) continue; // no ink here — nothing to build
       const existing = tiles.get(key);
-      if (existing && tileScaleOf(existing) === scale) continue; // already right
+      // A tile already at the right density is done; one at another density waits
+      // for the view to settle (see `rebake`).
+      if (existing && tileScaleOf(existing) === scale) continue;
+      if (existing && !rebake) continue;
       // A tile whose every stroke is suppressed has nothing to draw; counting it
       // would leave the caller's chain spinning on it forever.
       if (opts.skipIds && strokes.every((s) => opts.skipIds!.has(s.id))) continue;
       const dx = (tx + 0.5) * TILE - cx, dy = (ty + 0.5) * TILE - cy;
-      due.push({ tx, ty, d: dx * dx + dy * dy });
+      work.push({ tx, ty, d: dx * dx + dy * dy });
     }
   }
-  if (due.length === 0) return { materialized: 0, remaining: 0, scale };
-  due.sort((a, b) => a.d - b.d);
+  if (work.length === 0) return { materialized: 0, remaining: 0, scale };
+  work.sort((a, b) => a.d - b.d);
 
-  const bytesPerTile = Math.round(TILE * scale) * Math.round(TILE * scale) * 4;
-  const perPass = Math.max(1, Math.min(maxTiles, Math.floor(budgetBytes / Math.max(1, bytesPerTile))));
-  let materialized = 0;
-  for (const m of due.slice(0, perPass)) {
-    if (materializeTile(tiles, m.tx, m.ty, scale, opts.skipIds)) materialized++;
+  const deadline = performance.now() + (opts.budgetMs ?? MATERIALIZE_BUDGET_MS);
+  let materialized = 0, unfinished = 0, visited = 0;
+  for (const w of work) {
+    // Always advance at least one build; then stop as soon as the budget is gone.
+    if (visited > 0 && performance.now() >= deadline) break;
+    visited++;
+    const key = tileKey(w.tx, w.ty);
+    let build = builds.get(key);
+    if (!build) {
+      const started = startBuild(index, w.tx, w.ty, scale);
+      if (!started) continue;
+      build = started;
+      builds.set(key, build);
+    }
+    advanceBuild(build, deadline, opts.skipIds);
+    if (build.next < build.strokes.length) { unfinished++; continue; }
+    builds.delete(key);
+    if (build.drew) {
+      registerTileScale(build.canvas, scale);
+      const previous = tiles.get(key);
+      tiles.set(key, build.canvas);
+      if (previous) previous.width = 0;
+    }
+    materialized++;
   }
-  const taken = Math.min(perPass, due.length);
-  return { materialized, remaining: due.length - taken, scale };
+  return { materialized, remaining: unfinished + (work.length - visited), scale };
 }
 
 /** Estimated bytes held by a tile layer's canvases. */

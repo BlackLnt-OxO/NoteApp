@@ -198,6 +198,46 @@ describe('writers use the scale of the tile they write into', () => {
   });
 });
 
+describe('a materialization pass is bounded and resumable', () => {
+  it('never exposes a partially rasterized tile, and finishes it across passes', () => {
+    // Enough strokes in one tile that the per-stroke time check inside the build
+    // is actually reached. This is the case that used to freeze the frame: a
+    // dense tile rasterized in one go costs as long as it costs.
+    const many = Array.from({ length: 40 }, (_, i) => stroke(`m${i}`, i, {
+      points: Array.from({ length: 40 }, (_, k) => ({
+        x: 60 + ((i * 13 + k * 7) % 380), y: 60 + ((i * 29 + k * 11) % 380),
+        pressure: 0.4, t: k * 4,
+      })),
+    }));
+    const tiles = new Map<string, HTMLCanvasElement>();
+    indexInkStrokes(tiles, many);
+    setTargetBakeScale(tiles, 1);
+
+    // A pass with no time budget advances the build but must not publish it: what
+    // is on screen has to stay a complete tile (the old one, or nothing).
+    const starved = materializeTiles(tiles, CAM, VIEW, VIEW, 1, { budgetMs: 0 });
+    expect(starved.materialized).toBe(0);
+    expect(starved.remaining).toBeGreaterThan(0);
+    for (const c of tiles.values()) {
+      // Anything present must be a finished tile, never a partial raster.
+      expect(c.width).toBe(512);
+    }
+
+    // Given frames to work with, it finishes — and lands the same pixels as an
+    // unbudgeted build.
+    let res = starved, guard = 0;
+    while (res.remaining > 0 && guard++ < 2000) {
+      res = materializeTiles(tiles, CAM, VIEW, VIEW, 1, { budgetMs: 4 });
+    }
+    expect(res.remaining).toBe(0);
+    const reference = buildLayer(many, 1).tiles;
+    expect(tiles.size).toBe(reference.size);
+    for (const [key, want] of reference) {
+      expectSamePixels(tiles.get(key)!, want, `resumed tile ${key}`);
+    }
+  });
+});
+
 describe('rebuilding is always allowed to discard tiles', () => {
   it('does not resurrect strokes the caller has suppressed', () => {
     const strokes = [stroke('a'), stroke('b', 1), stroke('c', 2)];
@@ -213,11 +253,25 @@ describe('rebuilding is always allowed to discard tiles', () => {
     expect(blocked.remaining).toBe(0);
     expect(tiles.size).toBe(0);
 
-    // Partially suppressed: the rest of the ink still lands.
-    const partial = materializeTiles(tiles, CAM, VIEW, VIEW, 1, { skipIds: new Set(['a', 'b']) });
-    expect(partial.materialized).toBeGreaterThan(0);
+    // Partially suppressed: the rest of the ink still lands. A single pass is
+    // deliberately budget-bounded and may finish no tile at all, so run the chain
+    // the way the editor does.
+    const skip = new Set(['a', 'b']);
+    let res = materializeTiles(tiles, CAM, VIEW, VIEW, 1, { skipIds: skip });
+    let guard = 0;
+    while (res.remaining > 0 && guard++ < 500) {
+      res = materializeTiles(tiles, CAM, VIEW, VIEW, 1, { skipIds: skip });
+    }
     expect(tiles.size).toBeGreaterThan(0);
-    expect(partial.remaining).toBe(0);
+
+    // …and what landed must contain the kept strokes but no suppressed one: piece
+    // the tiles back together and compare against a build that never had them.
+    const kept = buildLayer(strokes.filter((s) => !skip.has(s.id)), 1).tiles;
+    for (const [key, want] of kept) {
+      const got = tiles.get(key);
+      if (!got) continue;
+      expectSamePixels(got, want, `tile ${key} built with two strokes suppressed`);
+    }
   });
 
   it('rebuilds an evicted tile identically', () => {

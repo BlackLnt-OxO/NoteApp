@@ -22,7 +22,7 @@ import {
   disposeTiles, indexInkStrokes, materializeTiles, setTargetBakeScale, targetBakeScale,
   evictDistantTiles, inkTileBytes, inkTileCount,
 } from './InkTiles';
-import { reportInkFrame, resetInkFrame, noteCameraMove, noteInkFrame } from '../InkFrameStats';
+import { reportInkFrame, resetInkFrame, noteCameraMove, noteInkFrame, cameraSettled, CAMERA_SETTLE_MS } from '../InkFrameStats';
 import { releaseDocumentInkCaches, dropRastersNotAtScale } from '../PdfAnnotation/InkRasterCache';
 import TextNode from './TextNode';
 import ImageObject from './ImageObject';
@@ -101,6 +101,8 @@ const InfiniteInkCanvas: React.FC = () => {
   const inkTilesRef = useRef<Map<string, HTMLCanvasElement>>(new Map());
   /** Pending frame of the lazy tile materialization chain (see InkTiles). */
   const materializeRafRef = useRef(0);
+  /** Timer that re-runs materialization once the camera stops moving. */
+  const lodSettleRef = useRef(0);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const insertWorldRef = useRef<{ x: number; y: number } | null>(null);
   const rafRef = useRef<number>(0);
@@ -147,6 +149,7 @@ const InfiniteInkCanvas: React.FC = () => {
     if (laserRafRef.current) cancelAnimationFrame(laserRafRef.current);
     if (strokeEraseRef.current?.raf) cancelAnimationFrame(strokeEraseRef.current.raf);
     if (materializeRafRef.current) cancelAnimationFrame(materializeRafRef.current);
+    if (lodSettleRef.current) clearTimeout(lodSettleRef.current);
     // Leaving the editor = leaving the document. Free its rasterized ink and the
     // shared pixel caches NOW: together they are ~1 GiB on a dense canvas, and
     // leaving them to the GC made the NEXT canvas — however light — open slowly,
@@ -474,7 +477,13 @@ const InfiniteInkCanvas: React.FC = () => {
     if (!container || inkGestureActive()) return 0;
     const rect = container.getBoundingClientRect();
     const { camera: cam } = useCanvasStore.getState();
-    const res = materializeTiles(inkTilesRef.current, cam, rect.width, rect.height, dprRef.current);
+    const res = materializeTiles(inkTilesRef.current, cam, rect.width, rect.height, dprRef.current, {
+      // Re-baking at a sharper density costs up to 9x the pixels of the level it
+      // replaces. Paying that mid-gesture is felt as a stall (and is what made
+      // crossing a zoom level hitch), while the ink on screen is only slightly
+      // soft — so it waits for the view to settle.
+      rebake: cameraSettled(),
+    });
     if (res.materialized > 0) dirtyRef.current = true;
     return res.remaining;
   }, [inkGestureActive]);
@@ -490,7 +499,7 @@ const InfiniteInkCanvas: React.FC = () => {
         // flight, so a pan or a wipe never does book-keeping work mid-flight.
         const container = containerRef.current;
         const { camera: cam } = useCanvasStore.getState();
-        if (container && !inkGestureActive()) {
+        if (container && !inkGestureActive() && cameraSettled()) {
           const rect = container.getBoundingClientRect();
           evictDistantTiles(inkTilesRef.current, cam, rect.width, rect.height);
           dropRastersNotAtScale(targetBakeScale(inkTilesRef.current));
@@ -513,6 +522,13 @@ const InfiniteInkCanvas: React.FC = () => {
     // rasterizing tiles inline is what made zooming stutter.
     setTargetBakeScale(inkTilesRef.current, useCanvasStore.getState().camera.zoom * dprRef.current);
     scheduleMaterialize();
+    // …and come back once the view has settled, to do the work this pass
+    // deliberately skipped: re-bake at the new density, reclaim what drifted off.
+    if (lodSettleRef.current) clearTimeout(lodSettleRef.current);
+    lodSettleRef.current = window.setTimeout(() => {
+      lodSettleRef.current = 0;
+      scheduleMaterialize();
+    }, CAMERA_SETTLE_MS + 20);
     scheduleRender();
   }, [objects, camera, activeTool, brushSettings, showDotGrid, editingTextId, selectedIds, selectionMode,
       scheduleMaterialize, scheduleRender]);

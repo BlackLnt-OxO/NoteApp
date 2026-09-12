@@ -27,7 +27,7 @@ import { useInkInputActivity } from '../inkInputActivity';
 import { eraseStrokeRegions, getCommittedStrokeBounds } from './InkTileErase';
 import { usePdfToolbarStore } from '../InfiniteInkCanvas/useToolbarStore';
 import { indexInkStrokes, materializeTiles, inkTileBytes, inkTileCount, targetBakeScale } from '../InfiniteInkCanvas/InkTiles';
-import { reportInkFrame, noteCameraMove, noteInkFrame } from '../InkFrameStats';
+import { reportInkFrame, noteCameraMove, noteInkFrame, cameraSettled, CAMERA_SETTLE_MS } from '../InkFrameStats';
 import { bakeDragPreview, drawDragPreview, type DragPreview } from './InkDragPreview';
 import { useNoteStore } from '../../store';
 import { themeCanvasColors } from '../../themeColors';
@@ -270,6 +270,8 @@ const PdfCanvas: React.FC = () => {
   const inkTilesRef = useRef<Map<string, HTMLCanvasElement>>(new Map());
   /** Pending frame of the lazy tile materialization chain (see InkTiles). */
   const materializeRafRef = useRef(0);
+  /** Timer that re-runs materialization once the camera stops moving. */
+  const lodSettleRef = useRef(0);
 
   const dprRef = useRef(1);
   const rafRef = useRef(0);
@@ -337,6 +339,7 @@ const PdfCanvas: React.FC = () => {
     if (laserRafRef.current) cancelAnimationFrame(laserRafRef.current);
     if (strokeEraseRef.current?.raf) cancelAnimationFrame(strokeEraseRef.current.raf);
     if (materializeRafRef.current) cancelAnimationFrame(materializeRafRef.current);
+    if (lodSettleRef.current) clearTimeout(lodSettleRef.current);
     // Leaving the editor = leaving the document. Free its rasterized ink and the
     // shared pixel caches immediately; leaving them to the GC made the next
     // document (on EITHER surface) start by evicting all of it.
@@ -567,7 +570,7 @@ const PdfCanvas: React.FC = () => {
       inkTilesRef.current,
       { x: st.camera.x, y: st.camera.y, zoom: st.camera.zoom },
       rect.width, rect.height, dprRef.current,
-      { fixedScale: SCALE },
+      { fixedScale: SCALE, rebake: cameraSettled() },
     );
     if (res.materialized > 0) dirtyRef.current = true;
     return res.remaining;
@@ -627,6 +630,12 @@ const PdfCanvas: React.FC = () => {
   useEffect(() => {
     noteCameraMove();
     scheduleMaterialize();
+    // Come back once the view settles (see the canvas's twin).
+    if (lodSettleRef.current) clearTimeout(lodSettleRef.current);
+    lodSettleRef.current = window.setTimeout(() => {
+      lodSettleRef.current = 0;
+      scheduleMaterialize();
+    }, CAMERA_SETTLE_MS + 20);
   }, [camera, scheduleMaterialize]);
 
   // Dot-grid toggle → repaint
