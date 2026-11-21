@@ -22,7 +22,7 @@ export function hitSelectable(items: readonly PdfItem[], x: number, y: number, p
   if (preferredId) return items.find(item => item.id === preferredId);
   // DOM cards cover ink; match their visible stacking order when the event was
   // dispatched straight to the canvas (including pen/testing fallbacks).
-  for (const type of ['text', 'image', 'stroke'] as const) {
+  for (const type of ['asset', 'text', 'image', 'stroke'] as const) {
     for (let i = items.length - 1; i >= 0; i--) {
       const item = items[i];
       if (item.type !== type) continue;

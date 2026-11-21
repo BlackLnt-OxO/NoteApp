@@ -253,7 +253,9 @@ describe('persistence (save / load / legacy)', () => {
   });
   it('keeps edits made during an asynchronous save dirty until the next save confirms them', async () => {
     let finish!: () => void;
-    vi.stubGlobal('electronAPI', { savePdfAnnotation: () => new Promise<void>(resolve => { finish = resolve; }) });
+    vi.stubGlobal('electronAPI', { savePdfAnnotation: () => new Promise<{ ok: true }>(resolve => {
+      finish = () => resolve({ ok: true });
+    }) });
     try {
       usePdfStore.setState({ currentItemId: 'async' }); usePdfStore.getState().commitStroke(1, makeStroke('first'));
       const saving = usePdfStore.getState().saveAnnotations();

@@ -2,9 +2,8 @@
  * PdfView — PDF annotation view (single-page book mode).
  *
  * Home routing:
- *   - no PDF open + empty library  → ImportScreen (first-time)
- *   - no PDF open + library items  → LibraryHome (recent PDFs, categories)
- *   - PDF open                     → NavBar + canvas + dockable toolbar
+ *   - library home → import, open, and replace source files
+ *   - open file    → page editor and its dockable toolbar
  */
 
 import React, { useRef, useState, useEffect, useCallback } from 'react';
@@ -19,104 +18,8 @@ import PdfToolbar from './PdfToolbar';
 import PdfSidebar from './PdfSidebar';
 import ToolbarShell from '../InfiniteInkCanvas/ToolbarShell';
 import LibraryHome from './LibraryHome';
-import { pickPdfFile } from './PdfPicker';
-
-// ---- Shared import (native dialog → load → record in library) ----------------
-
-async function importPdf(categoryId: string | null): Promise<void> {
-  const picked = await pickPdfFile();
-  if (!picked) return;
-  await usePdfStore.getState().loadPdfFromBuffer(picked.buffer, picked.name);
-  // The user hit "中断" → the store reset to the home screen; don't record a
-  // bogus 0-page library entry for a document that never opened.
-  if (usePdfStore.getState().fileName === null) return;
-  const numPages = usePdfStore.getState().numPages;
-  const id = usePdfLibrary.getState().addItem({
-    name: picked.name,
-    path: picked.path,
-    categoryId,
-    pageCount: numPages,
-    sizeBytes: picked.buffer.byteLength,
-  });
-  // Link the open doc to its library item so resume state persists.
-  usePdfStore.setState({ currentItemId: id });
-}
-
-// ---- Import screen (first-time) -----------------------------------------------
-
-const ImportScreen: React.FC = () => {
-  const gfs = useNoteStore((s) => s.settings.fontSize);
-  const loading = usePdfStore((s) => s.loading);
-  const error = usePdfStore((s) => s.error);
-  // After 10s of a stuck first import, show an "中断" button beside the text.
-  const [showAbort, setShowAbort] = useState(false);
-  useEffect(() => {
-    if (!loading) { setShowAbort(false); return; }
-    setShowAbort(false);
-    const t = setTimeout(() => setShowAbort(true), 10000);
-    return () => clearTimeout(t);
-  }, [loading]);
-  return (
-    <div style={{
-      position: 'absolute', inset: 0,
-      display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
-      gap: 16, background: 'var(--page-bg)', color: 'var(--text-secondary)',
-    }}>
-      <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" opacity="0.8">
-        <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
-        <polyline points="14 2 14 8 20 8" />
-        <line x1="8" x2="16" y1="13" y2="13" /><line x1="8" x2="16" y1="17" y2="17" /><line x1="8" x2="12" y1="9" y2="9" />
-      </svg>
-      <div style={{ fontSize: fs(15, gfs), fontWeight: 600, color: 'var(--text-primary)' }}>
-        导入 PDF 进行批注
-      </div>
-      <div style={{ fontSize: fs(11, gfs), color: 'var(--text-muted)', textAlign: 'center', lineHeight: '1.7' }}>
-        单页书本式浏览 · 每页独立笔迹 · 支持大型文档<br />导入后出现在左侧 PDF 库中
-      </div>
-      {loading ? (
-        <div style={{ marginTop: 8, display: 'flex', alignItems: 'center', gap: 10 }}>
-          <span style={{ padding: '10px 22px', fontSize: fs(13, gfs), color: 'var(--text-secondary)' }}>
-            正在加载 PDF…
-          </span>
-          {showAbort && (
-            <button
-              onClick={() => usePdfStore.getState().abortPdfLoad()}
-              style={{
-                padding: '5px 14px', borderRadius: 6, cursor: 'pointer', fontFamily: 'inherit',
-                fontSize: 12, fontWeight: 600, color: '#fff', border: 'none',
-                background: 'rgba(231,76,60,0.9)',
-              }}
-            >
-              中断
-            </button>
-          )}
-        </div>
-      ) : (
-        <button
-          onClick={() => importPdf(null)}
-          className="btn-accent"
-          style={{
-            marginTop: 8, padding: '10px 22px', borderRadius: '8px',
-            color: '#fff', fontSize: fs(13, gfs), fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit',
-          }}
-        >
-          选择 PDF 文件
-        </button>
-      )}
-      {error && (
-        <div style={{
-          marginTop: 12, maxWidth: 480, padding: '10px 14px',
-          fontSize: fs(11, gfs), lineHeight: '1.6',
-          color: '#ff8a8a', background: 'rgba(231,76,60,0.12)',
-          border: '1px solid rgba(231,76,60,0.3)', borderRadius: '8px',
-          fontFamily: 'monospace', whiteSpace: 'pre-wrap', wordBreak: 'break-all',
-        }}>
-          PDF 加载失败：{error}
-        </div>
-      )}
-    </div>
-  );
-};
+import { useFileWorkspace } from '../FileLibrary/useFileWorkspace';
+import { useAssetLibrary } from '../FileLibrary/assetLibrary';
 
 // ---- Anchor badge (one per anchored page) -------------------------------------
 
@@ -170,12 +73,15 @@ const AnchorBadge: React.FC<{
 
 const NavBar: React.FC<{
   onSave: () => void;
+  onImport: () => void;
+  onPairPending: () => void;
   onClose: () => void;
   savedFlash: boolean;
   dirty: boolean;
-}> = ({ onSave, onClose, savedFlash, dirty }) => {
+}> = ({ onSave, onImport, onPairPending, onClose, savedFlash, dirty }) => {
   const gfs = useNoteStore((s) => s.settings.fontSize);
   const fileName = usePdfStore((s) => s.fileName);
+  const unplacedCount = usePdfStore(s => s.unplacedPages?.length ?? 0);
   const currentPage = usePdfStore((s) => s.currentPage);
   const numPages = usePdfStore((s) => s.numPages);
   const nextPage = usePdfStore((s) => s.nextPage);
@@ -269,7 +175,8 @@ const NavBar: React.FC<{
         {fileName}
       </span>
 
-      <button className="glass-btn" onClick={() => importPdf(null)} style={btnStyle} title="导入其它 PDF">
+      {unplacedCount > 0 && <button className="glass-btn" style={btnStyle} onClick={onPairPending}>待配对 {unplacedCount} 页</button>}
+      <button className="glass-btn" onClick={onImport} style={btnStyle} title="导入其它文件">
         导入
       </button>
       <button className="glass-btn" onClick={onSave} style={btnStyle} title="保存批注 (Ctrl+S)">
@@ -278,7 +185,7 @@ const NavBar: React.FC<{
       {savedFlash && (
         <span style={{ fontSize: fs(11, gfs), color: '#51cf66', fontWeight: 600 }}>已保存</span>
       )}
-      <button className="glass-btn" onClick={onClose} style={{ ...btnStyle, color: dirty ? 'var(--danger, #e74c3c)' : 'var(--text-secondary)' }} title="返回 PDF 库">
+      <button className="glass-btn" onClick={onClose} style={{ ...btnStyle, color: dirty ? 'var(--danger, #e74c3c)' : 'var(--text-secondary)' }} title="返回文件库">
         关闭
       </button>
     </div>
@@ -289,7 +196,20 @@ const NavBar: React.FC<{
 
 const PdfView: React.FC = () => {
   const fileName = usePdfStore((s) => s.fileName);
-  const libraryItems = usePdfLibrary((s) => s.items);
+  const pdfDoc = usePdfStore(s => s.pdfDoc);
+  const documentKey = useRef<{ doc: typeof pdfDoc; key: number }>({ doc: null, key: 0 });
+  if (documentKey.current.doc !== pdfDoc) documentKey.current = { doc: pdfDoc, key: documentKey.current.key + 1 };
+  const workspace = useFileWorkspace();
+  const requestedPath = useAssetLibrary(s => s.requestedPath);
+  useEffect(() => {
+    if (!requestedPath || workspace.busy) return;
+    const timer = window.setTimeout(() => {
+      if (useAssetLibrary.getState().requestedPath !== requestedPath) return;
+      useAssetLibrary.setState({ requestedPath: null });
+      void workspace.openPath(requestedPath);
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [requestedPath, workspace]);
   const dirty = usePdfStore((s) => s.dirty);
 
   // Ensure the library is loaded so resume/annotation state can persist.
@@ -325,7 +245,7 @@ const PdfView: React.FC = () => {
     }
     if (st.dirty) {
       askConfirm({
-        title: '关闭 PDF',
+        title: '关闭文件',
         message: '有未保存的批注。',
         confirmLabel: '保存并关闭',
         secondaryLabel: '不保存关闭',
@@ -376,7 +296,7 @@ const PdfView: React.FC = () => {
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
       const tag = (e.target as HTMLElement)?.tagName;
-      if (tag === 'INPUT' || tag === 'TEXTAREA') return;
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || document.querySelector('[data-file-dialog]')) return;
       const st = usePdfStore.getState();
       if (e.ctrlKey && e.key === 'z') { e.preventDefault(); st.undo(); }
       else if (e.ctrlKey && e.key === 'y') { e.preventDefault(); st.redo(); }
@@ -392,12 +312,13 @@ const PdfView: React.FC = () => {
 
   return (
     <div style={{ position: 'absolute', inset: 0, overflow: 'hidden', background: 'var(--page-bg)' }}>
-      <div key={fileName || 'home'} className="animate-fade-in" style={{ position: 'absolute', inset: 0 }}>
+      <div key={documentKey.current.key} className="animate-fade-in" style={{ position: 'absolute', inset: 0 }}>
       {!fileName ? (
-        libraryItems.length === 0 ? <ImportScreen /> : <LibraryHome />
+        <LibraryHome onImport={workspace.pickAndOpen} onOpen={workspace.open} onReplace={workspace.replace} importing={workspace.busy} />
       ) : (
         <>
-          <NavBar onSave={doSave} onClose={doClose} savedFlash={savedFlash} dirty={dirty} />
+          <NavBar onSave={doSave} onClose={doClose} onImport={() => void workspace.pickAndOpen(null)}
+            onPairPending={workspace.pairPending} savedFlash={savedFlash} dirty={dirty} />
           <div ref={areaRef} style={{ position: 'absolute', top: 44, left: 0, right: 0, bottom: 0, overflow: 'hidden' }}>
             <PdfCanvas />
             <PdfSidebar />
@@ -425,6 +346,7 @@ const PdfView: React.FC = () => {
         </>
       )}
       </div>
+      {workspace.overlays}
     </div>
   );
 };

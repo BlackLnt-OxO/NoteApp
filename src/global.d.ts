@@ -3,6 +3,10 @@ export {};
 declare global {
   interface Window {
     electronAPI?: {
+      pickLibraryFiles: (options?: { single?: boolean; imagesOnly?: boolean }) => Promise<string[]>;
+      checkLibraryFiles: (paths: string[]) => Promise<boolean[]>;
+      readLibraryImage: (path: string) => Promise<{ mime: string; data: ArrayBuffer }>;
+      prepareLibraryDocument: (paths: string[]) => Promise<{ ok: true; file: import('./components/FileLibrary/fileTypes').PreparedFile } | { ok: false; error: string; offline?: boolean }>;
       onStorageFlush: (callback: (id: number) => void) => () => void;
       onStorageResume: (callback: () => void) => () => void;
       storageFlushed: (id: number, error?: string) => void;

@@ -2,6 +2,10 @@ import React, { useEffect, useState, useCallback } from 'react';
 import { useNoteStore } from './store';
 import Sidebar from './components/Sidebar';
 import NoteGrid from './components/NoteGrid';
+import AssetSidebar from './components/FileLibrary/AssetSidebar';
+import AssetPreview from './components/FileLibrary/AssetPreview';
+import { FileDialog } from './components/FileLibrary/FileDialogs';
+import { useAssetLibrary } from './components/FileLibrary/assetLibrary';
 import CreateNoteDialog from './components/CreateNoteDialog';
 import SettingsDialog from './components/SettingsDialog';
 import ConfirmHost from './components/ConfirmDialog';
@@ -36,6 +40,35 @@ const App: React.FC = () => {
   const titleBarH = gfs >= 18 ? fsn(38, gfs) : 38;
   const [showCreateDialog, setShowCreateDialog] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
+  const [assetError, setAssetError] = useState('');
+
+  useEffect(() => {
+    const assets = useAssetLibrary.getState();
+    assets.load();
+    const refresh = () => { void assets.refresh().catch(() => {}); };
+    const showError = (event: Event) => setAssetError(String((event as CustomEvent).detail));
+    refresh();
+    window.addEventListener('focus', refresh);
+    window.addEventListener('noteapp:asset-error', showError);
+    const interval = window.setInterval(() => { if (document.hasFocus()) refresh(); }, 3000);
+    return () => {
+      window.removeEventListener('focus', refresh);
+      window.removeEventListener('noteapp:asset-error', showError);
+      window.clearInterval(interval);
+    };
+  }, []);
+
+  const openAssetDocument = async (path: string) => {
+    try {
+      window.dispatchEvent(new Event('ink:flush-gesture'));
+      while (viewMode === 'inkcanvas' && useCanvasStore.getState().currentCanvasId && useCanvasStore.getState().loaded) {
+        if (!await useCanvasStore.getState().saveCanvasData()) throw new Error('画布保存失败。');
+        if (useCanvasStore.getState().saveStatus === 'saved') break;
+      }
+      useAssetLibrary.setState({ requestedPath: path });
+      setViewMode('pdf');
+    } catch (error) { setAssetError(error instanceof Error ? error.message : String(error)); }
+  };
   const [showDiagnostic, setShowDiagnostic] = useState(false);
   const [dataDirState, setDataDirState] = useState<'checking' | 'ready' | 'prompt'>('checking');
   const [storageBarrier, setStorageBarrier] = useState(false);
@@ -297,7 +330,9 @@ const App: React.FC = () => {
           transition: 'width var(--transition-slow)',
           borderRight: sidebarCollapsed ? 'none' : '1px solid var(--glass-border)',
         }}>
-          <Sidebar onCreateNote={() => setShowCreateDialog(true)} />
+          {viewMode === 'notes'
+            ? <Sidebar onCreateNote={() => setShowCreateDialog(true)} />
+            : <AssetSidebar view={viewMode} onView={setViewMode} />}
         </div>
         <div style={{ flex: 1, position: 'relative', overflow: 'hidden', borderRadius: '0 0 12px 0', display: 'flex', flexDirection: 'column' }}>
           {/* When the left sidebar is collapsed, a slim top bar keeps the view
@@ -308,8 +343,8 @@ const App: React.FC = () => {
               padding: '6px 10px', background: 'var(--chrome-bg)',
               borderBottom: '1px solid var(--glass-border)', zIndex: 98,
             }}>
-              {([{ id: 'notes' as const, label: '便笺' }, { id: 'inkcanvas' as const, label: '画布' }, { id: 'pdf' as const, label: 'PDF' }]).map((m) => (
-                <button key={m.id} onClick={() => { setViewMode(m.id); if (m.id === 'notes') setSidebarCollapsed(false); }}
+              {([{ id: 'notes' as const, label: '便笺' }, { id: 'inkcanvas' as const, label: '画布' }, { id: 'pdf' as const, label: '文件' }]).map((m) => (
+                <button key={m.id} onClick={() => { setViewMode(m.id); if (m.id !== viewMode) setSidebarCollapsed(false); }}
                   className={viewMode === m.id ? 'hover-ring-dark' : 'hover-ring-light'}
                   style={{ padding: '4px 10px', borderRadius: '6px', background: viewMode === m.id ? 'var(--accent)' : 'var(--glass-bg-light)',
                     border: viewMode === m.id ? 'none' : '1px solid var(--glass-border)', color: viewMode === m.id ? '#fff' : 'var(--text-secondary)',
@@ -330,16 +365,13 @@ const App: React.FC = () => {
             )}
           </div>
 
-          {/* Bottom-left cluster: while the sidebar is collapsed it stacks the
-              two round screenshot buttons (canvas/notes only — never on PDF)
-              above the sidebar toggle; as soon as the sidebar opens those
-              disappear (the sidebar's own bottom buttons take over), so there
-              is never a duplicate entry. */}
+          {/* Canvas keeps the screenshot controls beside the workspace.
+              Notes shows them here when its sidebar is collapsed. */}
           <div style={{
             position: 'absolute', bottom: '16px', left: '16px', zIndex: 120,
             display: 'flex', flexDirection: 'column', gap: '8px', alignItems: 'center',
           }}>
-            {sidebarCollapsed && viewMode !== 'pdf' && (<>
+            {(viewMode === 'inkcanvas' || (sidebarCollapsed && viewMode === 'notes')) && (<>
               <button onClick={() => window.electronAPI?.startScreenshot()} title="截图" className="hover-ring-light" style={shotBtnStyle}>
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                   <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z" />
@@ -434,6 +466,10 @@ const App: React.FC = () => {
       )}
       {showCreateDialog && <CreateNoteDialog onClose={() => setShowCreateDialog(false)} />}
       {showSettings && <SettingsDialog onClose={() => setShowSettings(false)} />}
+      <AssetPreview onOpen={path => void openAssetDocument(path)} />
+      {assetError && <FileDialog title="资料操作失败" onClose={() => setAssetError('')}>
+        <p role="alert" className="file-library-error">{assetError}</p>
+      </FileDialog>}
       <DiagnosticPanel visible={showDiagnostic} onClose={() => setShowDiagnostic(false)} />
       <ConfirmHost />
     </div>

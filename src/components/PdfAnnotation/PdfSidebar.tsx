@@ -18,6 +18,7 @@ import { useNoteStore } from "../../store";
 import { fs } from "../../utils";
 import { usePdfStore } from './PdfStore';
 import { renderThumbnail } from './PdfLoader';
+import type { PdfJsDocument } from './PdfLoader';
 
 const THUMB_W = 120;
 const THUMB_GAP = 12;
@@ -26,9 +27,11 @@ const LRU_MAX = 60;   // max cached thumbnail canvases
 
 // ---- LRU cache (module-level, survives re-render) -----------------------------
 
-const thumbCache = new Map<number, string>();
+const thumbnails = new WeakMap<PdfJsDocument, Map<number, string>>();
 
-function cacheGet(page: number): string | undefined {
+function cacheGet(doc: PdfJsDocument, page: number): string | undefined {
+  const thumbCache = thumbnails.get(doc);
+  if (!thumbCache) return;
   const c = thumbCache.get(page);
   if (c) {
     // refresh recency
@@ -38,7 +41,9 @@ function cacheGet(page: number): string | undefined {
   return c;
 }
 
-function cacheSet(page: number, dataUrl: string): void {
+function cacheSet(doc: PdfJsDocument, page: number, dataUrl: string): void {
+  let thumbCache = thumbnails.get(doc);
+  if (!thumbCache) { thumbCache = new Map(); thumbnails.set(doc, thumbCache); }
   thumbCache.set(page, dataUrl);
   while (thumbCache.size > LRU_MAX) {
     const oldest = thumbCache.keys().next().value;
@@ -52,20 +57,20 @@ function cacheSet(page: number, dataUrl: string): void {
 const Thumb: React.FC<{ page: number; height: number; current: boolean; onSelect: (p: number) => void }> = React.memo(
   ({ page, height, current, onSelect }) => {
     const gfs = useNoteStore((s) => s.settings.fontSize);
-    const [src, setSrc] = useState<string | null>(() => cacheGet(page) ?? null);
-    const [err, setErr] = useState(false);
     const doc = usePdfStore((s) => s.pdfDoc);
+    const [src, setSrc] = useState<string | null>(() => doc ? cacheGet(doc, page) ?? null : null);
+    const [err, setErr] = useState(false);
 
     useEffect(() => {
-      const cached = cacheGet(page);
-      if (cached) { setSrc(cached); return; }
       if (!doc) return;
+      const cached = cacheGet(doc, page);
+      if (cached) { setSrc(cached); return; }
       let cancelled = false;
       renderThumbnail(doc, page, THUMB_W)
         .then((canvas) => {
           if (cancelled) return;
           const dataUrl = canvas.toDataURL('image/png');
-          cacheSet(page, dataUrl);
+          cacheSet(doc, page, dataUrl);
           setSrc(dataUrl);
         })
         .catch(() => { if (!cancelled) setErr(true); });

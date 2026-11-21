@@ -73,6 +73,8 @@ import type { PdfItem, PdfPoint, PdfStroke, PdfTextObject as PdfTextObjectData }
 import PdfTextNode from './PdfTextNode';
 import PdfTextObject from './PdfTextObject';
 import PdfImageObject from './PdfImageObject';
+import AssetObject from '../FileLibrary/AssetObject';
+import { assetDropTarget, makeAssetPlacement, useAssetDrop } from '../FileLibrary/assetDrop';
 
 /** Subset of page items that are ink strokes (the rest are DOM-only objects). */
 function strokesOnly(items: PdfItem[]): PdfStroke[] {
@@ -1653,12 +1655,25 @@ const PdfCanvas: React.FC = () => {
   const selectedShape = (activeTool === 'select' || shapeGesture.recent?.id === selectedIds[0]) && selectedIds.length === 1
     ? currentItems.find((o): o is PdfStroke => o.type === 'stroke' && !!o.geometry && o.id === selectedIds[0]) : undefined;
   shapeEditorIdRef.current = selectedShape?.id ?? null;
+  useAssetDrop(containerRef, (assetId, x, y) => {
+    const state = usePdfStore.getState();
+    const { pdfDoc, currentPage } = state;
+    if (!pdfDoc) return;
+    const world = screenToWorld(x, y, state.camera);
+    const size = state.pageSizes[currentPage];
+    if (!size || world.x < 0 || world.y < 0 || world.x > size.width || world.y > size.height) return;
+    void makeAssetPlacement(assetId, world.x, world.y).then(placement => {
+      const current = usePdfStore.getState();
+      if (placement && current.pdfDoc === pdfDoc && containerRef.current) current.addAssetObject(currentPage, placement);
+    });
+  });
   const selectionEvents = inkSelectionCaptureHandlers({ enabled: () => usePdfStore.getState().activeTool === 'select',
     canvas: canvasRef, capture: selectionCaptureRef, owner: pointerOwnerRef, shapeId: shapeEditorIdRef,
     down: handlePointerDown, move: handlePointerMove, up: handlePointerUp });
 
   return (
     <div ref={containerRef}
+      {...assetDropTarget}
       {...selectionEvents}
       onGotPointerCaptureCapture={event => { const id = (event.target as HTMLElement).closest('[data-ink-object-id]')?.getAttribute('data-ink-object-id'); if (id) manipulatedIdsRef.current.add(id); }}
       onLostPointerCaptureCapture={event => { const id = (event.target as HTMLElement).closest('[data-ink-object-id]')?.getAttribute('data-ink-object-id'); if (id) manipulatedIdsRef.current.delete(id); }}
@@ -1700,6 +1715,12 @@ const PdfCanvas: React.FC = () => {
         }
         if (o.type === 'image') {
           return <PdfImageObject key={o.id} obj={o} page={currentPage} camera={camera} interactive={imageInteractive} />;
+        }
+        if (o.type === 'asset') {
+          return <AssetObject key={o.id} object={o} camera={camera} interactive={imageInteractive}
+            selected={selectedIds.includes(o.id)} startResize={() => usePdfStore.getState().pushHistory(currentPage)}
+            onDelete={() => usePdfStore.getState().deleteObject(currentPage, o.id)}
+            resize={(width, height) => usePdfStore.getState().resizeAssetObject(currentPage, o.id, width, height)} />;
         }
         return null;
       })}

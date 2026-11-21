@@ -38,6 +38,23 @@ import type {
 } from './PdfTypes';
 import { loadPdfDocument, type PdfJsDocument, abortActivePdfLoad, resetPdfWorker } from './PdfLoader';
 import { PDF_ANNOTATION_BLUE } from '../../themeColors';
+import { loadAnnotationFile, pendingAnnotationBinding, saveAnnotationFile, type AnnotationFile } from '../FileLibrary/annotationFiles';
+import type { OpenedPdf } from '../FileLibrary/inspectPdf';
+
+interface PdfResume {
+  itemId?: string;
+  lastPage?: number;
+  camera?: PdfCamera;
+  showDotGrid?: boolean;
+  sidebarOpen?: boolean;
+  anchorPages?: number[];
+}
+
+let disposeCurrentPdf: (() => void) | undefined;
+function releaseDocument() {
+  disposeCurrentPdf?.();
+  disposeCurrentPdf = undefined;
+}
 
 /**
  * Monotonic load-generation counter. Every loadPdfFromBuffer captures the value
@@ -166,14 +183,10 @@ export interface PdfStore {
 
   // Actions
   /** Load a PDF from raw bytes (from the library / file picker). */
-  loadPdfFromBuffer: (buffer: ArrayBuffer, name: string, resume?: {
-    itemId?: string;
-    lastPage?: number;
-    camera?: PdfCamera;
-    showDotGrid?: boolean;
-    sidebarOpen?: boolean;
-    anchorPages?: number[];
-  }) => Promise<void>;
+  loadPdfFromBuffer: (buffer: ArrayBuffer, name: string, resume?: PdfResume) => Promise<void>;
+  openPreparedPdf: (file: OpenedPdf, name: string, resume?: PdfResume, annotations?: AnnotationFile) => void;
+  binding?: AnnotationFile['binding'];
+  unplacedPages?: AnnotationFile['unplaced'];
   /** Abort a stuck import / resume: destroys the pdf.js load, resets to home. */
   abortPdfLoad: () => void;
   closePdf: () => void;
@@ -207,6 +220,8 @@ export interface PdfStore {
   setTextCommitReturnTool: (t: PdfTool | null) => void;
   /** Place an empty text card at (x,y); opens it in its editor immediately. */
   addTextNode: (page: number, x: number, y: number) => string;
+  addAssetObject: (page: number, data: import('../FileLibrary/fileTypes').AssetPlacement) => void;
+  resizeAssetObject: (page: number, id: string, width: number, height: number) => void;
   /** Merge content/geometry into a text card. Caller pushes history first. */
   updateTextNode: (page: number, id: string, data: Partial<PdfTextObject>) => void;
   moveTextNode: (page: number, id: string, x: number, y: number) => void;
@@ -327,43 +342,15 @@ export const usePdfStore = create<PdfStore>((set, get) => ({
     const startEpoch = ++pdfLoadEpoch;
     try {
       set({ loading: true, loadingPhase: '解析', error: null });
-      const { doc, numPages, firstPage } = await loadPdfDocument(buffer);
+      const { doc, firstPage } = await loadPdfDocument(buffer);
       // User hit "中断" while pdf.js was still parsing → discard this result.
       if (pdfLoadEpoch !== startEpoch) {
         try { (doc as any)?.destroy?.(); } catch { /* ignore */ }
         return;
       }
-      set({ loading: true, loadingPhase: '渲染页面 1', error: null });
-      const lastPage = Math.min(numPages, Math.max(1, resume?.lastPage ?? 1));
-      set({
-        fileName: name,
-        pdfDoc: doc,
-        numPages,
-        currentPage: lastPage,
-        pageSizes: { 1: firstPage },
-        currentItemId: resume?.itemId ?? null,
-        pendingResumeCamera: resume?.camera ?? null,
-        items: {},
-        dirty: false,
-        history: emptyHistoryRecord(),
-        redoStack: emptyHistoryRecord(),
-        renderEpoch: 0,
-        selectedIds: [],
-        editingTextId: null,
-        textCommitReturnTool: null,
-        showDotGrid: resume?.showDotGrid ?? false,
-        // The thumbnail rail ALWAYS opens when a PDF opens (user preference) —
-        // it is not restored from the remembered sidebar state.
-        sidebarOpen: true,
-        camera: resume?.camera ?? { x: 0, y: 0, zoom: 1 },
-        // Anchors are user-added, restored from the library item's resume state,
-        // clamped to the real page range in case the file was replaced by a
-        // shorter one since the user last marked pages.
-        anchorPages: clampAnchorPages(resume?.anchorPages, numPages),
-        sidebarScrollTarget: null,
-        loading: false,
-        loadingPhase: null,
-      });
+      get().openPreparedPdf({ doc, firstPage, dispose: () => {
+        void Promise.resolve(doc.destroy?.()).catch(() => {});
+      } }, name, resume);
     } catch (e) {
       if (pdfLoadEpoch !== startEpoch) {
         // Aborted — unwind quietly, do NOT surface a scary "failed" banner.
@@ -379,19 +366,39 @@ export const usePdfStore = create<PdfStore>((set, get) => ({
     }
   },
 
+  openPreparedPdf: (file, name, resume, annotations) => {
+    releaseDocument();
+    disposeCurrentPdf = file.dispose;
+    const numPages = file.doc.numPages;
+    set({
+      fileName: name, pdfDoc: file.doc, numPages,
+      currentPage: Math.min(numPages, Math.max(1, resume?.lastPage ?? 1)),
+      pageSizes: { 1: file.firstPage },
+      currentItemId: resume?.itemId ?? null,
+      pendingResumeCamera: resume?.camera ?? null,
+      items: annotations?.items ?? {},
+      binding: annotations?.binding,
+      unplacedPages: annotations?.unplaced,
+      dirty: false, history: emptyHistoryRecord(), redoStack: emptyHistoryRecord(),
+      renderEpoch: 0, selectedIds: [], editingTextId: null, textCommitReturnTool: null,
+      showDotGrid: resume?.showDotGrid ?? false,
+      sidebarOpen: true, railScrollTop: 0,
+      camera: resume?.camera ?? { x: 0, y: 0, zoom: 1 },
+      anchorPages: clampAnchorPages(resume?.anchorPages, numPages),
+      sidebarScrollTarget: null, loading: false, loadingPhase: null, error: null,
+    });
+  },
+
   abortPdfLoad: () => {
     // Invalidate any in-flight load AND destroy the live pdf.js task so a stuck
     // parse/render stops burning CPU.
     pdfLoadEpoch++;
     abortActivePdfLoad();
-    const doc = get().pdfDoc as any;
-    if (doc && typeof doc.destroy === 'function') {
-      try { doc.destroy(); } catch { /* ignore */ }
-    }
     get().reset();
   },
 
   closePdf: () => {
+    releaseDocument();
     set({
       fileName: null,
       pdfDoc: null,
@@ -401,6 +408,8 @@ export const usePdfStore = create<PdfStore>((set, get) => ({
       currentItemId: null,
       pendingResumeCamera: null,
       items: {},
+      binding: undefined,
+      unplacedPages: undefined,
       dirty: false,
       history: emptyHistoryRecord(),
       redoStack: emptyHistoryRecord(),
@@ -579,6 +588,22 @@ export const usePdfStore = create<PdfStore>((set, get) => ({
     }));
   },
 
+  addAssetObject: (page, data) => {
+    const id = makePdfId('asset');
+    get().pushHistory(page);
+    set(state => ({
+      items: { ...state.items, [page]: [...(state.items[page] ?? []), { ...data, id, type: 'asset', createdAt: Date.now() }] },
+      dirty: true,
+      ...(page === state.currentPage ? { activeTool: 'select', selectedIds: [id] } : {}),
+    }));
+  },
+
+  resizeAssetObject: (page, id, width, height) => set(state => ({
+    items: { ...state.items, [page]: (state.items[page] ?? []).map(object =>
+      object.type === 'asset' && object.id === id ? { ...object, width, height } : object) },
+    dirty: true,
+  })),
+
   updateImageObject: (page, id, patch) => {
     set((s) => ({
       items: {
@@ -616,7 +641,7 @@ export const usePdfStore = create<PdfStore>((set, get) => ({
         [page]: (s.items[page] ?? []).map((o) => {
           if (!setIds.has(o.id)) return o;
           if (o.type === 'text') return { ...o, x: o.x + dx, y: o.y + dy, updatedAt: Date.now() } as PdfTextObject;
-          if (o.type === 'image') return { ...o, x: o.x + dx, y: o.y + dy } as PdfImageObject;
+          if (o.type === 'image' || o.type === 'asset') return { ...o, x: o.x + dx, y: o.y + dy };
           return o;
         }),
       },
@@ -811,15 +836,12 @@ export const usePdfStore = create<PdfStore>((set, get) => ({
 
   saveAnnotations: async () => {
     window.dispatchEvent(new Event('ink:flush-gesture'));
-    const { currentItemId, items } = get();
+    const pending = pendingAnnotationBinding();
+    if (pending) await pending.catch(() => {});
+    const { currentItemId, items, binding, unplacedPages } = get();
     if (!currentItemId) return { ok: !get().dirty };
-    const data = { items, savedAt: Date.now() };
     try {
-      if (window.electronAPI?.savePdfAnnotation) {
-        await window.electronAPI.savePdfAnnotation(currentItemId, data);
-      } else {
-        localStorage.setItem('pdf-annotation-' + currentItemId, JSON.stringify(data));
-      }
+      await saveAnnotationFile(currentItemId, { items, binding, unplaced: unplacedPages });
       if (get().currentItemId === currentItemId && get().items === items) set({ dirty: false });
       return { ok: true };
     } catch (e) {
@@ -829,35 +851,16 @@ export const usePdfStore = create<PdfStore>((set, get) => ({
   },
 
   loadAnnotations: async (itemId) => {
-    let data: any = null;
     try {
-      if (window.electronAPI?.loadPdfAnnotation) {
-        data = await window.electronAPI.loadPdfAnnotation(itemId);
-      } else {
-        const raw = localStorage.getItem('pdf-annotation-' + itemId);
-        if (raw) data = JSON.parse(raw);
-      }
+      const data = await loadAnnotationFile(itemId);
+      set({ items: data.items, binding: data.binding, unplacedPages: data.unplaced, dirty: false, renderEpoch: get().renderEpoch + 1 });
     } catch (e) {
       console.error('Load annotations failed:', e);
-      data = null;
-    }
-    if (data?.items) {
-      const items: Record<number, PdfItem[]> = {};
-      for (const [k, v] of Object.entries(data.items)) {
-        items[Number(k)] = v as PdfItem[];
-      }
-      set({ items, dirty: false, renderEpoch: get().renderEpoch + 1 });
-    } else if (data?.strokes) {
-      // Legacy schema (strokes only, pre-"insert") — wrap each page into PdfItem[].
-      const items: Record<number, PdfItem[]> = {};
-      for (const [k, v] of Object.entries(data.strokes)) {
-        items[Number(k)] = v as PdfItem[];
-      }
-      set({ items, dirty: false, renderEpoch: get().renderEpoch + 1 });
     }
   },
 
-  reset: () =>
+  reset: () => {
+    releaseDocument();
     set({
       fileName: null,
       pdfDoc: null,
@@ -867,6 +870,8 @@ export const usePdfStore = create<PdfStore>((set, get) => ({
       currentItemId: null,
       pendingResumeCamera: null,
       items: {},
+      binding: undefined,
+      unplacedPages: undefined,
       dirty: false,
       history: {},
       redoStack: {},
@@ -890,5 +895,6 @@ export const usePdfStore = create<PdfStore>((set, get) => ({
       loading: false,
       loadingPhase: null,
       error: null,
-    }),
+    });
+  },
 }));

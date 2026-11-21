@@ -1,6 +1,10 @@
 const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('electronAPI', {
+  pickLibraryFiles: (options) => ipcRenderer.invoke('file-library:pick', options),
+  checkLibraryFiles: (paths) => ipcRenderer.invoke('file-library:status', paths),
+  readLibraryImage: (path) => ipcRenderer.invoke('file-library:image', path),
+  prepareLibraryDocument: (paths) => ipcRenderer.invoke('file-library:prepare', paths),
   onStorageFlush: (callback) => {
     const listener = (_event, id) => callback(id);
     ipcRenderer.on('app:flush-storage', listener);

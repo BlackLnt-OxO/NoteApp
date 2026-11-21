@@ -10,6 +10,8 @@
  */
 
 import { create } from 'zustand';
+import type { FileBinding } from '../FileLibrary/annotationFiles';
+import type { FileKind } from '../FileLibrary/fileTypes';
 
 export interface PdfCategory {
   id: string;
@@ -21,6 +23,8 @@ export interface PdfLibraryItem {
   id: string;
   name: string;
   path: string;
+  paths?: string[];
+  kind?: FileKind;
   categoryId: string | null;
   pageCount: number;
   sizeBytes: number;
@@ -47,6 +51,7 @@ export interface PdfLibraryStore {
   setItemCategory: (id: string, categoryId: string | null) => void;
   updateItemPath: (id: string, path: string) => void;
   touchLastOpened: (id: string) => void;
+  publishFile: (id: string, binding: FileBinding, pageCount: number, categoryId?: string | null, replaced?: boolean) => void;
   /** Drag-to-reorder: swap two items in the list. */
   reorderItems: (fromIndex: number, toIndex: number) => void;
 
@@ -109,6 +114,21 @@ export const usePdfLibrary = create<PdfLibraryStore>((set, get) => ({
       items: s.items.map((i) => (i.id === id ? { ...i, lastOpened: Date.now() } : i)),
     })),
 
+  publishFile: (id, binding, pageCount, categoryId = null, replaced = false) => {
+    const { items, categories } = get();
+    const existing = items.find(item => item.id === id);
+    const next: PdfLibraryItem = {
+      ...(existing ?? { id, categoryId, addedAt: Date.now() }),
+      name: binding.name, path: binding.paths[0], paths: binding.paths,
+      kind: binding.kind, pageCount, sizeBytes: binding.sizeBytes, lastOpened: Date.now(),
+      ...(replaced ? { camera: undefined, anchorPages: [], lastPage: 1 } : {}),
+    };
+    const ordered = existing ? items.map(item => item.id === id ? next : item) : [next, ...items];
+    try { localStorage.setItem(STORAGE_KEY, JSON.stringify({ items: ordered, categories })); }
+    catch (error) { if (!existing) throw error; }
+    set({ items: ordered, loaded: true });
+  },
+
   reorderItems: (fromIndex, toIndex) =>
     set((s) => {
       const items = [...s.items];
@@ -144,6 +164,7 @@ export const usePdfLibrary = create<PdfLibraryStore>((set, get) => ({
   },
 
   loadState: () => {
+    if (get().loaded) return;
     try {
       const raw = localStorage.getItem(STORAGE_KEY);
       if (raw) {

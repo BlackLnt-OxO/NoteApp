@@ -1,20 +1,12 @@
 /**
- * LibraryHome — the PDF home screen: a library of imported PDFs.
- *
- * - Category chips (全部 / folders) to filter, "+" to create a folder.
- * - Card grid of PDFs (name, page count, last opened), sorted by last opened.
- * - Right-click a card: 打开 / 添加到分类 / 移除分类 / 删除.
- * - Right-click a category chip: 重命名 / 删除.
- * - Opening uses the stored absolute path; if the file was moved/deleted the
- *   UI shows a re-select dialog and updates the stored path.
+ * File library home. The same ordered cards represent all paginated formats.
  */
 
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useNoteStore } from '../../store';
 import { fs } from '../../utils';
-import { usePdfStore } from './PdfStore';
 import { usePdfLibrary, type PdfCategory, type PdfLibraryItem } from './PdfLibrary';
-import { pickPdfFile } from './PdfPicker';
+import { fileTypeLabel } from '../FileLibrary/fileTypes';
 import FlowGrid from '../FlowGrid';
 import { askConfirm } from '../ConfirmDialog';
 
@@ -50,27 +42,21 @@ const PdfCardIcon: React.FC = () => (
 
 interface MenuState { x: number; y: number; }
 
-const LibraryHome: React.FC = () => {
+interface Props {
+  onImport: (categoryId: string | null) => Promise<void>;
+  onOpen: (item: PdfLibraryItem) => Promise<void>;
+  onReplace: (item: PdfLibraryItem) => Promise<void>;
+  importing: boolean;
+}
+
+const LibraryHome: React.FC<Props> = ({ onImport, onOpen, onReplace, importing }) => {
   const gfs = useNoteStore((s) => s.settings.fontSize);
   const items = usePdfLibrary((s) => s.items);
   const categories = usePdfLibrary((s) => s.categories);
-  const loading = usePdfStore((s) => s.loading);
-  const loadingPhase = usePdfStore((s) => s.loadingPhase);
-  const openingRef = useRef(false);
-  // After 10s of a stuck import/resume, surface an "中断" button beside the text.
-  const [showAbort, setShowAbort] = useState(false);
-  useEffect(() => {
-    if (!loading) { setShowAbort(false); return; }
-    setShowAbort(false);
-    const t = setTimeout(() => setShowAbort(true), 10000);
-    return () => clearTimeout(t);
-  }, [loading]);
   const [selectedCategory, setSelectedCategory] = useState<string | null>(null); // null = all
   const [cardMenu, setCardMenu] = useState<(MenuState & { item: PdfLibraryItem }) | null>(null);
   const [categoryMenu, setCategoryMenu] = useState<(MenuState & { category: PdfCategory }) | null>(null);
   const [addToCategoryOpen, setAddToCategoryOpen] = useState(false);
-  const [missingItem, setMissingItem] = useState<PdfLibraryItem | null>(null);
-  const [importing, setImporting] = useState(false);
   const [creatingCategory, setCreatingCategory] = useState(false);
   const [newCatName, setNewCatName] = useState('');
   const [renamingCat, setRenamingCat] = useState<PdfCategory | null>(null);
@@ -88,95 +74,6 @@ const LibraryHome: React.FC = () => {
     : items;
   // Cards keep the user's drag-to-reorder sequence (no auto-sort by recency).
   const sorted = filtered;
-
-  // ---- import ---------------------------------------------------------------
-
-  const doImport = async () => {
-    setImporting(true);
-    try {
-      const picked = await pickPdfFile();
-      if (picked) {
-        await usePdfStore.getState().loadPdfFromBuffer(picked.buffer, picked.name);
-        const numPages = usePdfStore.getState().numPages;
-        usePdfLibrary.getState().addItem({
-          name: picked.name,
-          path: picked.path,
-          categoryId: selectedCategory,
-          pageCount: numPages,
-          sizeBytes: picked.buffer.byteLength,
-        });
-      }
-    } finally {
-      setImporting(false);
-    }
-  };
-
-  // ---- open (with missing-file re-select) ------------------------------------
-
-  const doOpen = async (item: PdfLibraryItem) => {
-    if (openingRef.current) return;
-    openingRef.current = true;
-    try {
-      const api = window.electronAPI;
-      if (api?.pdfFileExists) {
-        const exists = await api.pdfFileExists(item.path);
-        if (exists) {
-          const res = await api.readPdfFile(item.path);
-          if (res?.ok) {
-            await usePdfStore.getState().loadPdfFromBuffer(res.data, item.name, {
-              itemId: item.id,
-              lastPage: item.lastPage,
-              camera: item.camera,
-              showDotGrid: item.showDotGrid,
-              sidebarOpen: item.sidebarOpen,
-              anchorPages: item.anchorPages,
-            });
-            // The user hit "中断" → the store reset itself to home. Stop here and
-            // do NOT load annotations / mark "last opened" for a doc that isn't
-            // open (openingRef is cleared by the finally below).
-            if (usePdfStore.getState().currentItemId !== item.id) return;
-            await usePdfStore.getState().loadAnnotations(item.id);
-            usePdfLibrary.getState().touchLastOpened(item.id);
-            return;
-          }
-        }
-        setMissingItem(item);
-        return;
-      }
-      // No IPC (browser) — just try the picker
-      const picked = await pickPdfFile();
-      if (picked) {
-        await usePdfStore.getState().loadPdfFromBuffer(picked.buffer, picked.name);
-      }
-    } catch (e) {
-      console.error('Failed to open PDF:', e);
-    } finally {
-      // Always release the guard — otherwise one cancelled/interrupted open makes
-      // every later card click a silent no-op.
-      openingRef.current = false;
-    }
-  };
-
-  const doReselect = async () => {
-    const item = missingItem;
-    setMissingItem(null);
-    if (!item) return;
-    const picked = await pickPdfFile();
-    if (!picked) return;
-    usePdfLibrary.getState().updateItemPath(item.id, picked.path);
-    await usePdfStore.getState().loadPdfFromBuffer(picked.buffer, picked.name, {
-      itemId: item.id,
-      lastPage: item.lastPage,
-      camera: item.camera,
-      showDotGrid: item.showDotGrid,
-      sidebarOpen: item.sidebarOpen,
-      anchorPages: item.anchorPages,
-    });
-    // Aborted → the store is back on the home screen; nothing to resume.
-    if (usePdfStore.getState().fileName === null) return;
-    await usePdfStore.getState().loadAnnotations(item.id);
-    usePdfLibrary.getState().touchLastOpened(item.id);
-  };
 
   // ---- category helpers -------------------------------------------------------
 
@@ -202,9 +99,9 @@ const LibraryHome: React.FC = () => {
     }}>
       {/* Header */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 20 }}>
-        <span style={{ fontSize: fs(18, gfs), fontWeight: 600 }}>PDF 批注库</span>
+        <span style={{ fontSize: fs(18, gfs), fontWeight: 600 }}>文件</span>
         <button
-          onClick={doImport} disabled={importing}
+          onClick={() => void onImport(selectedCategory)} disabled={importing}
           className="btn-accent"
           style={{
             marginLeft: 'auto', padding: '8px 18px', borderRadius: '8px',
@@ -212,7 +109,7 @@ const LibraryHome: React.FC = () => {
             fontSize: fs(13, gfs), fontWeight: 600, fontFamily: 'inherit',
           }}
         >
-          {importing ? '正在导入…' : '导入 PDF'}
+          {importing ? '正在导入…' : '导入文件'}
         </button>
       </div>
 
@@ -267,7 +164,7 @@ const LibraryHome: React.FC = () => {
       {/* Empty state */}
       {sorted.length === 0 && (
         <div style={{ padding: '60px 0', textAlign: 'center', color: 'var(--text-muted)', fontSize: fs(13, gfs) }}>
-          {items.length === 0 ? '还没有导入过 PDF，点击右上角「导入 PDF」开始。' : '这个分类下还没有 PDF。'}
+          {items.length === 0 ? '还没有导入文件，点击右上角「导入文件」开始。' : '这个分类下还没有文件。'}
         </div>
       )}
 
@@ -279,8 +176,10 @@ const LibraryHome: React.FC = () => {
           itemHeight={110}
           gap={14}
           getId={(i) => i.id}
-          onReorder={(from, to) => usePdfLibrary.getState().reorderItems(from, to)}
-          onCardClick={(item) => doOpen(item)}
+          onReorder={(from, to) => usePdfLibrary.getState().reorderItems(
+            items.findIndex(item => item.id === sorted[from].id), items.findIndex(item => item.id === sorted[to].id),
+          )}
+          onCardClick={item => void onOpen(item)}
           renderCard={(item, _idx, hovered) => (
             <div
               onContextMenu={(e) => {
@@ -298,14 +197,15 @@ const LibraryHome: React.FC = () => {
                 position: 'relative', userSelect: 'none',
               }}
             >
+              <span className="file-type-corner">{fileTypeLabel(item.kind ?? 'pdf')}</span>
               {hovered && (
                 <button
                   title="删除"
                   onClick={(e) => {
                     e.stopPropagation();
                     askConfirm({
-                      title: '删除 PDF',
-                      message: `从库中删除「${item.name}」？批注和磁盘上的 PDF 文件不会被删除。`,
+                      title: '删除文件卡片',
+                      message: `从库中删除「${item.name}」及其批注？磁盘上的原文件会保留。`,
                       onConfirm: () => {
                         usePdfLibrary.getState().removeItem(item.id);
                         window.electronAPI?.deletePdfAnnotation(item.id);
@@ -313,7 +213,7 @@ const LibraryHome: React.FC = () => {
                     });
                   }}
                   style={{
-                    position: 'absolute', top: 8, right: 8,
+                    position: 'absolute', bottom: 8, right: 8,
                     width: 22, height: 22, borderRadius: '50%', border: 'none', cursor: 'pointer',
                     background: 'rgba(231,76,60,0.8)', color: '#fff', fontSize: fs(12, gfs), lineHeight: 1,
                     display: 'flex', alignItems: 'center', justifyContent: 'center',
@@ -322,7 +222,7 @@ const LibraryHome: React.FC = () => {
                   ×
                 </button>
               )}
-              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 7 }}>
                 <div style={{ color: 'var(--accent)' }}><PdfCardIcon /></div>
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div style={{ fontSize: fs(13, gfs), fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{item.name}</div>
@@ -331,7 +231,7 @@ const LibraryHome: React.FC = () => {
               </div>
               <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: fs(11, gfs), color: 'var(--text-muted)' }}>
                 <span>{item.categoryId ? (categories.find((c) => c.id === item.categoryId)?.name ?? '') : ''}</span>
-                <span>{relativeTime(item.lastOpened)}</span>
+                <span style={{ marginRight: hovered ? 24 : 0 }}>{relativeTime(item.lastOpened)}</span>
               </div>
             </div>
           )}
@@ -348,7 +248,8 @@ const LibraryHome: React.FC = () => {
           }}
           onClick={(e) => e.stopPropagation()}
         >
-          <MenuItem onClick={() => { doOpen(cardMenu.item); setCardMenu(null); }}>打开</MenuItem>
+          <MenuItem onClick={() => { void onOpen(cardMenu.item); setCardMenu(null); }}>打开</MenuItem>
+          <MenuItem onClick={() => { void onReplace(cardMenu.item); setCardMenu(null); }}>替换文件</MenuItem>
           <MenuItem onClick={() => setAddToCategoryOpen((v) => !v)}>添加到分类 ▸</MenuItem>
           {addToCategoryOpen && (
             <div style={{ padding: '2px 0 4px', margin: '0 4px', borderTop: '1px solid var(--glass-border)' }}>
@@ -392,8 +293,8 @@ const LibraryHome: React.FC = () => {
             onClick={() => {
               setCardMenu(null);
               askConfirm({
-                title: '删除 PDF',
-                message: `从库中删除「${cardMenu.item.name}」？批注和磁盘上的 PDF 文件不会被删除。`,
+                title: '删除文件卡片',
+                message: `从库中删除「${cardMenu.item.name}」及其批注？磁盘上的原文件会保留。`,
                 onConfirm: () => {
                   usePdfLibrary.getState().removeItem(cardMenu.item.id);
                   window.electronAPI?.deletePdfAnnotation(cardMenu.item.id);
@@ -468,68 +369,7 @@ const LibraryHome: React.FC = () => {
         </div>
       )}
 
-      {/* ---- Missing file dialog ---- */}
-      {missingItem && (
-        <div style={{
-          position: 'fixed', inset: 0, zIndex: 3000,
-          display: 'flex', alignItems: 'center', justifyContent: 'center',
-          background: 'rgba(0,0,0,0.5)',
-        }}>
-          <div style={{
-            padding: '22px 24px', borderRadius: '12px', maxWidth: 380,
-            background: 'var(--glass-bg)', backdropFilter: 'blur(16px)', border: '1px solid var(--glass-border)',
-            boxShadow: 'var(--glass-shadow)', color: 'var(--text-primary)', fontSize: fs(13, gfs), lineHeight: 1.7,
-          }}>
-            <div style={{ fontWeight: 600, marginBottom: 8, fontSize: fs(14, gfs) }}>找不到 PDF 文件</div>
-            <div style={{ color: 'var(--text-secondary)' }}>
-              文件可能已被移动或删除：<br />
-              <span style={{ fontFamily: 'monospace', fontSize: fs(11, gfs), wordBreak: 'break-all' }}>{missingItem.name}</span>
-            </div>
-            <div style={{ marginTop: '18px', display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
-              <button onClick={() => setMissingItem(null)}
-                style={{ padding: '7px 14px', borderRadius: '6px', cursor: 'pointer', fontFamily: 'inherit', fontSize: fs(12, gfs), border: '1px solid var(--glass-border)', background: 'var(--glass-bg-light)', color: 'var(--text-secondary)' }}>
-                取消
-              </button>
-              <button onClick={doReselect}
-                className="btn-accent"
-                style={{ padding: '7px 14px', borderRadius: '6px', cursor: 'pointer', fontFamily: 'inherit', fontSize: fs(12, gfs), color: '#fff' }}>
-                重新选择文件
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
 
-      {loading && (
-        <div style={{
-          position: 'fixed', inset: 0, zIndex: 3000,
-          display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 14,
-          background: 'rgba(0,0,0,0.45)', backdropFilter: 'blur(4px)', WebkitBackdropFilter: 'blur(4px)',
-        }}>
-          <div style={{
-            width: 40, height: 40, borderRadius: '50%',
-            border: '3px solid rgba(255,255,255,0.25)', borderTopColor: 'var(--accent)',
-            animation: 'spin 0.8s linear infinite',
-          }} />
-          <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-            <div style={{ fontSize: 13, color: '#fff', fontWeight: 600 }}>
-              {loadingPhase ? `正在打开 PDF · ${loadingPhase}…` : '正在打开 PDF…'}
-            </div>
-            {showAbort && (
-              <button
-                onClick={() => usePdfStore.getState().abortPdfLoad()}
-                style={{
-                  padding: '5px 14px', borderRadius: 6, cursor: 'pointer', fontFamily: 'inherit',
-                  fontSize: 12, fontWeight: 600, color: '#fff', border: 'none',
-                  background: 'rgba(231,76,60,0.9)',
-                }}
-              >
-                中断
-              </button>
-            )}
-          </div>
-        </div>
-      )}
     </div>
   );
 };

@@ -9,7 +9,7 @@
  * Position persistence is just the array order — callers persist the array.
  */
 
-import React, { useState, useRef, useCallback, useMemo } from 'react';
+import React, { useState, useRef, useCallback, useMemo, useLayoutEffect } from 'react';
 
 const DRAG_THRESHOLD = 5;
 const PAD = 28;
@@ -31,6 +31,7 @@ export function FlowGrid<T>({
   items, itemWidth, itemHeight, gap, getId, renderCard, onReorder, onCardClick, empty,
 }: FlowGridProps<T>): React.ReactElement {
   const containerRef = useRef<HTMLDivElement>(null);
+  const [containerWidth, setContainerWidth] = useState<number | null>(null);
   const [pending, setPending] = useState<{
     index: number; startX: number; startY: number; offsetX: number; offsetY: number; pointerId: number;
   } | null>(null);
@@ -40,10 +41,23 @@ export function FlowGrid<T>({
   const [hoverId, setHoverId] = useState<string | null>(null);
   const didDragRef = useRef(false);
 
+  useLayoutEffect(() => {
+    const container = containerRef.current;
+    if (!container) return;
+
+    const measureWidth = () => setContainerWidth(container.clientWidth);
+    measureWidth();
+    const observer = new ResizeObserver(measureWidth);
+    observer.observe(container);
+    return () => observer.disconnect();
+  }, []);
+
   const positions = useMemo(() => {
     const out: { x: number; y: number }[] = [];
+    if (containerWidth === null) return out;
+
     let rowY = PAD, rowH = 0, colX = PAD;
-    const maxRight = (containerRef.current?.clientWidth || 900) - PAD;
+    const maxRight = containerWidth - PAD;
     for (let i = 0; i < items.length; i++) {
       if (colX + itemWidth > maxRight && i > 0) {
         rowY += rowH + gap;
@@ -55,7 +69,7 @@ export function FlowGrid<T>({
       rowH = Math.max(rowH, itemHeight);
     }
     return out;
-  }, [items.length, itemWidth, itemHeight, gap]);
+  }, [containerWidth, items.length, itemWidth, itemHeight, gap]);
 
   const totalHeight = useMemo(() => {
     if (positions.length === 0) return PAD * 2;
@@ -143,8 +157,8 @@ export function FlowGrid<T>({
       style={{ position: 'relative', width: '100%', height: '100%', overflow: 'auto', touchAction: 'none' }}
     >
       <div style={{ position: 'relative', minHeight: totalHeight }}>
-        {items.map((item, idx) => {
-          const pos = positions[idx] || { x: PAD, y: PAD };
+        {positions.map((pos, idx) => {
+          const item = items[idx];
           const isDraggingCard = dragging?.index === idx;
           const id = getId(item);
           return (

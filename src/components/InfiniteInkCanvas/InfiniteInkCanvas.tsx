@@ -40,6 +40,8 @@ const POINTER_ACTIVE_MS = 250;
 import { releaseDocumentInkCaches, dropRastersNotAtScale } from '../PdfAnnotation/InkRasterCache';
 import TextNode from './TextNode';
 import ImageObject from './ImageObject';
+import AssetObject from '../FileLibrary/AssetObject';
+import { assetDropTarget, makeAssetPlacement, useAssetDrop } from '../FileLibrary/assetDrop';
 import TextObject from './TextObject';
 import Toolbar from './Toolbar';
 import ToolbarShell from './ToolbarShell';
@@ -788,7 +790,7 @@ const InfiniteInkCanvas: React.FC = () => {
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
       const tag = (e.target as HTMLElement)?.tagName;
-      if (tag === 'TEXTAREA' || tag === 'INPUT') return;
+      if (tag === 'TEXTAREA' || tag === 'INPUT' || document.querySelector('[data-file-dialog]')) return;
       const state = useCanvasStore.getState();
       if (e.code === 'Space') { e.preventDefault(); spaceDownRef.current = true; }
       if (e.ctrlKey && e.key === 'z') { e.preventDefault(); state.undo(); }
@@ -796,6 +798,12 @@ const InfiniteInkCanvas: React.FC = () => {
       if (e.ctrlKey && e.key === 'Z') { e.preventDefault(); state.redo(); }
       if ((e.key === 'Delete' || e.key === 'Backspace') && state.editingTextId) {
         state.deleteTextNode(state.editingTextId);
+      } else if (e.key === 'Delete' || e.key === 'Backspace') {
+        const assets = state.objects.filter(object => object.type === 'asset' && state.selectedIds.includes(object.id));
+        if (assets.length) {
+          e.preventDefault();
+          state.deleteObjects(assets.map(object => object.id));
+        }
       }
       if (e.ctrlKey && e.key === '0') { e.preventDefault(); state.setCamera({ x: 0, y: 0, zoom: 1 }); }
     };
@@ -1415,12 +1423,23 @@ const InfiniteInkCanvas: React.FC = () => {
   const selectedShape = (activeTool === 'select' || shapeGesture.recent?.id === selectedIds[0]) && selectedIds.length === 1
     ? objects.find((o): o is Stroke => o.type === 'stroke' && !!o.geometry && o.id === selectedIds[0]) : undefined;
   shapeEditorIdRef.current = selectedShape?.id ?? null;
+  useAssetDrop(containerRef, (assetId, x, y) => {
+    const state = useCanvasStore.getState();
+    const canvasId = state.currentCanvasId;
+    if (!canvasId || !state.loaded) return;
+    const world = screenToWorld(x, y, state.camera);
+    void makeAssetPlacement(assetId, world.x, world.y).then(placement => {
+      const current = useCanvasStore.getState();
+      if (placement && current.currentCanvasId === canvasId && containerRef.current) current.addAssetObject(placement);
+    });
+  });
   const selectionEvents = inkSelectionCaptureHandlers({ enabled: () => useCanvasStore.getState().activeTool === 'select',
     canvas: canvasRef, capture: selectionCaptureRef, owner: pointerOwnerRef, shapeId: shapeEditorIdRef,
     down: handlePointerDown, move: handlePointerMove, up: handlePointerUp });
 
   return (
     <div ref={containerRef}
+      {...assetDropTarget}
       {...selectionEvents}
       onGotPointerCaptureCapture={event => { const id = (event.target as HTMLElement).closest('[data-ink-object-id]')?.getAttribute('data-ink-object-id'); if (id) manipulatedIdsRef.current.add(id); }}
       onLostPointerCaptureCapture={event => { const id = (event.target as HTMLElement).closest('[data-ink-object-id]')?.getAttribute('data-ink-object-id'); if (id) manipulatedIdsRef.current.delete(id); }}
@@ -1430,6 +1449,13 @@ const InfiniteInkCanvas: React.FC = () => {
       {objects.filter((o): o is ImageObjectType => o.type === 'image' && inkObjectVisible(o, camera, boundsRef.current?.width ?? window.innerWidth, boundsRef.current?.height ?? window.innerHeight, [...selectedIds, ...manipulatedIdsRef.current])).map((o) => (
         <ImageObject key={o.id} obj={o} camera={camera} />
       ))}
+      {objects.map(object => object.type === 'asset' && inkObjectVisible(object, camera,
+        boundsRef.current?.width ?? window.innerWidth, boundsRef.current?.height ?? window.innerHeight,
+        [...selectedIds, ...manipulatedIdsRef.current]) ? <AssetObject key={object.id} object={object} camera={camera}
+          interactive={activeTool === 'select'} selected={selectedIds.includes(object.id)}
+          onDelete={() => useCanvasStore.getState().deleteObject(object.id)}
+          startResize={() => useCanvasStore.getState().pushHistory()}
+          resize={(width, height) => useCanvasStore.getState().resizeAssetObject(object.id, width, height)} /> : null)}
       <canvas ref={canvasRef} style={{ position: 'absolute', inset: 0, touchAction: 'none', userSelect: 'none', cursor: cursorStyle }}
         onPointerDown={handlePointerDown} onPointerMove={handlePointerMove} onPointerUp={handlePointerUp}
         onPointerCancel={handlePointerUp}

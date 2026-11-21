@@ -89,7 +89,7 @@ export interface PdfImageObject {
 }
 
 /** Anything drawn / placed on one PDF page: ink strokes or insert objects. */
-export type PdfItem = PdfStroke | PdfTextObject | PdfImageObject;
+export type PdfItem = PdfStroke | PdfTextObject | PdfImageObject | import('../FileLibrary/fileTypes').LinkedAssetObject;
 
 export interface PdfBrush {
   size: number;

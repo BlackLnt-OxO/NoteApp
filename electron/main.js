@@ -425,6 +425,7 @@ async function captureWithNativeSnipping() {
 
 // IPC Handlers
 function setupIPC() {
+  require('./fileLibrary').setupFileLibrary(() => mainWindow);
   // Window controls - close the window that sent the request
   ipcMain.handle('window:minimize', (event) => {
     BrowserWindow.fromWebContents(event.sender)?.minimize();
@@ -848,38 +849,7 @@ document.addEventListener('keydown',function(e){if(e.key==='Escape')ipcRenderer.
     return dir;
   }
 
-  ipcMain.handle('pdf-annotation:save', (event, itemId, data) => {
-    try {
-      const safe = String(itemId).replace(/[^a-zA-Z0-9_-]/g, '_');
-      const filePath = path.join(getPdfDataDir(), `${safe}.json`);
-      fs.writeFileSync(filePath, JSON.stringify(data), 'utf-8');
-      return { ok: true, filePath };
-    } catch (e) {
-      return { ok: false, error: String(e) };
-    }
-  });
-
-  ipcMain.handle('pdf-annotation:load', (event, itemId) => {
-    try {
-      const safe = String(itemId).replace(/[^a-zA-Z0-9_-]/g, '_');
-      const filePath = path.join(getPdfDataDir(), `${safe}.json`);
-      if (!fs.existsSync(filePath)) return null;
-      return JSON.parse(fs.readFileSync(filePath, 'utf-8'));
-    } catch {
-      return null;
-    }
-  });
-
-  ipcMain.handle('pdf-annotation:delete', (event, itemId) => {
-    try {
-      const safe = String(itemId).replace(/[^a-zA-Z0-9_-]/g, '_');
-      const filePath = path.join(getPdfDataDir(), `${safe}.json`);
-      if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
-      return { ok: true };
-    } catch (e) {
-      return { ok: false, error: String(e) };
-    }
-  });
+  require('./pdfAnnotations').setupPdfAnnotations(getPdfDataDir);
 
   ipcMain.handle('app:getPath', (event, name) => {
     return app.getPath(name);

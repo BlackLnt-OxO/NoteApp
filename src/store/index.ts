@@ -246,10 +246,9 @@ export const useNoteStore = create<NoteStore>((set, get) => ({
             offsetX: 0, offsetY: 0, scale: 1,
             backgroundImage: null, showDots: true,
           },
-          // Restore the last-used view. Notes keeps the sidebar open; canvas/PDF
-          // start collapsed (their default), so the user lands where they left off.
+          // Restore the sidebar preference for the last-used workspace.
           viewMode: (['notes', 'inkcanvas', 'pdf'] as const).includes(data.viewMode) ? data.viewMode : 'notes',
-          sidebarCollapsed: data.viewMode === 'notes' ? false : true,
+          sidebarCollapsed: data.viewMode === 'notes' ? false : data.sidebarCollapsed ?? false,
         });
       } else {
         // First run - add welcome notes introducing the three sections.
@@ -288,7 +287,7 @@ export const useNoteStore = create<NoteStore>((set, get) => ({
           },
           {
             id: 'welcome_3',
-            content: 'PDF 批注 — 文档上书写\n\n左侧切到「PDF」导入文档，\n逐页批注与擦除，Ctrl+S 保存批注。',
+            content: '文件批注 — 文档上书写\n\n左侧切到「文件」导入文档，\n逐页批注与擦除，Ctrl+S 保存批注。',
             color: DEFAULT_SETTINGS.defaultNoteColor,
             tag: 'general',
             images: [],

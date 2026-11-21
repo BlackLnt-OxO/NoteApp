@@ -69,6 +69,8 @@ export interface CanvasStore {
    *  `recordHistory=false` batches the insert into one surrounding history push
    *  (used by multi-image import so a single import = a single undo). */
   addImageObject: (data: { dataUrl: string; x: number; y: number; width: number; height: number }, recordHistory?: boolean) => void;
+  addAssetObject: (data: import('../FileLibrary/fileTypes').AssetPlacement) => void;
+  resizeAssetObject: (id: string, width: number, height: number) => void;
   updateImageObject: (id: string, patch: Partial<Pick<ImageObject, 'x' | 'y' | 'width' | 'height'>>) => void;
   setCamera: (partial: Partial<Camera>) => void;
   setActiveTool: (tool: ToolType) => void;
@@ -88,6 +90,7 @@ export interface CanvasStore {
   redo: () => void;
   clearCanvas: () => void;
   deleteObject: (id: string) => void;
+  deleteObjects: (ids: string[]) => void;
   /** Whole-stroke eraser: snapshot history ONCE per wipe gesture (undo restores
    *  every stroke removed by one drag in a single step). */
   beginEraseGesture: () => void;
@@ -240,6 +243,19 @@ export const useCanvasStore = create<CanvasStore>((set, get) => ({
     set((s) => ({ objects: [...s.objects, obj], pendingImageInsert: null }));
   },
 
+  addAssetObject: data => {
+    const id = makeId('asset');
+    get().pushHistory();
+    set(state => ({
+      objects: [...state.objects, { ...data, id, type: 'asset', createdAt: Date.now() }],
+      activeTool: 'select', selectedIds: [id], redoStack: [],
+    }));
+  },
+
+  resizeAssetObject: (id, width, height) => set(state => ({
+    objects: state.objects.map(object => object.type === 'asset' && object.id === id ? { ...object, width, height } : object),
+  })),
+
   updateImageObject: (id, patch) =>
     set((s) => ({
       objects: s.objects.map((o) =>
@@ -275,12 +291,17 @@ export const useCanvasStore = create<CanvasStore>((set, get) => ({
     }));
   },
 
-  deleteObject: (id) => {
+  deleteObject: id => get().deleteObjects([id]),
+
+  deleteObjects: ids => {
+    const removed = new Set(ids);
+    if (!get().objects.some(object => removed.has(object.id))) return;
     get().pushHistory();
-    set((s) => ({
-      objects: s.objects.filter((o) => o.id !== id),
-      editingTextId: s.editingTextId === id ? null : s.editingTextId,
-      renderEpoch: get().renderEpoch + 1,
+    set(state => ({
+      objects: state.objects.filter(object => !removed.has(object.id)),
+      selectedIds: state.selectedIds.filter(id => !removed.has(id)),
+      editingTextId: state.editingTextId && removed.has(state.editingTextId) ? null : state.editingTextId,
+      renderEpoch: state.renderEpoch + 1,
     }));
   },
 
