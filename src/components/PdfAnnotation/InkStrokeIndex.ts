@@ -57,6 +57,13 @@ export class InkStrokeIndex {
     this.blocks.set(stroke.id, blocks);
   }
 
+  /** Whether this stroke is already rasterized into the layer. Callers that
+   *  re-sync the tiles after a diff use this to avoid stamping twice — a second
+   *  composite of a translucent stroke darkens it at every self-overlap. */
+  has(id: string): boolean {
+    return this.strokes.has(id);
+  }
+
   collect(x1: number, y1: number, x2: number, y2: number): PdfStroke[] {
     const found = new Set<PdfStroke>();
     const b = { minX: Math.min(x1, x2), minY: Math.min(y1, y2), maxX: Math.max(x1, x2), maxY: Math.max(y1, y2) };

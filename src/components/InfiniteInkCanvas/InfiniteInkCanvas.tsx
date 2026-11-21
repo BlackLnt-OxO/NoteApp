@@ -1,16 +1,27 @@
+import { inkStrokesOnly, inkObjectVisible } from '../InkViewportObjects';
+import { InkRenderBackend, strokeTileKeys, protectInkSegment } from './InkRenderBackend';
+import { InkDisplayLayers } from '../InkDisplayLayers';
+import { inkTraceId, recordInkTrace, traceInkStrokes } from '../InkDiagnostics';
+import { inkPointerSamples, InkPointerQueue } from '../InkPointerSamples';
 import { releaseStreamingInk } from '../PdfAnnotation/StreamingInkStroke';
 import React, { useRef, useEffect, useCallback } from 'react';
 import { useCanvasStore } from './useCanvasStore';
+import { useInkShapeGesture } from '../useInkShapeGesture';
+import InkShapeEditor from '../InkShapeEditor';
+import { beginSelectionCapture, endSelectionCapture, cancelSelectionCapture, inkSelectionCaptureHandlers,
+  selectionOperation, combineSelection, hitSelectable, boxSelectableIds, createObjectDragPreview,
+  drawObjectDragPreview, clearObjectDragPreview, type SelectionOperation, type SelectionCapture, type ObjectDragPreview } from '../InkSelection';
 import { getInkStrokeIndex, type InkStrokeIndex } from '../PdfAnnotation/InkStrokeIndex';
 import { bakeDragPreview, drawDragPreview, type DragPreview } from '../PdfAnnotation/InkDragPreview';
 import { useBrushCursor } from '../useBrushCursor';
-import { useInkInputActivity } from '../inkInputActivity';
+import { useInkInputActivity, setPointerHold } from '../inkInputActivity';
 import { drawSelectionHighlight, drawSelectionRect } from './CanvasRenderer';
 import {
   drawDotGrid, getPressure, addRawPoint,
-  hitTestStroke, getStrokeBounds, boundsIntersectRect,
+  boundsIntersectRect,
   type Bounds,
 } from '../PdfAnnotation/PdfEngine';
+import { getCommittedStrokeBounds } from '../PdfAnnotation/InkTileErase';
 import {
   createEraserPerf, addEraserScan, addEraserRestamp, logEraserPerf,
   type EraserPerf,
@@ -20,9 +31,12 @@ import { screenToWorld, clampZoom, zoomAt, ERASER_RADIUS } from './constants';
 import {
   stampStroke, eraseSegTiles, eraseDotTiles, drawVisibleTiles, removeStrokesFromTiles,
   disposeTiles, indexInkStrokes, materializeTiles, setTargetBakeScale, targetBakeScale,
-  evictDistantTiles, inkTileBytes, inkTileCount,
+  evictDistantTiles, inkTileBytes, inkTileCount, abandonBuilds,
 } from './InkTiles';
-import { reportInkFrame, resetInkFrame, noteCameraMove, noteInkFrame, cameraSettled, CAMERA_SETTLE_MS } from '../InkFrameStats';
+import { reportInkFrame, resetInkFrame, noteCameraMove, noteInkFrame, cameraMoving, cameraSettled, CAMERA_SETTLE_MS } from '../InkFrameStats';
+
+/** How long after the pointer's last move materialization still yields to it. */
+const POINTER_ACTIVE_MS = 250;
 import { releaseDocumentInkCaches, dropRastersNotAtScale } from '../PdfAnnotation/InkRasterCache';
 import TextNode from './TextNode';
 import ImageObject from './ImageObject';
@@ -32,7 +46,7 @@ import ToolbarShell from './ToolbarShell';
 import { useCanvasToolbarStore } from './useToolbarStore';
 import { useNoteStore } from '../../store';
 import { themeCanvasColors } from '../../themeColors';
-import type { Stroke, StrokePoint, TextNodeData, ImageObject as ImageObjectType } from './types';
+import type { Stroke, StrokePoint, TextNodeData, CanvasObject, ImageObject as ImageObjectType } from './types';
 
 /** Transient laser-pointer stroke segment (never committed / persisted). */
 interface LaserSegment {
@@ -77,11 +91,37 @@ function drawLaser(ctx: CanvasRenderingContext2D, seg: LaserSegment, alpha: numb
 
 const InfiniteInkCanvas: React.FC = () => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const backgroundLayerRef = useRef<HTMLCanvasElement>(null);
+  const committedLayerRef = useRef<HTMLCanvasElement>(null);
+  const displayLayersRef = useRef(new InkDisplayLayers());
+  const manipulatedIdsRef = useRef(new Set<string>());
+  const backgroundPausedRef = useRef(false);
+  const backendRef = useRef<InkRenderBackend | null>(null);
+  const boundsRef = useRef<DOMRect | null>(null);
+  const inputQueueRef = useRef(new InkPointerQueue());
+  const pointerUpRef = useRef<((event: React.PointerEvent<HTMLCanvasElement>) => void) | null>(null);
+  const pointerOwnerRef = useRef<number | null>(null);
+  const lastQueuedRef = useRef<{ x: number; y: number } | undefined>();
+  const gestureTilesRef = useRef(new Set<string>());
   const containerRef = useRef<HTMLDivElement>(null);
+  /** When the pointer last moved. Materialization yields to it the same way it
+   *  yields to a moving camera — see runMaterialize. */
+  const lastPointerAtRef = useRef(-Infinity);
   const currentStrokeRef = useRef<Stroke | null>(null);
+  const shapeEditPreviewRef = useRef<Stroke | null>(null);
+  const shapeEditorIdRef = useRef<string | null>(null);
   const isDrawingRef = useRef(false);
   const panAnchorRef = useRef<{ sx: number; sy: number; camX: number; camY: number } | null>(null);
+  const pendingPanRef = useRef<{ x: number; y: number } | null>(null);
+  const flushPanCamera = useCallback(() => {
+    const camera = pendingPanRef.current; pendingPanRef.current = null;
+    if (camera) useCanvasStore.getState().setCamera(camera);
+  }, []);
+  const middlePanRef = useRef(false);
+  const prevObjectsRef = useRef<CanvasObject[] | null>(null);
   const selectAnchorRef = useRef<{ x: number; y: number } | null>(null);
+  const selectionCaptureRef = useRef<SelectionCapture | null>(null);
+  const selectionOperationRef = useRef<{ operation: SelectionOperation; base: string[] }>({ operation: 'replace', base: [] });
   const selectionRectRef = useRef<{ x1: number; y1: number; x2: number; y2: number } | null>(null);
   /** Active select-drag. `strokes` holds the ORIGINAL stroke objects and
    *  `preview` a raster of them baked once at drag start — so a frame of the drag
@@ -92,9 +132,9 @@ const InfiniteInkCanvas: React.FC = () => {
   const selectDragRef = useRef<{
     start: { x: number; y: number };
     ids: string[];
-    snapshots: Map<string, StrokePoint[]>;
     strokes: Stroke[];
     preview: DragPreview | null;
+    objects: ObjectDragPreview;
     dx: number;
     dy: number;
   } | null>(null);
@@ -144,6 +184,13 @@ const InfiniteInkCanvas: React.FC = () => {
   } | null>(null);
 
   useEffect(() => () => {
+    const owner = pointerOwnerRef.current;
+    if (owner !== null) pointerUpRef.current?.({ pointerId: owner, type: 'pointercancel' } as React.PointerEvent<HTMLCanvasElement>);
+    clearObjectDragPreview(selectDragRef.current?.objects);
+    cancelSelectionCapture(selectionCaptureRef, pointerOwnerRef);
+    backendRef.current?.dispose(); backendRef.current = null;
+    displayLayersRef.current.dispose();
+    inputQueueRef.current.clear(); gestureTilesRef.current.clear();
     if (currentStrokeRef.current) releaseStreamingInk(currentStrokeRef.current);
     if (rafRef.current) cancelAnimationFrame(rafRef.current);
     if (laserRafRef.current) cancelAnimationFrame(laserRafRef.current);
@@ -156,6 +203,9 @@ const InfiniteInkCanvas: React.FC = () => {
     // because allocating its tiles meant evicting all of them first.
     disposeTiles(inkTilesRef.current);
     inkTilesRef.current = new Map();
+    // A new layer has no index, even if the vectors are unchanged. StrictMode
+    // replays setup after this cleanup and must index the document again.
+    prevObjectsRef.current = null;
     releaseDocumentInkCaches();
     resetInkFrame();
     // StrictMode replays effects on mount; cancelled frame IDs must not prevent
@@ -167,6 +217,7 @@ const InfiniteInkCanvas: React.FC = () => {
   }, []);
 
   const objects = useCanvasStore((s) => s.objects);
+  const shapeScope = useCanvasStore((s) => s.currentCanvasId) ?? '';
   const camera = useCanvasStore((s) => s.camera);
   const activeTool = useCanvasStore((s) => s.activeTool);
   const brush = useCanvasStore((s) => s.brush);
@@ -209,15 +260,25 @@ const InfiniteInkCanvas: React.FC = () => {
     // Element CSS size = layout px; the CSS scale renders it at the visual size.
     canvas.style.width = lw + 'px';
     canvas.style.height = lh + 'px';
+    boundsRef.current = container.getBoundingClientRect();
+    for (const layer of [backgroundLayerRef.current, committedLayerRef.current]) {
+      if (!layer) continue;
+      layer.width = canvas.width; layer.height = canvas.height;
+      layer.style.width = canvas.style.width; layer.style.height = canvas.style.height;
+    }
+    displayLayersRef.current.resize();
     dirtyRef.current = true;
     scheduleRender();
   }, [uiScale]);
 
   useEffect(() => {
     resizeCanvas();
+    window.addEventListener('resize', resizeCanvas);
+    const refreshBounds = () => { if (containerRef.current) boundsRef.current = containerRef.current.getBoundingClientRect(); };
+    window.addEventListener('scroll', refreshBounds, true);
     const ro = new ResizeObserver(() => resizeCanvas());
     if (containerRef.current) ro.observe(containerRef.current);
-    return () => ro.disconnect();
+    return () => { ro.disconnect(); window.removeEventListener('resize', resizeCanvas); window.removeEventListener('scroll', refreshBounds, true); };
   }, [resizeCanvas]);
 
   // `transform: scale` changes the canvas's VISUAL size without changing its
@@ -227,7 +288,7 @@ const InfiniteInkCanvas: React.FC = () => {
     resizeCanvas();
   }, [uiScale, resizeCanvas]);
 
-  useEffect(() => { useCanvasStore.getState().loadCanvasData(); }, []);
+  useEffect(() => { if (!useCanvasStore.getState().loaded) void useCanvasStore.getState().loadCanvasData().catch(console.error); }, []);
 
   // Flush the current canvas when the editor unmounts (leaving the view).
   useEffect(() => {
@@ -239,7 +300,24 @@ const InfiniteInkCanvas: React.FC = () => {
 
   // ---- Render loop ------------------------------------------------------------
 
+  const flushInput = useCallback(() => {
+    const stroke = currentStrokeRef.current;
+    if (!stroke) { inputQueueRef.current.clear(); return; }
+    if (stroke.geometry) { inputQueueRef.current.clear(); return; }
+    inputQueueRef.current.drain(sample => {
+      const previous = stroke.points[stroke.points.length - 1];
+      addRawPoint(stroke, sample.x, sample.y, sample.pressure, sample.t);
+      if (stroke.compositeOperation === 'destination-out' && previous) {
+        eraseSegTiles(inkTilesRef.current, previous.x, previous.y, sample.x, sample.y, stroke.size);
+        displayLayersRef.current.invalidate(gestureTilesRef.current);
+      }
+    });
+  }, []);
+
   const doRender = useCallback(() => {
+    flushPanCamera();
+    flushInput();
+    const liveStart = performance.now();
     const canvas = canvasRef.current;
     if (!canvas) return;
     const ctx = canvas.getContext('2d');
@@ -250,26 +328,29 @@ const InfiniteInkCanvas: React.FC = () => {
     const state = useCanvasStore.getState();
     const container = containerRef.current;
     if (!container) return;
-    const rect = container.getBoundingClientRect();
+    const rect = boundsRef.current ?? container.getBoundingClientRect();
     const vw = rect.width, vh = rect.height;
     const dpr = dprRef.current;
-    const colors = themeCanvasColors(useNoteStore.getState().settings.theme);
     const cam = state.camera;
 
+    const colors = themeCanvasColors(useNoteStore.getState().settings.theme);
+    const bgLayer = backgroundLayerRef.current, inkLayer = committedLayerRef.current;
+    if (bgLayer && inkLayer) {
+      displayLayersRef.current.paint({ background: bgLayer, ink: inkLayer, tiles: inkTilesRef.current,
+        camera: cam, width: vw, height: vh, dpr, uiScale: useNoteStore.getState().uiScale,
+        drawTile: (context, key, tile, x, y, w, h) => { const backend = backendRef.current; if (backend) backend.drawTile(context, key, tile, x, y, w, h); else context.drawImage(tile, x, y, w, h); }, backgroundColor: colors.background,
+        dotColor: colors.dotColor, showDotGrid: state.showDotGrid });
+    }
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, vw, vh);
-    ctx.fillStyle = colors.background;
-    ctx.fillRect(0, 0, vw, vh);
-
-    if (state.showDotGrid) drawDotGrid(ctx, cam, vw, vh, colors.dotColor);
-
     ctx.save();
     ctx.translate(cam.x, cam.y);
     ctx.scale(cam.zoom, cam.zoom);
 
     // Rasterized ink tiles (O(1) per frame).
     const inkStart = performance.now();
-    const visibleTiles = drawVisibleTiles(ctx, inkTilesRef.current, cam, vw, vh, dpr);
+    backendRef.current?.drawPending(ctx);
+    if (shapeEditPreviewRef.current) drawAnnotatedStroke(ctx, shapeEditPreviewRef.current);
 
     // Text nodes are now always-interactive DOM cards rendered ABOVE the canvas
     // (TextObject) — they are intentionally NOT drawn into the vector canvas.
@@ -279,6 +360,7 @@ const InfiniteInkCanvas: React.FC = () => {
     // wrong density — fall back to drawing the strokes, which is always right.
     if (selectDragRef.current) {
       const d = selectDragRef.current;
+      drawObjectDragPreview(d.objects, containerRef.current, d.dx, d.dy, cam.zoom, useNoteStore.getState().uiScale);
       const p = d.preview;
       if (p && p.scale === targetBakeScale(inkTilesRef.current)) {
         drawDragPreview(ctx, p, d.dx, d.dy);
@@ -286,7 +368,7 @@ const InfiniteInkCanvas: React.FC = () => {
         for (const s of d.strokes) drawAnnotatedStroke(ctx, s, d.dx, d.dy);
       }
     } else if (state.selectedIds.length > 0) {
-      drawSelectionHighlight(ctx, state.objects, state.selectedIds);
+      drawSelectionHighlight(ctx, state.objects, state.selectedIds.filter(id => id !== shapeEditorIdRef.current));
     }
     if (selectionRectRef.current) drawSelectionRect(ctx, selectionRectRef.current);
 
@@ -296,6 +378,7 @@ const InfiniteInkCanvas: React.FC = () => {
         && currentStrokeRef.current.points.length > 0) {
       drawAnnotatedStroke(ctx, currentStrokeRef.current);
     }
+    if (currentStrokeRef.current?.compositeOperation === 'destination-out') drawAnnotatedStroke(ctx, currentStrokeRef.current);
 
     // Transient laser-pointer strokes. While any stroke is being drawn, all
     // trails stop fading and stay lit (so writing a new stroke re-lights earlier
@@ -313,8 +396,8 @@ const InfiniteInkCanvas: React.FC = () => {
     ctx.restore();
 
     reportInkFrame({
-      drawMs: performance.now() - inkStart,
-      visibleTiles,
+      liveMs: performance.now() - liveStart,
+
       tileCount: inkTileCount(inkTilesRef.current),
       tileBytes: inkTileBytes(inkTilesRef.current),
       bakeScale: targetBakeScale(inkTilesRef.current),
@@ -333,6 +416,45 @@ const InfiniteInkCanvas: React.FC = () => {
       if (dirtyRef.current) doRender();
     });
   }, [doRender]);
+
+  const shapeGesture = useInkShapeGesture({
+    scope: shapeScope, enabled: activeTool === 'pen' && brush !== 'laser',
+    getScope: () => useCanvasStore.getState().currentCanvasId ?? '',
+    zoom: () => useCanvasStore.getState().camera.zoom,
+    getStroke: () => currentStrokeRef.current,
+    setStroke: stroke => { currentStrokeRef.current = stroke; },
+    flush: flushInput, repaint: () => { dirtyRef.current = true; scheduleRender(); },
+  });
+  useEffect(() => {
+    const recent = shapeGesture.recent;
+    if (activeTool === 'pen' && recent && selectedIds.length === 0
+        && objects.some(o => o.id === recent.id && o.type === 'stroke' && o.geometry)) useCanvasStore.getState().setSelectedIds([recent.id]);
+  }, [objects, selectedIds, activeTool, shapeGesture.recent]);
+
+  const previewShapeEdit = (next: Stroke, original: Stroke) => {
+    const tiles = inkTilesRef.current, index = getInkStrokeIndex(tiles);
+    if (!shapeEditPreviewRef.current) {
+      const ids = new Set([original.id]);
+      removeStrokesFromTiles(tiles, index.grid, ids, [original], index.bounds);
+      index.remove(ids); backendRef.current?.suppress(ids); displayLayersRef.current.invalidate();
+    }
+    shapeEditPreviewRef.current = next;
+    for (const s of [original, next]) for (const key of strokeTileKeys(s)) gestureTilesRef.current.add(key);
+    dirtyRef.current = true; scheduleRender();
+  };
+  const finishShapeEdit = (next: Stroke, original: Stroke, recordHistory: boolean) => {
+    const st = useCanvasStore.getState();
+    if ((st.currentCanvasId ?? '') !== shapeScope || !st.objects.includes(original)) {
+      shapeEditPreviewRef.current = null; gestureTilesRef.current.clear(); return;
+    }
+    previewShapeEdit(next, original);
+    st.replaceStroke(next, recordHistory);
+    const actual = useCanvasStore.getState().objects.find((o): o is Stroke => o.type === 'stroke' && o.id === next.id)!;
+    getInkStrokeIndex(inkTilesRef.current).add(actual);
+    backendRef.current?.retain(actual, inkStrokesOnly(useCanvasStore.getState().objects));
+    shapeEditPreviewRef.current = null; gestureTilesRef.current.clear();
+    dirtyRef.current = true; scheduleRender();
+  };
 
   // Laser fade loop: advance frames while any segment is still visible, then
   // stop. Independent of scheduleRender's dirty-flag gating, so the fade never
@@ -377,6 +499,8 @@ const InfiniteInkCanvas: React.FC = () => {
     const wipe = strokeEraseRef.current;
     if (!wipe) return;
     for (const t of targets) wipe.pendingIds.add(t.id);
+    backendRef.current?.suppress(targets.map(t => t.id));
+    displayLayersRef.current.invalidate();
     const tRestamp = performance.now();
     removeStrokesFromTiles(inkTilesRef.current, wipe.grid, wipe.pendingIds, targets, wipe.bounds);
     addEraserRestamp(wipe.perf, targets.length, performance.now() - tRestamp);
@@ -463,30 +587,43 @@ const InfiniteInkCanvas: React.FC = () => {
    *  suppressed via pendingIds until pointer-up), and a free-eraser carve is not
    *  committed to the store until pointer-up either — so a rebuild would
    *  resurrect erased ink. Nothing needs it either, since a gesture does not move
-   *  the camera. */
+   *  the camera. A marquee is gated too: nothing is erased during one, but the
+   *  pending materialize/re-bake chain would steal frames from the drag. */
   const inkGestureActive = useCallback(() => (
     currentStrokeRef.current !== null || strokeEraseRef.current !== null
-    || selectDragRef.current !== null || isDrawingRef.current
+    || shapeEditPreviewRef.current !== null
+    || selectDragRef.current !== null || selectAnchorRef.current !== null || isDrawingRef.current
   ), []);
 
   // Materialize the tiles the viewport needs, in one pass per call; if the view
   // needs more than one pass' budget (wide zoom-out, or a re-bake after zooming),
   // keep going frame by frame rather than blocking on the whole document at once.
   const runMaterialize = useCallback((): number => {
+    if (backgroundPausedRef.current) return 0;
     const container = containerRef.current;
-    if (!container || inkGestureActive()) return 0;
-    const rect = container.getBoundingClientRect();
-    const { camera: cam } = useCanvasStore.getState();
-    const res = materializeTiles(inkTilesRef.current, cam, rect.width, rect.height, dprRef.current, {
-      // Re-baking at a sharper density costs up to 9x the pixels of the level it
-      // replaces. Paying that mid-gesture is felt as a stall (and is what made
-      // crossing a zoom level hitch), while the ink on screen is only slightly
-      // soft — so it waits for the view to settle.
-      rebake: cameraSettled(),
-    });
-    if (res.materialized > 0) dirtyRef.current = true;
-    return res.remaining;
-  }, [inkGestureActive]);
+    if (!container) return 0;
+    const rect = boundsRef.current ?? container.getBoundingClientRect();
+    if (!backendRef.current) {
+      backendRef.current = new InkRenderBackend({ tiles: () => inkTilesRef.current,
+        displayBytes: () => [canvasRef.current, backgroundLayerRef.current, committedLayerRef.current].reduce((bytes, canvas) => bytes + (canvas ? canvas.width * canvas.height * 4 : 0), 0),
+
+        protectedKeys: () => {
+          const keys = new Set(gestureTilesRef.current);
+          if (selectDragRef.current) for (const stroke of selectDragRef.current.strokes) for (const key of strokeTileKeys(stroke)) keys.add(key);
+          const wipe = strokeEraseRef.current;
+          if (wipe) for (const id of wipe.pendingIds) {
+            const b = wipe.bounds.get(id); if (b) protectInkSegment(keys, b.minX, b.minY, { x: b.maxX, y: b.maxY }, 0);
+          }
+          return keys;
+        },
+        publish: keys => { displayLayersRef.current.invalidate(keys); dirtyRef.current = true; scheduleRender(); },
+      });
+    }
+    const state = useCanvasStore.getState();
+    const strokes = inkStrokesOnly(state.objects);
+    backendRef.current.sync(strokes);
+    return backendRef.current.requestViewport(state.camera, rect.width, rect.height, dprRef.current, cameraSettled());
+  }, [scheduleRender]);
 
   const scheduleMaterialize = useCallback(() => {
     if (materializeRafRef.current) return;
@@ -500,23 +637,29 @@ const InfiniteInkCanvas: React.FC = () => {
         const container = containerRef.current;
         const { camera: cam } = useCanvasStore.getState();
         if (container && !inkGestureActive() && cameraSettled()) {
-          const rect = container.getBoundingClientRect();
+          const rect = boundsRef.current ?? container.getBoundingClientRect();
           evictDistantTiles(inkTilesRef.current, cam, rect.width, rect.height);
           dropRastersNotAtScale(targetBakeScale(inkTilesRef.current));
         }
       } else {
         materializeRafRef.current = requestAnimationFrame(step);
       }
-      dirtyRef.current = true;
-      if (rafRef.current) { cancelAnimationFrame(rafRef.current); rafRef.current = 0; }
-      doRender();
+      if (dirtyRef.current) scheduleRender();
     };
     materializeRafRef.current = requestAnimationFrame(step);
   }, [runMaterialize, inkGestureActive, doRender]);
 
   useEffect(() => {
-    dirtyRef.current = true;
+    // Tag camera frames for the frame stats — and hence the re-bake/eviction
+    // gating that reads them — on CAMERA changes only. This used to ride on the
+    // effect below, whose deps include objects/selectedIds/tool changes, so a
+    // selection change mislabelled the next 150ms of frames as "camera moving"
+    // in the diagnostics panel.
     noteCameraMove();
+  }, [camera]);
+
+  useEffect(() => {
+    dirtyRef.current = true;
     // Schedule only — never materialize synchronously here. This effect runs on
     // every camera change, i.e. on every wheel tick and pointermove of a pan, and
     // rasterizing tiles inline is what made zooming stutter.
@@ -533,30 +676,85 @@ const InfiniteInkCanvas: React.FC = () => {
   }, [objects, camera, activeTool, brushSettings, showDotGrid, editingTextId, selectedIds, selectionMode,
       scheduleMaterialize, scheduleRender]);
 
-  // Structural ops (undo/redo/delete/move/clear/load) → rebuild ink tiles from
-  // the vector source of truth. The document is INDEXED whole but RASTERIZED
-  // only where it is looked at (see InkTiles): on a dense canvas about a quarter
-  // of the strokes are on screen, and the rest must not be paid for on open.
+  // Structural ops (undo/redo/delete/move/clear/load) → bring the ink layer up
+  // to date with the new object list. When the change is small, the EXISTING
+  // tiles are repaired in place instead of rebuilt: history snapshots share
+  // stroke references, so an undo differs from the current list by just the last
+  // gesture's strokes — repairing their rectangles keeps every other tile pixel
+  // for pixel, where a rebuild re-rendered the whole visible canvas (undo felt
+  // like opening the document again). Big diffs (load, clear) fall back to a
+  // rebuild; either way the document is INDEXED whole and RASTERIZED only where
+  // it is looked at (see InkTiles).
   useEffect(() => {
     const state = useCanvasStore.getState();
-    const strokes = state.objects.filter((o): o is Stroke => o.type === 'stroke');
-    const previous = inkTilesRef.current;
-    const tiles = new Map<string, HTMLCanvasElement>();
-    indexInkStrokes(tiles, strokes);
-    setTargetBakeScale(tiles, state.camera.zoom * dprRef.current);
-    inkTilesRef.current = tiles;
-    disposeTiles(previous);
-    // Any in-flight gesture captured the OLD layer's index/grid/bounds. Its
-    // repairs would write into disposed canvases (`width = 0`), which silently
-    // turns the repair into a no-op — an erase that appears to do nothing. Drop
-    // the gesture instead: the next pointermove falls through its empty branch
-    // and pointer-up cannot commit stale state.
+    const strokes = inkStrokesOnly(state.objects);
+    const prev = prevObjectsRef.current;
+    const layer = inkTilesRef.current;
+
+    let incremental = false;
+    if (prev) {
+      const prevById = new Map<string, Stroke>();
+      for (const o of prev) if (o.type === 'stroke') prevById.set(o.id, o);
+      const nowById = new Map<string, Stroke>();
+      for (const o of strokes) nowById.set(o.id, o);
+      const added: Stroke[] = [], removed: Stroke[] = [];
+      for (const [id, s] of nowById) {
+        const p = prevById.get(id);
+        if (!p) added.push(s);
+        else if (p !== s) { removed.push(p); added.push(s); } // same id, replaced object (moved points)
+      }
+      for (const [id, s] of prevById) if (!nowById.has(id)) removed.push(s);
+      if (added.length + removed.length <= 64) {
+        incremental = true;
+        if (added.length + removed.length > 0) {
+          const index = getInkStrokeIndex(layer);
+          // An in-flight build captured the buckets as they were, and completing
+          // it would overwrite the repair — drop it; builds restart lazily.
+          abandonBuilds(layer);
+          const removedIds = new Set(removed.map((s) => s.id));
+          // `removed` carries same-id replacements (a stroke whose points moved),
+          // so this both clears the old pixels and un-indexes the id.
+          if (removed.length > 0) removeStrokesFromTiles(layer, index.grid, removedIds, removed, index.bounds);
+          index.remove(removedIds);
+          // Stamp only what the layer does NOT already hold: stamping a stroke
+          // that is already rasterized composites it a second time, and a
+          // translucent stroke darkens at every self-overlap. stampStroke()
+          // indexes the stroke itself.
+          for (const s of added) if (!index.has(s.id)) index.add(s);
+          backendRef.current?.sync(strokes);
+        }
+      }
+    }
+
+    if (!incremental) {
+      const tiles = new Map<string, HTMLCanvasElement>();
+      indexInkStrokes(tiles, strokes);
+      setTargetBakeScale(tiles, state.camera.zoom * dprRef.current);
+      inkTilesRef.current = tiles;
+      if (import.meta.env.DEV) recordInkTrace(tiles, 'layer-rebuild', { surface: 'canvas', layer: inkTraceId(tiles),
+        previousLayer: inkTraceId(layer), strokeCount: strokes.length, renderEpoch: state.renderEpoch });
+      disposeTiles(layer);
+    }
+    // Any in-flight gesture captured the layer's index/grid/bounds. After a
+    // rebuild its repairs would write into disposed canvases (`width = 0`),
+    // silently turning the repair into a no-op — an erase that appears to do
+    // nothing. Drop the gesture instead: the next pointermove falls through its
+    // empty branch and pointer-up cannot commit stale state.
     strokeEraseRef.current = null;
+    clearObjectDragPreview(selectDragRef.current?.objects);
     selectDragRef.current = null;
+    cancelSelectionCapture(selectionCaptureRef, pointerOwnerRef);
+    displayLayersRef.current.invalidate();
     dirtyRef.current = true;
     scheduleMaterialize();
     scheduleRender();
   }, [renderEpoch, scheduleMaterialize, scheduleRender]);
+  // Diff baseline for the effect above. It must be written AFTER that effect has
+  // read it — effects run in declaration order, so on a commit that changes both
+  // objects and renderEpoch, this still sees the PRE-change list there.
+  useEffect(() => {
+    prevObjectsRef.current = useCanvasStore.getState().objects;
+  }, [objects]);
 
   // Drop a queued screenshot at the current viewport center (world coords).
   // The image object stays a DOM layer BELOW the canvas so ink overdraws it.
@@ -610,7 +808,7 @@ const InfiniteInkCanvas: React.FC = () => {
   // ---- Helpers ----------------------------------------------------------------
 
   const getCanvasPos = useCallback((e: React.PointerEvent) => {
-    const rect = canvasRef.current?.getBoundingClientRect();
+    const rect = boundsRef.current ?? canvasRef.current?.getBoundingClientRect();
     return rect ? { sx: e.clientX - rect.left, sy: e.clientY - rect.top } : { sx: 0, sy: 0 };
   }, []);
 
@@ -619,12 +817,10 @@ const InfiniteInkCanvas: React.FC = () => {
   const startSelectDrag = (ids: string[], world: { x: number; y: number }) => {
     const state = useCanvasStore.getState();
     const idSet = new Set(ids);
-    const snapshots = new Map<string, StrokePoint[]>();
     const strokes: Stroke[] = [];
     for (const o of state.objects) {
-      if (o.type === 'stroke' && idSet.has(o.id)) { snapshots.set(o.id, o.points.map((p) => ({ ...p }))); strokes.push(o); }
+      if (o.type === 'stroke' && idSet.has(o.id)) strokes.push(o);
     }
-    state.pushHistory(); // record state before move (for undo)
     // The dragged strokes are drawn live on top of the tiles for the whole
     // gesture, so their committed pixels must come out of the tiles first — but
     // ONLY their own pixels: repainting the whole page (every stroke, every
@@ -632,10 +828,14 @@ const InfiniteInkCanvas: React.FC = () => {
     // it even started. This repairs just the rectangles they occupied.
     const tiles = inkTilesRef.current;
     const index = getInkStrokeIndex(tiles);
+    traceInkStrokes('drag-start', tiles, strokes, { surface: 'canvas' });
     removeStrokesFromTiles(tiles, index.grid, idSet, strokes, index.bounds);
     index.remove(idSet);
+    backendRef.current?.suppress(idSet);
+    displayLayersRef.current.invalidate();
     selectDragRef.current = {
-      start: world, ids, snapshots, strokes,
+      start: world, ids, strokes,
+      objects: createObjectDragPreview(state.objects, ids, containerRef.current),
       preview: bakeDragPreview(strokes, targetBakeScale(tiles)),
       dx: 0, dy: 0,
     };
@@ -645,7 +845,10 @@ const InfiniteInkCanvas: React.FC = () => {
 
   // ---- Pointer Down -----------------------------------------------------------
 
-  const handlePointerDown = useCallback((e: React.PointerEvent<HTMLCanvasElement>) => {
+  const handlePointerDown = useCallback((e: React.PointerEvent<HTMLCanvasElement>, preferredId?: string, captureTarget?: Element) => {
+    if (pointerOwnerRef.current !== null && pointerOwnerRef.current !== e.pointerId) return;
+    pointerOwnerRef.current = e.pointerId;
+    gestureTilesRef.current.clear(); inputQueueRef.current.clear(); lastQueuedRef.current = undefined;
     const canvas = canvasRef.current;
     if (!canvas) return;
     const state = useCanvasStore.getState();
@@ -659,6 +862,8 @@ const InfiniteInkCanvas: React.FC = () => {
       return;
     }
     if (e.button !== 0) return;
+    shapeGesture.dismiss();
+    if (state.activeTool === 'pen') state.clearSelection();
 
     const world = screenToWorld(sx, sy, state.camera);
 
@@ -690,13 +895,16 @@ const InfiniteInkCanvas: React.FC = () => {
 
     // Selection tool
     if (state.activeTool === 'select') {
-      canvas.setPointerCapture(e.pointerId);
-
-      // Pressing on a stroke → select it (or keep the existing selection group)
-      // and begin a drag-move. Works in BOTH click and box modes.
-      const hit = [...state.objects].reverse().find((o) => o.type === 'stroke' && hitTestStroke(o, world.x, world.y));
+      beginSelectionCapture(selectionCaptureRef, captureTarget ?? canvas, e.pointerId, canvas);
+      const operation = selectionOperation(e);
+      selectionOperationRef.current = { operation, base: state.selectedIds.slice() };
+      const hit = hitSelectable(state.objects, world.x, world.y, preferredId);
 
       if (hit) {
+        if (operation !== 'replace') {
+          state.setSelectedIds(combineSelection(state.selectedIds, [hit.id], operation));
+          return;
+        }
         const alreadySelected = state.selectedIds.includes(hit.id);
         const ids = alreadySelected ? state.selectedIds : [hit.id];
         if (!alreadySelected) state.setSelectedIds(ids);
@@ -706,7 +914,7 @@ const InfiniteInkCanvas: React.FC = () => {
 
       // Pressing on empty canvas
       if (state.selectionMode === 'click') {
-        state.clearSelection();
+        if (operation === 'replace') state.clearSelection();
       } else {
         // Box select — start dragging a rectangle
         selectAnchorRef.current = { x: world.x, y: world.y };
@@ -773,9 +981,12 @@ const InfiniteInkCanvas: React.FC = () => {
     };
     addRawPoint(stroke, world.x, world.y, getPressure(e), e.timeStamp);
     currentStrokeRef.current = stroke;
+    if (!isEraser) shapeGesture.begin({ x: e.clientX, y: e.clientY }, e.pointerType);
+    protectInkSegment(gestureTilesRef.current, world.x, world.y, undefined, stroke.size / 2 + 8);
     if (isEraser) {
       // Free eraser: erase the initial dot immediately (destination-out into tiles).
       eraseDotTiles(inkTilesRef.current, world.x, world.y, stroke.size);
+      displayLayersRef.current.invalidate();
     }
 
     dirtyRef.current = true;
@@ -785,17 +996,25 @@ const InfiniteInkCanvas: React.FC = () => {
   // ---- Pointer Move -----------------------------------------------------------
 
   const handlePointerMove = useCallback((e: React.PointerEvent<HTMLCanvasElement>) => {
+    const inputStart = performance.now();
+    try {
+    if (pointerOwnerRef.current !== null && pointerOwnerRef.current !== e.pointerId) return;
+    if (middlePanRef.current && (e.buttons & 4) === 0) {
+      pointerUpRef.current?.(e);
+      return;
+    }
     const canvas = canvasRef.current;
     if (!canvas) return;
     const { sx, sy } = getCanvasPos(e);
     const state = useCanvasStore.getState();
+    lastPointerAtRef.current = performance.now();
     moveCursor(sx, sy);
 
     if (panAnchorRef.current) {
-      state.setCamera({
+      pendingPanRef.current = {
         x: panAnchorRef.current.camX + e.clientX - panAnchorRef.current.sx,
         y: panAnchorRef.current.camY + e.clientY - panAnchorRef.current.sy,
-      });
+      };
       dirtyRef.current = true;
       scheduleRender();
       return;
@@ -838,9 +1057,9 @@ const InfiniteInkCanvas: React.FC = () => {
     if (isDrawingRef.current && state.brush === 'laser') {
       const seg = laserRef.current[laserRef.current.length - 1];
       if (seg) {
-        const rect = canvasRef.current?.getBoundingClientRect();
+        const rect = boundsRef.current ?? canvasRef.current?.getBoundingClientRect();
         if (rect) {
-          const events: PointerEvent[] = (e.nativeEvent as any).getCoalescedEvents?.() || [e.nativeEvent];
+          const events: PointerEvent[] = inkPointerSamples(e.nativeEvent);
           for (const ce of events) {
             const w = screenToWorld(ce.clientX - rect.left, ce.clientY - rect.top, state.camera);
             addRawPoint(seg as any, w.x, w.y, getPressure(ce), ce.timeStamp);
@@ -856,37 +1075,64 @@ const InfiniteInkCanvas: React.FC = () => {
 
     if (!isDrawingRef.current || !currentStrokeRef.current) return;
 
-    const events: PointerEvent[] = (e.nativeEvent as any).getCoalescedEvents?.() || [e.nativeEvent];
+    const events: PointerEvent[] = inkPointerSamples(e.nativeEvent);
     const stroke = currentStrokeRef.current;
-    const rect = canvasRef.current?.getBoundingClientRect();
+    const rect = boundsRef.current ?? canvasRef.current?.getBoundingClientRect();
     if (!rect) return;
 
-    const isEraser = stroke.compositeOperation === 'destination-out';
+    const inputStart = performance.now();
     for (const ce of events) {
-      const wx = ce.clientX - rect.left;
-      const wy = ce.clientY - rect.top;
-      const w = screenToWorld(wx, wy, state.camera);
-      addRawPoint(stroke, w.x, w.y, getPressure(ce), ce.timeStamp);
-      if (isEraser && stroke.points.length >= 2) {
-        const a = stroke.points[stroke.points.length - 2];
-        eraseSegTiles(inkTilesRef.current, a.x, a.y, w.x, w.y, stroke.size);
-      }
+      const w = screenToWorld(ce.clientX - rect.left, ce.clientY - rect.top, state.camera);
+      if (shapeGesture.move({ x: ce.clientX, y: ce.clientY }, w)) continue;
+      protectInkSegment(gestureTilesRef.current, w.x, w.y, lastQueuedRef.current ?? stroke.points[stroke.points.length - 1], stroke.size / 2 + 8);
+      lastQueuedRef.current = w;
+      inputQueueRef.current.push({ x: w.x, y: w.y, pressure: getPressure(ce), t: ce.timeStamp });
     }
+    reportInkFrame({ inputMs: performance.now() - inputStart });
 
     dirtyRef.current = true;
     scheduleRender();
+    } finally { reportInkFrame({ inputMs: performance.now() - inputStart }); }
   }, [getCanvasPos, scheduleRender]);
 
   // ---- Pointer Up -------------------------------------------------------------
 
   const handlePointerUp = useCallback((e: React.PointerEvent<HTMLCanvasElement>) => {
+    if (pointerOwnerRef.current === null || pointerOwnerRef.current !== e.pointerId) return;
+    shapeGesture.stop();
+    const selectionCapture = endSelectionCapture(selectionCaptureRef);
+    if (e.type === 'pointerup' && (selectDragRef.current || selectAnchorRef.current)) {
+      const { sx, sy } = getCanvasPos(e), cam = useCanvasStore.getState().camera;
+      const at = screenToWorld(sx, sy, cam);
+      if (selectDragRef.current) { selectDragRef.current.dx = at.x - selectDragRef.current.start.x; selectDragRef.current.dy = at.y - selectDragRef.current.start.y; }
+      if (selectionRectRef.current) { selectionRectRef.current.x2 = at.x; selectionRectRef.current.y2 = at.y; }
+    }
+    flushPanCamera();
+    if (middlePanRef.current) { middlePanRef.current = false; setPointerHold(false); }
+    flushInput();
+    const tailStroke = currentStrokeRef.current;
+    if (e.type === 'pointerup' && tailStroke?.points.length) {
+      const rect = boundsRef.current ?? canvasRef.current?.getBoundingClientRect();
+      if (rect) {
+        const cam = useCanvasStore.getState().camera;
+        const point = screenToWorld(e.clientX - rect.left, e.clientY - rect.top, cam);
+        const last = tailStroke.points[tailStroke.points.length - 1];
+        if (tailStroke.geometry) shapeGesture.move({ x: e.clientX, y: e.clientY }, point);
+        else if (point.x !== last.x || point.y !== last.y) {
+          inputQueueRef.current.push({ x: point.x, y: point.y, pressure: e.pressure > 0 ? e.pressure : last.pressure, t: e.timeStamp });
+          flushInput();
+        }
+      }
+    }
+    pointerOwnerRef.current = null;
+    gestureTilesRef.current.clear();
+    setTimeout(() => { runMaterialize(); scheduleMaterialize(); }, 0);
     const canvas = canvasRef.current;
-    if (!canvas) return;
     // The pointer may not actually be captured (e.g. a one-shot click that never
     // called setPointerCapture), or capture may already have been lost. Releasing
     // unconditionally throws here, which used to abort the cleanup below and leave
     // isDrawing/pan/select state stuck — the cause of unclickable toolbar/sidebar.
-    try { canvas.releasePointerCapture(e.pointerId); } catch { /* already released */ }
+    try { (selectionCapture ?? canvas)?.releasePointerCapture?.(e.pointerId); } catch { /* already released */ }
 
     // End any whole-stroke-eraser wipe session. Flush any samples that arrived
     // since the last animation frame, then commit every visually-erased stroke
@@ -913,10 +1159,9 @@ const InfiniteInkCanvas: React.FC = () => {
     if (selectAnchorRef.current && selectionRectRef.current) {
       const r = selectionRectRef.current;
       const state = useCanvasStore.getState();
-      const ids = state.objects
-        .filter((o) => o.type === 'stroke' && boundsIntersectRect(getStrokeBounds(o), r.x1, r.y1, r.x2, r.y2))
-        .map((o) => o.id);
-      state.setSelectedIds(ids);
+      const ids = boxSelectableIds(state.objects, r, containerRef.current, state.camera);
+      const { operation, base } = selectionOperationRef.current;
+      state.setSelectedIds(combineSelection(base, ids, operation));
       selectAnchorRef.current = null;
       selectionRectRef.current = null;
       dirtyRef.current = true;
@@ -930,14 +1175,21 @@ const InfiniteInkCanvas: React.FC = () => {
     if (selectDragRef.current) {
       const d = selectDragRef.current;
       selectDragRef.current = null;
-      const entries = [...d.snapshots.entries()]
-        .map(([id, snap]) => ({ id, points: snap.map((p) => ({ ...p, x: p.x + d.dx, y: p.y + d.dy })) }));
-      useCanvasStore.getState().commitStrokesPoints(entries);
+      clearObjectDragPreview(d.objects);
+      const st = useCanvasStore.getState();
+      if (!d.dx && !d.dy && d.strokes.length) st.commitStrokesPoints(d.strokes.map(s => ({ id: s.id, points: s.points })));
+      else st.commitSelectionMove(d.ids, d.dx, d.dy);
       const tiles = inkTilesRef.current;
-      const movedIds = new Set(d.snapshots.keys());
+      const movedIds = new Set(d.strokes.map(s => s.id));
       for (const o of useCanvasStore.getState().objects) {
-        if (o.type === 'stroke' && movedIds.has(o.id)) stampStroke(tiles, o);
+        if (o.type === 'stroke' && movedIds.has(o.id)) {
+          getInkStrokeIndex(tiles).add(o);
+          backendRef.current?.retain(o, useCanvasStore.getState().objects.filter((item): item is Stroke => item.type === 'stroke'));
+        }
       }
+      if (import.meta.env.DEV) traceInkStrokes('drag-end', tiles,
+        useCanvasStore.getState().objects.filter((o): o is Stroke => o.type === 'stroke' && movedIds.has(o.id)),
+        { surface: 'canvas', dx: d.dx, dy: d.dy });
       dirtyRef.current = true;
       scheduleRender();
       return;
@@ -958,13 +1210,19 @@ const InfiniteInkCanvas: React.FC = () => {
 
     if (isDrawingRef.current && currentStrokeRef.current) {
       const stroke = currentStrokeRef.current;
+      shapeGesture.finish(stroke);
       if (stroke.points.length > 0) {
         useCanvasStore.getState().addStroke(stroke);
+        if (stroke.geometry) useCanvasStore.getState().setSelectedIds([stroke.id]);
         if (stroke.compositeOperation !== 'destination-out') {
           // Pen: stamp into tiles. Free eraser already erased incrementally.
-          stampStroke(inkTilesRef.current, stroke);
+          getInkStrokeIndex(inkTilesRef.current).add(stroke);
+          if (!backendRef.current) runMaterialize();
+          backendRef.current?.retain(stroke, inkStrokesOnly(useCanvasStore.getState().objects));
         } else {
           getInkStrokeIndex(inkTilesRef.current).add(stroke);
+          if (!backendRef.current) runMaterialize();
+          backendRef.current?.retain(stroke, inkStrokesOnly(useCanvasStore.getState().objects));
         }
       }
       currentStrokeRef.current = null;
@@ -976,6 +1234,8 @@ const InfiniteInkCanvas: React.FC = () => {
     panAnchorRef.current = null;
   }, [scheduleRender]);
 
+  pointerUpRef.current = handlePointerUp;
+
   // ---- Wheel ------------------------------------------------------------------
 
   // Attached natively, NOT via React's `onWheel`: React registers wheel listeners
@@ -985,12 +1245,16 @@ const InfiniteInkCanvas: React.FC = () => {
   // zoom is not suppressed, so ctrl+wheel would zoom the whole app window as well
   // as panning the canvas.
   useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
+    const container = containerRef.current;
+    if (!container) return;
     const onWheel = (e: WheelEvent) => {
+      // The modal image viewer is the one surface where a wheel does not belong
+      // to the canvas.
+      if ((e.target as HTMLElement | null)?.closest?.('[data-lightbox], [data-ink-shape-panel]')) return;
       e.preventDefault();
+      flushPanCamera();
       const state = useCanvasStore.getState();
-      const rect = canvas.getBoundingClientRect();
+      const rect = boundsRef.current ?? container.getBoundingClientRect();
       const sx = e.clientX - rect.left, sy = e.clientY - rect.top;
       if (e.ctrlKey) {
         state.setCamera({ x: state.camera.x - e.deltaX, y: state.camera.y - e.deltaY });
@@ -998,12 +1262,70 @@ const InfiniteInkCanvas: React.FC = () => {
         const newZoom = clampZoom(state.camera.zoom * (1 - e.deltaY * 0.001));
         state.setCamera(zoomAt(state.camera, sx, sy, newZoom));
       }
+      // A trailing wheel event must not leave the active pan at its old origin.
+      if (panAnchorRef.current) {
+        const cam = useCanvasStore.getState().camera;
+        panAnchorRef.current = { sx: e.clientX, sy: e.clientY, camX: cam.x, camY: cam.y };
+      }
       dirtyRef.current = true;
       scheduleRender();
     };
-    canvas.addEventListener('wheel', onWheel, { passive: false });
-    return () => canvas.removeEventListener('wheel', onWheel);
-  }, [scheduleRender]);
+    // CAPTURE-phase on the CONTAINER, not the canvas: the DOM cards (images,
+    // text) sit ABOVE the canvas and would swallow a wheel aimed at them, so
+    // scrolling over a picture used to do nothing. The container owns the whole
+    // canvas area, so one listener covers every layer of it.
+    container.addEventListener('wheel', onWheel, { passive: false, capture: true });
+    return () => container.removeEventListener('wheel', onWheel, { capture: true });
+  }, [scheduleRender, flushPanCamera]);
+
+  // Middle button ALWAYS pans the canvas, from wherever it lands — including on
+  // the DOM cards (images, text) that sit over the canvas and would otherwise
+  // start their own drag. The listener is CAPTURE-phase on the container, so it
+  // runs before any card handler and stopPropagation keeps the card from ever
+  // seeing a middle-button press. The canvas then captures the pointer, so the
+  // pan keeps tracking even when the cursor is over a card.
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container) return;
+    const onMiddleDown = (e: PointerEvent) => {
+      if (e.button !== 1) return;
+      if (pointerOwnerRef.current !== null) return;
+      if ((e.target as HTMLElement | null)?.closest?.('[data-lightbox]')) return;
+      e.preventDefault();
+      e.stopPropagation();
+      const canvas = canvasRef.current;
+      if (!canvas) return;
+      const state = useCanvasStore.getState();
+      pointerOwnerRef.current = e.pointerId;
+      middlePanRef.current = true;
+      try { canvas.setPointerCapture(e.pointerId); } catch { /* window release listeners still end the pan */ }
+      isDrawingRef.current = false;
+      setPointerHold(true); // persistence must defer for the whole pan
+      panAnchorRef.current = { sx: e.clientX, sy: e.clientY, camX: state.camera.x, camY: state.camera.y };
+    };
+    const onMiddleUp = (e: PointerEvent) => {
+      if (middlePanRef.current && e.pointerId === pointerOwnerRef.current) {
+        pointerUpRef.current?.(e as unknown as React.PointerEvent<HTMLCanvasElement>);
+      }
+    };
+    const onBlur = () => {
+      const owner = pointerOwnerRef.current;
+      if (middlePanRef.current && owner !== null) pointerUpRef.current?.({ pointerId: owner, type: 'pointercancel' } as React.PointerEvent<HTMLCanvasElement>);
+    };
+    container.addEventListener('pointerdown', onMiddleDown, true);
+    window.addEventListener('pointerup', onMiddleUp, true);
+    window.addEventListener('pointercancel', onMiddleUp, true);
+    window.addEventListener('lostpointercapture', onMiddleUp, true);
+    window.addEventListener('blur', onBlur);
+    return () => {
+      container.removeEventListener('pointerdown', onMiddleDown, true);
+      window.removeEventListener('pointerup', onMiddleUp, true);
+      window.removeEventListener('pointercancel', onMiddleUp, true);
+      window.removeEventListener('lostpointercapture', onMiddleUp, true);
+      window.removeEventListener('blur', onBlur);
+      onBlur();
+    };
+  }, []);
 
   // Insert → image: read the picked file(s), downscale each, and place them at
   // the click point. Multiple picks cascade (each offset down-right) so they
@@ -1073,11 +1395,39 @@ const InfiniteInkCanvas: React.FC = () => {
   const interactiveText =
     activeTool === 'select' || (activeTool === 'insert' && insertMode === 'text');
 
+  useEffect(() => {
+    const flushGesture = () => {
+      const owner = pointerOwnerRef.current;
+      if (owner !== null) canvasRef.current?.dispatchEvent(new PointerEvent('pointercancel', { bubbles: true, pointerId: owner }));
+    };
+    const suspend = () => { backgroundPausedRef.current = true; if (materializeRafRef.current) cancelAnimationFrame(materializeRafRef.current); materializeRafRef.current = 0; backendRef.current?.dispose(); backendRef.current = null; };
+    const resume = () => { backgroundPausedRef.current = false; dirtyRef.current = true; scheduleRender(); scheduleMaterialize(); };
+    window.addEventListener('ink:flush-gesture', flushGesture);
+    window.addEventListener('ink:suspend-background', suspend);
+    window.addEventListener('ink:resume-background', resume);
+    return () => {
+      window.removeEventListener('ink:flush-gesture', flushGesture);
+      window.removeEventListener('ink:suspend-background', suspend);
+      window.removeEventListener('ink:resume-background', resume);
+    };
+  }, []);
+
+  const selectedShape = (activeTool === 'select' || shapeGesture.recent?.id === selectedIds[0]) && selectedIds.length === 1
+    ? objects.find((o): o is Stroke => o.type === 'stroke' && !!o.geometry && o.id === selectedIds[0]) : undefined;
+  shapeEditorIdRef.current = selectedShape?.id ?? null;
+  const selectionEvents = inkSelectionCaptureHandlers({ enabled: () => useCanvasStore.getState().activeTool === 'select',
+    canvas: canvasRef, capture: selectionCaptureRef, owner: pointerOwnerRef, shapeId: shapeEditorIdRef,
+    down: handlePointerDown, move: handlePointerMove, up: handlePointerUp });
+
   return (
-    <div ref={containerRef} style={{ position: 'absolute', inset: 0, overflow: 'hidden', background: 'var(--page-bg)', borderRadius: '0 0 12px 0' }}>
+    <div ref={containerRef}
+      {...selectionEvents}
+      onGotPointerCaptureCapture={event => { const id = (event.target as HTMLElement).closest('[data-ink-object-id]')?.getAttribute('data-ink-object-id'); if (id) manipulatedIdsRef.current.add(id); }}
+      onLostPointerCaptureCapture={event => { const id = (event.target as HTMLElement).closest('[data-ink-object-id]')?.getAttribute('data-ink-object-id'); if (id) manipulatedIdsRef.current.delete(id); }}
+      style={{ isolation: 'isolate', position: 'absolute', inset: 0, overflow: 'hidden', background: 'var(--page-bg)', borderRadius: '0 0 12px 0' }}>
       <input ref={fileInputRef} type="file" accept="image/*" multiple style={{ display: 'none' }} onChange={onPickImage} />
       {/* Image objects render BEFORE the canvas → they sit below the ink layer. */}
-      {objects.filter((o): o is ImageObjectType => o.type === 'image').map((o) => (
+      {objects.filter((o): o is ImageObjectType => o.type === 'image' && inkObjectVisible(o, camera, boundsRef.current?.width ?? window.innerWidth, boundsRef.current?.height ?? window.innerHeight, [...selectedIds, ...manipulatedIdsRef.current])).map((o) => (
         <ImageObject key={o.id} obj={o} camera={camera} />
       ))}
       <canvas ref={canvasRef} style={{ position: 'absolute', inset: 0, touchAction: 'none', userSelect: 'none', cursor: cursorStyle }}
@@ -1085,11 +1435,16 @@ const InfiniteInkCanvas: React.FC = () => {
         onPointerCancel={handlePointerUp}
         onLostPointerCapture={handlePointerUp}
         onPointerLeave={hideCursor} />
+      <canvas ref={backgroundLayerRef} aria-hidden="true" data-ink-layer="background" style={{ position: 'absolute', inset: 0, pointerEvents: 'none', zIndex: -2 }} />
+      <canvas ref={committedLayerRef} aria-hidden="true" data-ink-layer="committed" style={{ position: 'absolute', inset: 0, pointerEvents: 'none', zIndex: -1 }} />
+      {selectedShape && <InkShapeEditor key={shapeScope + selectedShape.id} stroke={selectedShape} camera={camera} uiScale={uiScale} container={containerRef}
+        original={shapeGesture.recent} onPreview={previewShapeEdit} onFinish={finishShapeEdit}
+        onDismiss={() => { shapeGesture.dismiss(); useCanvasStore.getState().clearSelection(); }} />}
 
       {/* Committed text = always-visible DOM cards (above ink). Interactive in the
           select / insert-text tools; the one being edited is rendered by TextNode. */}
       {objects
-        .filter((o): o is TextNodeData => o.type === 'text' && o.id !== editingTextId)
+        .filter((o): o is TextNodeData => o.type === 'text' && o.id !== editingTextId && inkObjectVisible(o, camera, boundsRef.current?.width ?? window.innerWidth, boundsRef.current?.height ?? window.innerHeight, selectedIds))
         .map((o) => (
           <TextObject key={o.id} node={o} camera={camera} interactive={interactiveText} />
         ))}

@@ -7,6 +7,34 @@ const diagnostic = require('./diagnostic');
 
 let mainWindow = null;
 let screenshotWindows = [];
+let flushSequence = 0, flushPending = null, allowExit = false;
+let gpuStatus = null;
+app.on('gpu-info-update', () => { gpuStatus = app.getGPUFeatureStatus(); });
+function requestRendererFlush() {
+  if (!mainWindow || mainWindow.isDestroyed()) return Promise.resolve();
+  if (flushPending) return flushPending.promise;
+  const id = ++flushSequence;
+  let resolve, reject;
+  const promise = new Promise((yes, no) => { resolve = yes; reject = no; });
+  const timeout = setTimeout(() => { flushPending = null; reject(new Error('保存未完成，请保持窗口打开并重试')); }, 30000);
+  flushPending = { id, promise, resolve, reject, timeout };
+  mainWindow.webContents.send('app:flush-storage', id);
+  return promise;
+}
+ipcMain.on('app:flushed-storage', (event, result) => {
+  if (event.sender !== mainWindow?.webContents || result.id !== flushPending?.id) return;
+  const pending = flushPending; flushPending = null; clearTimeout(pending.timeout);
+  if (result.error) pending.reject(new Error(result.error)); else pending.resolve();
+});
+async function finishExit(quit) {
+  try {
+    await requestRendererFlush();
+    await require('electron').session.defaultSession.flushStorageData();
+    allowExit = true; if (quit) app.quit(); else mainWindow?.close();
+  }
+  catch (error) { mainWindow?.webContents.send('app:storage-resume'); require('electron').dialog.showErrorBox('保存失败，窗口已保留', error.message); }
+}
+
 let isDev = false;
 
 try {
@@ -69,14 +97,13 @@ function relaunch() {
 })();
 
 async function migrateDataDir(oldDir, newDir) {
-  // Flush Chromium storage (localStorage/IndexedDB) before copying.
-  try {
-    const { session } = require('electron');
-    await session.defaultSession.flushStorageData();
-  } catch { /* ignore */ }
-  if (newDir.startsWith(oldDir + path.sep)) {
-    throw new Error('新目录不能位于旧数据目录内部');
+  const relative = path.relative(path.resolve(oldDir), path.resolve(newDir));
+  if (!relative || (!relative.startsWith('..' + path.sep) && relative !== '..' && !path.isAbsolute(relative))) {
+    throw new Error('新目录不能是旧数据目录或位于其内部');
   }
+  await requestRendererFlush();
+  // Flush Chromium storage (localStorage/IndexedDB) before copying.
+  await require('electron').session.defaultSession.flushStorageData();
   if (!fs.existsSync(newDir)) fs.mkdirSync(newDir, { recursive: true });
   fs.cpSync(oldDir, newDir, { recursive: true });
 }
@@ -157,6 +184,7 @@ function createMainWindow() {
       saveWindowBounds('main', b);
     }
   };
+  mainWindow.on('close', event => { if (!allowExit) { event.preventDefault(); void finishExit(false); } });
   mainWindow.on('resize', saveBounds);
   mainWindow.on('move', saveBounds);
   mainWindow.on('maximize', () => saveWindowBounds('main', { ...mainWindow.getBounds(), isMaximized: true }));
@@ -469,6 +497,7 @@ function setupIPC() {
       try {
         await migrateDataDir(oldDir, newDir);
       } catch (e) {
+        mainWindow?.webContents.send('app:storage-resume');
         console.error('Data dir migration failed:', e);
         return { changed: false, error: e instanceof Error ? e.message : String(e) };
       }
@@ -476,16 +505,9 @@ function setupIPC() {
 
     saveDataDirConfig({ dir: newDir, prevDir: oldDir });
 
-    if (isDev) {
-      // Dev: keep the concurrently-launched Vite server alive. Relaunching the
-      // Electron process (spawn/exit) drops the renderer for the moment it hits
-      // localhost:5173, which can come back as a black window. Instead point
-      // userData at the new dir immediately and just reload the renderer.
-      app.setPath('userData', newDir);
-      if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.reload();
-    } else {
-      relaunch();
-    }
+    // Chromium's default session keeps its original storage path after ready.
+    // Restart for both dev and packaged runs; changing userData + reload is insufficient for IDB.
+    relaunch();
     return { changed: true };
   });
 
@@ -2167,6 +2189,12 @@ function setupShortcutIPC() {
 }
 
 // App lifecycle
+// Read only after Chromium has published GPU information.
+ipcMain.handle('app:gpu-status', () => gpuStatus);
+app.on('child-process-gone', (_event, details) => {
+  if (details.type === 'GPU') console.warn('[gpu] process gone:', details.reason, details.exitCode);
+});
+
 app.whenReady().then(() => {
   // Cache display bounds once at startup (overwrites each time, ~1KB)
   cacheDisplayBounds();
@@ -2197,7 +2225,8 @@ app.on('window-all-closed', () => {
   }
 });
 
-app.on('before-quit', () => {
+app.on('before-quit', event => {
+  if (!allowExit && mainWindow && !mainWindow.isDestroyed()) { event.preventDefault(); void finishExit(true); return; }
   floatingManager.closeAll();
 });
 

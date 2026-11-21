@@ -10,6 +10,7 @@
  */
 
 import type { StrokePoint, Stroke } from './types';
+import { drawInkShape, shapeBounds } from '../InkShapeGeometry';
 
 // ---- Pressure ----------------------------------------------------------------
 
@@ -99,6 +100,7 @@ export interface Bounds {
 }
 
 export function getStrokeBounds(stroke: Stroke): Bounds {
+  if (stroke.geometry) return shapeBounds(stroke.geometry, stroke.size / 2);
   let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
   const r = stroke.size / 2;
   for (const p of stroke.points) {
@@ -142,6 +144,7 @@ export function drawSmoothStroke(
   stroke: Stroke,
   smoothing: number,
 ): void {
+  if (stroke.geometry) { drawInkShape(ctx, stroke); return; }
   const raw = stroke.points;
   if (raw.length === 0) return;
 

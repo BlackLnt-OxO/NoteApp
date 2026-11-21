@@ -311,6 +311,7 @@ const PdfView: React.FC = () => {
   }, []);
 
   const doClose = useCallback(() => {
+    window.dispatchEvent(new Event('ink:flush-gesture'));
     const st = usePdfStore.getState();
     // Flush resume state synchronously before closing.
     if (st.currentItemId) {
@@ -331,7 +332,9 @@ const PdfView: React.FC = () => {
         danger: false,
         onSecondary: () => usePdfStore.getState().closePdf(),
         onConfirm: async () => {
-          await usePdfStore.getState().saveAnnotations();
+          do {
+            if (!(await usePdfStore.getState().saveAnnotations()).ok) return;
+          } while (usePdfStore.getState().dirty);
           usePdfStore.getState().closePdf();
         },
       });

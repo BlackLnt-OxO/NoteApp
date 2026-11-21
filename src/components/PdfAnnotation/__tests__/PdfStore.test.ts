@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { usePdfStore, clampAnchorPages } from '../PdfStore';
 import type { PdfStroke, PdfTextObject } from '../PdfTypes';
 import { PDF_ANNOTATION_BLUE } from '../../../themeColors';
@@ -245,6 +245,24 @@ describe('mixed stroke + object operations', () => {
 });
 
 describe('persistence (save / load / legacy)', () => {
+  it('allows the application save barrier when no PDF is open, but rejects unsaved unowned annotations', async () => {
+    expect((await usePdfStore.getState().saveAnnotations()).ok).toBe(true);
+    usePdfStore.getState().commitStroke(1, makeStroke('unsaved'));
+    expect((await usePdfStore.getState().saveAnnotations()).ok).toBe(false);
+    expect(usePdfStore.getState().dirty).toBe(true);
+  });
+  it('keeps edits made during an asynchronous save dirty until the next save confirms them', async () => {
+    let finish!: () => void;
+    vi.stubGlobal('electronAPI', { savePdfAnnotation: () => new Promise<void>(resolve => { finish = resolve; }) });
+    try {
+      usePdfStore.setState({ currentItemId: 'async' }); usePdfStore.getState().commitStroke(1, makeStroke('first'));
+      const saving = usePdfStore.getState().saveAnnotations();
+      usePdfStore.getState().commitStroke(1, makeStroke('next'));
+      finish(); expect((await saving).ok).toBe(true); expect(usePdfStore.getState().dirty).toBe(true);
+      const latest = usePdfStore.getState().saveAnnotations(); finish(); await latest;
+      expect(usePdfStore.getState().dirty).toBe(false);
+    } finally { vi.unstubAllGlobals(); }
+  });
   it('saveAnnotations writes the new { items } shape', async () => {
     usePdfStore.setState({ currentItemId: 'item-x' });
     usePdfStore.getState().commitStroke(1, makeStroke('a'));

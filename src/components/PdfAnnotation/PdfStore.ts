@@ -19,6 +19,8 @@
 
 import { create } from 'zustand';
 import { loadQuickSizes, saveQuickSizes } from '../inkToolPrefs';
+import { replaceStrokePoints } from '../InkShapeGeometry';
+import { moveSelectedItem } from '../InkSelection';
 import type {
   PdfBrush,
   PdfCamera,
@@ -229,9 +231,11 @@ export interface PdfStore {
 
   /** Batch-replace stroke points (drag-move drop). Structural → rebuilds inkLayer. */
   commitStrokesPoints: (page: number, entries: { id: string; points: PdfPoint[] }[]) => void;
+  commitSelectionMove: (page: number, ids: string[], dx: number, dy: number) => void;
 
   /** Additive: appends a stroke + records history. Canvas already rasterized it. */
   commitStroke: (page: number, stroke: PdfStroke) => void;
+  replaceStroke: (page: number, stroke: PdfStroke, recordHistory?: boolean) => void;
   removeStroke: (page: number, id: string) => void;
   /** Whole-stroke eraser: one history snapshot per wipe gesture (page-scoped). */
   beginStrokeErase: (page: number) => void;
@@ -319,6 +323,7 @@ export const usePdfStore = create<PdfStore>((set, get) => ({
   // --- document ------------------------------------------------------------
 
   loadPdfFromBuffer: async (buffer: ArrayBuffer, name: string, resume) => {
+    window.dispatchEvent(new Event('ink:flush-gesture'));
     const startEpoch = ++pdfLoadEpoch;
     try {
       set({ loading: true, loadingPhase: '解析', error: null });
@@ -417,6 +422,7 @@ export const usePdfStore = create<PdfStore>((set, get) => ({
 
   setCurrentPage: (page) => {
     const clamped = Math.max(1, Math.min(get().numPages, page));
+    if (clamped !== get().currentPage) window.dispatchEvent(new Event('ink:flush-gesture'));
     // NOTE: the camera is intentionally left untouched here — PdfCanvas resets
     // it (fit/resume) once the new page's background is ready. Zeroing it now
     // would let a mid-render frame paint old bg + a default camera → visible flash.
@@ -622,7 +628,7 @@ export const usePdfStore = create<PdfStore>((set, get) => ({
     if (entries.length === 0) return;
     const map = new Map(entries.map((e) => [e.id, e.points]));
     const cur = get().items[page] ?? [];
-    const next = cur.map((o) => (o.type === 'stroke' && map.has(o.id) ? { ...o, points: map.get(o.id)! } as PdfStroke : o));
+    const next = cur.map((o) => (o.type === 'stroke' && map.has(o.id) ? replaceStrokePoints(o, map.get(o.id)!) : o));
     // No renderEpoch bump: PdfCanvas already cleared the moved strokes' pixels at
     // drag start and stamps only those strokes back — a page-wide rebuild here
     // would make dropping a selection on a dense page take seconds.
@@ -633,7 +639,24 @@ export const usePdfStore = create<PdfStore>((set, get) => ({
     }));
   },
 
+  commitSelectionMove: (page, ids, dx, dy) => {
+    if ((!dx && !dy) || !Number.isFinite(dx) || !Number.isFinite(dy)) return;
+    const selected = new Set(ids), cur = get().items[page] ?? [];
+    if (!cur.some(o => selected.has(o.id))) return;
+    set(s => ({ items: { ...s.items, [page]: cur.map(o => selected.has(o.id) ? moveSelectedItem(o, dx, dy) : o) },
+      history: pushHistoryEntry(s.history, page, cur), redoStack: { ...s.redoStack, [page]: [] }, dirty: true }));
+  },
+
   // --- editing -------------------------------------------------------------
+
+  replaceStroke: (page, stroke, recordHistory = true) => {
+    const cur = get().items[page] ?? [];
+    if (!cur.some(o => o.type === 'stroke' && o.id === stroke.id)) return;
+    set(s => ({ items: { ...s.items, [page]: cur.map(o => o.type === 'stroke' && o.id === stroke.id ? { ...stroke } : o) },
+      history: recordHistory ? pushHistoryEntry(s.history, page, cur) : s.history,
+      redoStack: recordHistory ? { ...s.redoStack, [page]: [] } : s.redoStack,
+      renderEpoch: s.renderEpoch + 1, dirty: true }));
+  },
 
   commitStroke: (page, stroke) => {
     const cur = get().items[page] ?? [];
@@ -690,7 +713,7 @@ export const usePdfStore = create<PdfStore>((set, get) => ({
     const cur = get().items[page] ?? [];
     const next = cur.map((o) =>
       o.type === 'stroke' && setIds.has(o.id)
-        ? { ...o, points: o.points.map((p) => ({ ...p, x: p.x + dx, y: p.y + dy })) } as PdfStroke
+        ? replaceStrokePoints(o, o.points.map((p) => ({ ...p, x: p.x + dx, y: p.y + dy })))
         : o,
     );
     set((s) => ({
@@ -759,7 +782,7 @@ export const usePdfStore = create<PdfStore>((set, get) => ({
     const cur = get().items[page] ?? [];
     const next = cur.map((o) =>
       o.type === 'stroke' && setIds.has(o.id)
-        ? { ...o, points: o.points.map((p) => ({ ...p, x: p.x + dx, y: p.y + dy })) } as PdfStroke
+        ? replaceStrokePoints(o, o.points.map((p) => ({ ...p, x: p.x + dx, y: p.y + dy })))
         : o,
     );
     set((s) => ({
@@ -787,8 +810,9 @@ export const usePdfStore = create<PdfStore>((set, get) => ({
   },
 
   saveAnnotations: async () => {
+    window.dispatchEvent(new Event('ink:flush-gesture'));
     const { currentItemId, items } = get();
-    if (!currentItemId) return { ok: false };
+    if (!currentItemId) return { ok: !get().dirty };
     const data = { items, savedAt: Date.now() };
     try {
       if (window.electronAPI?.savePdfAnnotation) {
@@ -796,7 +820,7 @@ export const usePdfStore = create<PdfStore>((set, get) => ({
       } else {
         localStorage.setItem('pdf-annotation-' + currentItemId, JSON.stringify(data));
       }
-      set({ dirty: false });
+      if (get().currentItemId === currentItemId && get().items === items) set({ dirty: false });
       return { ok: true };
     } catch (e) {
       console.error('Save annotations failed:', e);

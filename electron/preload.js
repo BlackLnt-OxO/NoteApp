@@ -1,6 +1,17 @@
 const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('electronAPI', {
+  onStorageFlush: (callback) => {
+    const listener = (_event, id) => callback(id);
+    ipcRenderer.on('app:flush-storage', listener);
+    return () => ipcRenderer.removeListener('app:flush-storage', listener);
+  },
+  onStorageResume: (callback) => {
+    const listener = () => callback(); ipcRenderer.on('app:storage-resume', listener);
+    return () => ipcRenderer.removeListener('app:storage-resume', listener);
+  },
+  storageFlushed: (id, error) => ipcRenderer.send('app:flushed-storage', { id, error }),
+  getGpuStatus: () => ipcRenderer.invoke('app:gpu-status'),
   // Window controls
   minimize: () => ipcRenderer.invoke('window:minimize'),
   maximize: () => ipcRenderer.invoke('window:maximize'),

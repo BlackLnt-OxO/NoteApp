@@ -8,11 +8,11 @@
  * use the scale of the tile it writes into, or ink moves rather than blurs.
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { createCanvas } from '@napi-rs/canvas';
+import { createCanvas, Path2D } from '@napi-rs/canvas';
 import {
   BAKE_STEPS, bakeStepAtLeast, bakeStepFor, indexInkStrokes, materializeTiles,
   removeStrokesFromTiles, stampStroke, evictDistantTiles, inkTileBytes, targetBakeScale,
-  setTargetBakeScale,
+  setTargetBakeScale, abandonBuilds, drawVisibleTiles,
 } from '../InkTiles';
 import { getInkStrokeIndex } from '../../PdfAnnotation/InkStrokeIndex';
 import { inkRasterCacheStats, clearInkRasterCache } from '../../PdfAnnotation/InkRasterCache';
@@ -48,6 +48,7 @@ function stroke(id: string, seed = 0, patch: Partial<Stroke> = {}): Stroke {
 vi.setConfig({ testTimeout: 120000 });
 
 beforeEach(() => {
+  vi.stubGlobal('Path2D', Path2D);
   clearInkRasterCache();
   clearStreamingInk();
   vi.spyOn(document, 'createElement').mockImplementation(((name: string) =>
@@ -63,10 +64,11 @@ function buildLayer(strokes: Stroke[], deviceScale: number, view = VIEW) {
   indexInkStrokes(tiles, strokes);
   let res = materializeTiles(tiles, CAM, view, view, deviceScale);
   let passes = 1;
-  while (res.remaining > 0 && passes < 200) {
+  while (res.remaining > 0 && passes < 2000) {
     res = materializeTiles(tiles, CAM, view, view, deviceScale);
     passes++;
   }
+  expect(res.remaining, 'cooperative build must converge').toBe(0);
   return { tiles, scale: res.scale, materialized: res.materialized, passes };
 }
 
@@ -142,15 +144,20 @@ describe('baking at the display density', () => {
     let res = materializeTiles(upgraded, { ...CAM, zoom: 3 }, VIEW, VIEW, 1);
     expect(res.scale).toBe(3);
     let guard = 0;
-    while (res.remaining > 0 && guard++ < 200) {
+    while (res.remaining > 0 && guard++ < 2000) {
       res = materializeTiles(upgraded, { ...CAM, zoom: 3 }, VIEW, VIEW, 1);
     }
 
+    expect(res.remaining, 'cooperative re-bake must converge').toBe(0);
     const fresh = buildLayer(strokes, 3).tiles;
     expect(fresh.size).toBe(upgraded.size);
-    for (const [key, expected] of fresh) {
-      expectSamePixels(upgraded.get(key)!, expected, `re-baked tile ${key}`);
-    }
+    // At zoom 3 the viewport spans VIEW/3 ≈ 467 world units — only tile 0:0 is
+    // on screen, so ONLY it is re-baked (what the user can see must sharpen).
+    // The margin tile 1:1 keeps its old density until it scrolls into view:
+    // re-rendering tiles the camera cannot see is wasted work the user feels as
+    // a stutter on every zoom across a bake step.
+    expectSamePixels(upgraded.get('0:0')!, fresh.get('0:0')!, 're-baked tile 0:0');
+    expect(upgraded.get('1:1')!.width).toBe(256); // deferred: outside the viewport
   });
 
   it('keeps the target scale per layer, and defaults to the legacy 3x', () => {
@@ -290,11 +297,192 @@ describe('rebuilding is always allowed to discard tiles', () => {
     indexInkStrokes(rebuilt, strokes);
     let res = materializeTiles(rebuilt, CAM, VIEW, VIEW, 1);
     let guard = 0;
-    while (res.remaining > 0 && guard++ < 200) res = materializeTiles(rebuilt, CAM, VIEW, VIEW, 1);
+    while (res.remaining > 0 && guard++ < 2000) res = materializeTiles(rebuilt, CAM, VIEW, VIEW, 1);
     expect(rebuilt.size).toBeGreaterThan(0);
     const reference = buildLayer(strokes, 1).tiles;
     for (const [key, want] of reference) {
       expectSamePixels(rebuilt.get(key)!, want, `rebuilt tile ${key}`);
+    }
+  });
+});
+
+describe('re-syncing after a structural change', () => {
+  it('repairs a small stroke diff in place, identically to a full rebuild', () => {
+    // Undo of a DRAW removes strokes; redo adds them back (appended, so they end
+    // up topmost — the order the fresh build draws them in). The editor repairs
+    // those rectangles instead of rebuilding, because a rebuild re-rendered the
+    // whole visible canvas and an undo flashed like opening the document. The
+    // repair path is the erase path plus a stamp, so its correctness is exactly
+    // this: the repaired layer must be pixel-identical to a fresh build.
+    const original = [stroke('a'), stroke('b', 1), stroke('c', 2)];
+    const layer = buildLayer(original, 2).tiles;
+    expect(layer.size).toBeGreaterThan(0);
+
+    const added = stroke('d', 7);
+    const finalList = [...original.filter((s) => s.id !== 'c'), added];
+
+    const index = getInkStrokeIndex(layer);
+    abandonBuilds(layer);
+    const removed = [original[2]];
+    const removedIds = new Set(removed.map((s) => s.id));
+    removeStrokesFromTiles(layer, index.grid, removedIds, removed, index.bounds);
+    index.remove(removedIds);
+    for (const s of [added] as Stroke[]) if (!index.has(s.id)) stampStroke(layer, s);
+
+    const rebuilt = buildLayer(finalList, 2).tiles;
+    expect(layer.size).toBe(rebuilt.size);
+    for (const [key, want] of rebuilt) {
+      expectSamePixels(layer.get(key)!, want, `re-synced tile ${key}`);
+    }
+  });
+
+  it('re-syncs a moved stroke within a hair of a full rebuild', () => {
+    // A move reaches the layer as the same id with new points, i.e. an erase of
+    // the old pixels plus a stamp of the new ones. The stamp lands after the
+    // repair, so where a translucent stroke overlaps a survivor the compositing
+    // order differs from a fresh build by a rounding level — the same trade the
+    // drag-move commit already makes (removeStrokesFromTiles + stampStroke at
+    // pointer-up). Bounded here so a real regression cannot hide inside it.
+    const original = [stroke('a'), stroke('b', 1), stroke('c', 2), stroke('d', 3)];
+    const layer = buildLayer(original, 2).tiles;
+
+    const movedC = stroke('c', 9);
+    const finalList = [original[0], original[1], movedC, original[3]];
+
+    const index = getInkStrokeIndex(layer);
+    abandonBuilds(layer);
+    const removed = [original[2]];
+    const removedIds = new Set(removed.map((s) => s.id));
+    removeStrokesFromTiles(layer, index.grid, removedIds, removed, index.bounds);
+    index.remove(removedIds);
+    for (const s of [movedC] as Stroke[]) if (!index.has(s.id)) stampStroke(layer, s);
+
+    const rebuilt = buildLayer(finalList, 2).tiles;
+    expect(layer.size).toBe(rebuilt.size);
+    let differing = 0, total = 0, worst = 0;
+    for (const [key, want] of rebuilt) {
+      const a = tilePixels(layer.get(key)!), b = tilePixels(want);
+      expect(b.length).toBe(a.length);
+      for (let i = 0; i < b.length; i += 4) {
+        for (let c = 0; c < 4; c++) {
+          total++;
+          const d = Math.abs(a[i + c] - b[i + c]);
+          if (d > 0) { differing++; if (d > worst) worst = d; }
+        }
+      }
+    }
+    // Bounded, not byte-exact: see the trade documented above. Dropped or
+    // displaced ink would land a delta above 100 and move far more bytes.
+    expect(worst).toBeLessThanOrEqual(16);
+    expect(differing / total).toBeLessThan(0.01);  // and only at overlap edges
+  });
+
+  it('does not re-composite a stroke the layer already holds', () => {
+    // The guard that makes the diff safe: a stroke still in the index must not be
+    // stamped again, because a second composite of a translucent stroke darkens
+    // it at every self-overlap.
+    const strokes = [stroke('keep', 5, { opacity: 0.3 })];
+    const layer = buildLayer(strokes, 2).tiles;
+    const before = [...layer.values()].map((c) => tilePixels(c));
+    const index = getInkStrokeIndex(layer);
+    expect(index.has('keep')).toBe(true);
+    for (const s of strokes) if (!index.has(s.id)) stampStroke(layer, s); // caller's guard
+    const after = [...layer.values()].map((c) => tilePixels(c));
+    expect(after.length).toBe(before.length);
+    for (let i = 0; i < after.length; i++) {
+      expect(Array.from(after[i])).toEqual(Array.from(before[i]));
+    }
+  });
+});
+
+
+describe('a feathered stroke crossing a tile boundary', () => {
+  /** Composite the layer exactly as the editor does (drawVisibleTiles) and return
+   *  the alpha of each device column over the rows the bar covers. */
+  function boundaryProfile(tiles: Map<string, HTMLCanvasElement>) {
+    const dpr = 1.25, zoom = 1.26, vw = 1000, vh = 600;
+    const out = createCanvas(Math.round(vw * dpr), Math.round(vh * dpr));
+    const ctx = out.getContext('2d');
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    drawVisibleTiles(ctx as never, tiles, { x: 0, y: 0, zoom }, vw, vh, dpr);
+    const img = ctx.getImageData(0, 0, out.width, out.height);
+    const y0 = Math.round(60 * zoom * dpr), y1 = Math.round(400 * zoom * dpr);
+    const cols: number[] = [];
+    for (let x = 0; x < out.width; x++) {
+      let sum = 0;
+      for (let y = y0; y < y1; y++) sum += img.data[(y * out.width + x) * 4 + 3];
+      cols.push(sum / (y1 - y0));
+    }
+    return { cols, mid: Math.round(512 * zoom * dpr) };
+  }
+
+  it('loses no coverage at the boundary, at any bake scale or feather size', () => {
+    // The per-tile raster used to be cropped FLUSH with the tile edge. The feather
+    // is a blur OF that raster, and a blur loses whatever falls outside its canvas
+    // — so the ink along the boundary came out dimmer than the rest of the stroke,
+    // i.e. a thin dark line on every tile edge a stroke crossed. It only showed
+    // with the feather on (there is no blur to starve when it is off), which is
+    // how the user spotted it. The crop now extends past the edge by the blur's
+    // own 3σ footprint; this locks that.
+    const bar = stroke('bar', 0, {
+      points: Array.from({ length: 40 }, (_, i) => ({ x: 512, y: 40 + i * 12, pressure: 1, t: i * 4 })),
+      size: 60, opacity: 1, renderVersion: 2, edgeFeather: true, featherSize: 2,
+    });
+    for (const bake of [1, 2, 3]) {
+      clearInkRasterCache();
+      clearStreamingInk();
+      const tiles = new Map<string, HTMLCanvasElement>();
+      indexInkStrokes(tiles, [bar]);
+      const cam = { x: 0, y: 0, zoom: 1.26 };
+      let res = materializeTiles(tiles, cam, 1000, 600, 1.25, { fixedScale: bake, budgetMs: 1e9 });
+      let guard = 0;
+      while (res.remaining > 0 && guard++ < 60) {
+        res = materializeTiles(tiles, cam, 1000, 600, 1.25, { fixedScale: bake, budgetMs: 1e9 });
+      }
+      const { cols, mid } = boundaryProfile(tiles);
+      // The bar is opaque, so every column it covers must be fully inked — in
+      // particular the two straddling the tile boundary.
+      const around = cols.slice(mid - 3, mid + 4).map((v) => Math.round(v));
+      expect(Math.min(...around), `bake ${bake}: alpha around the boundary ${around.join(' ')}`)
+        .toBeGreaterThan(250);
+    }
+  });
+});
+
+
+describe('sliced stroke rasters', () => {
+  it('builds a monster stroke across many passes, byte-identical to a fresh build', () => {
+    // One stroke's raster measured 46 ms whole on a real dense document — a
+    // frame-blocking chunk no budget could slice, because the budget is checked
+    // BETWEEN strokes. Long rasters are now built segment by segment across
+    // passes (the colour/blur finishing stays atomic). This locks the two things
+    // that must hold: the slicing actually ENGAGES (a pass draws at most a point
+    // or two), and the result is pixel-identical to the synchronous build.
+    // ~300 segments INSIDE one tile: the run per (stroke, tile) is what the
+    // synchronous fast path would have built whole, so it must exceed the
+    // sync-build threshold for the slicing to engage at all.
+    const long = stroke('long', 0, {
+      renderVersion: 2, edgeFeather: true, featherSize: 0.6, size: 24,
+      points: Array.from({ length: 300 }, (_, i) => ({
+        x: 30 + i * 1.5, y: 200 + Math.sin(i * 0.5) * 120, pressure: 0.4 + (i % 11) / 22, t: i * 5,
+      })),
+    });
+    const sliced = new Map<string, HTMLCanvasElement>();
+    indexInkStrokes(sliced, [long]);
+    let passes = 0;
+    // A hair of a budget + a 2-point quota: each pass may draw only a couple of
+    // segments, so the build cannot possibly complete in one pass.
+    let res = materializeTiles(sliced, CAM, VIEW, VIEW, 2, { budgetMs: 0.5, maxPoints: 2 });
+    while (res.remaining > 0 && passes++ < 2000) {
+      res = materializeTiles(sliced, CAM, VIEW, VIEW, 2, { budgetMs: 0.5, maxPoints: 2 });
+    }
+    expect(res.remaining).toBe(0);
+    expect(passes).toBeGreaterThan(5); // it really was sliced, not built in one go
+
+    const fresh = buildLayer([long], 2).tiles;
+    expect(fresh.size).toBe(sliced.size);
+    for (const [key, want] of fresh) {
+      expectSamePixels(sliced.get(key)!, want, `sliced tile ${key}`);
     }
   });
 });

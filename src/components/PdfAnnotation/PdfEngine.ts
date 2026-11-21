@@ -1,3 +1,5 @@
+import { finishInkWork } from '../InkCooperativeWork';
+import { shapeBounds } from '../InkShapeGeometry';
 /**
  * PdfEngine — Pure functions for the PDF annotation ink pipeline.
  *
@@ -77,46 +79,52 @@ export function smoothingToMinCutoff(smoothing: number): number {
 export function applyOneEuro(
   pts: { x: number; y: number; pressure: number; t: number }[],
   minCutoff: number,
-): { x: number; y: number; p: number }[] {
-  if (pts.length === 0) return [];
+): { x: number; y: number; p: number }[] { return finishInkWork(applyOneEuroWork(pts, minCutoff)); }
 
-  const out: { x: number; y: number; p: number }[] = [];
-  let prevX = pts[0].x, prevY = pts[0].y, prevP = pts[0].pressure, prevT = pts[0].t;
-  let dxHat = 0, dyHat = 0;
-  out.push({ x: prevX, y: prevY, p: prevP });
-
-  for (let i = 1; i < pts.length; i++) {
-    const isLast = i === pts.length - 1;
-    const raw = pts[i];
-    const dt = (raw.t - prevT) / 1000;
-
-    // Last point always raw (live pen tip), otherwise filter
-    if (isLast || dt <= 0 || dt > 1) {
-      out.push({ x: raw.x, y: raw.y, p: raw.pressure });
-      continue;
+export function* applyOneEuroWork(
+  pts: { x: number; y: number; pressure: number; t: number }[],
+  minCutoff: number,
+): Generator<void, { x: number; y: number; p: number }[], unknown> {
+    if (pts.length === 0)
+        return [];
+    const out: {
+        x: number;
+        y: number;
+        p: number;
+    }[] = [];
+    let prevX = pts[0].x, prevY = pts[0].y, prevP = pts[0].pressure, prevT = pts[0].t;
+    let dxHat = 0, dyHat = 0;
+    out.push({ x: prevX, y: prevY, p: prevP });
+    for (let i = 1; i < pts.length; i++) {
+        yield;
+        const isLast = i === pts.length - 1;
+        const raw = pts[i];
+        const dt = (raw.t - prevT) / 1000;
+        // Last point always raw (live pen tip), otherwise filter
+        if (isLast || dt <= 0 || dt > 1) {
+            out.push({ x: raw.x, y: raw.y, p: raw.pressure });
+            continue;
+        }
+        const dx = (raw.x - prevX) / dt;
+        const dy = (raw.y - prevY) / dt;
+        const speed = Math.hypot(dx, dy);
+        const cutoff = minCutoff + BETA * speed;
+        const tau = 1 / (2 * Math.PI * cutoff);
+        const alpha = 1 / (1 + tau / dt);
+        const sx = prevX + alpha * (raw.x - prevX);
+        const sy = prevY + alpha * (raw.y - prevY);
+        const sp = prevP + alpha * (raw.pressure - prevP);
+        const dtau = 1 / (2 * Math.PI * DCUTOFF);
+        const dalpha = 1 / (1 + dtau / dt);
+        dxHat += dalpha * (dx - dxHat);
+        dyHat += dalpha * (dy - dyHat);
+        out.push({ x: sx, y: sy, p: sp });
+        prevX = sx;
+        prevY = sy;
+        prevP = sp;
+        prevT = raw.t;
     }
-
-    const dx = (raw.x - prevX) / dt;
-    const dy = (raw.y - prevY) / dt;
-    const speed = Math.hypot(dx, dy);
-    const cutoff = minCutoff + BETA * speed;
-    const tau = 1 / (2 * Math.PI * cutoff);
-    const alpha = 1 / (1 + tau / dt);
-
-    const sx = prevX + alpha * (raw.x - prevX);
-    const sy = prevY + alpha * (raw.y - prevY);
-    const sp = prevP + alpha * (raw.pressure - prevP);
-
-    const dtau = 1 / (2 * Math.PI * DCUTOFF);
-    const dalpha = 1 / (1 + dtau / dt);
-    dxHat += dalpha * (dx - dxHat);
-    dyHat += dalpha * (dy - dyHat);
-
-    out.push({ x: sx, y: sy, p: sp });
-    prevX = sx; prevY = sy; prevP = sp; prevT = raw.t;
-  }
-
-  return out;
+    return out;
 }
 
 // ---- Width --------------------------------------------------------------------
@@ -218,6 +226,7 @@ export interface Bounds {
 }
 
 export function getStrokeBounds(stroke: PdfStroke): Bounds {
+  if (stroke.geometry) return shapeBounds(stroke.geometry, stroke.size / 2);
   let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
   const r = stroke.size / 2;
   for (const p of stroke.points) {

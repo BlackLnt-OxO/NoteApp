@@ -32,6 +32,7 @@ const TextObject: React.FC<Props> = ({ node, camera, interactive }) => {
   const deleteTextNode = useCanvasStore((s) => s.deleteTextNode);
   const setEditingTextId = useCanvasStore((s) => s.setEditingTextId);
   const pushHistory = useCanvasStore((s) => s.pushHistory);
+  const selected = useCanvasStore((s) => s.selectedIds.includes(node.id));
   const uiScale = useNoteStore((s) => s.uiScale);
   const [hover, setHover] = useState(false);
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
@@ -69,6 +70,7 @@ const TextObject: React.FC<Props> = ({ node, camera, interactive }) => {
   const dragRef = useRef<{ sx: number; sy: number; ox: number; oy: number } | null>(null);
   const onDown = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
     if (!interactive) return;
+    if (e.button !== 0) return; // middle belongs to canvas panning
     e.preventDefault();
     e.stopPropagation();
     (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
@@ -107,6 +109,7 @@ const TextObject: React.FC<Props> = ({ node, camera, interactive }) => {
   const rzRef = useRef<{ sx: number; ow: number } | null>(null);
   const onRzDown = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
     if (!interactive) return;
+    if (e.button !== 0) return; // middle belongs to canvas panning
     e.preventDefault();
     e.stopPropagation();
     (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
@@ -152,8 +155,11 @@ const TextObject: React.FC<Props> = ({ node, camera, interactive }) => {
 
   return (
     <>
-      <div
+      <div data-ink-object-id={node.id}
+        data-ink-selected={selected || undefined}
         style={{
+          outline: selected ? '1.5px dashed #6b5ce7' : undefined,
+          outlineOffset: 3,
           position: 'absolute',
           left,
           top,
@@ -215,6 +221,7 @@ const TextObject: React.FC<Props> = ({ node, camera, interactive }) => {
             </button>
             <div
               title="拖拽调整宽度"
+              data-ink-object-control=""
               onPointerDown={onRzDown}
               onPointerMove={onRzMove}
               onPointerUp={onRzUp}

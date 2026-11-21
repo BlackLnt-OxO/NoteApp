@@ -1,5 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { readInkFrame, readFrameWindows, resetInkFrame, type FrameWindow, type InkFrameStats } from './InkFrameStats';
+import { INK_MEMORY_BUDGET } from './InkCanvasSurface';
+import { downloadInkDiagnostics } from './InkDiagnostics';
 import { useNoteStore } from '../store';
 import { fs, fsn } from '../utils';
 import type { DiagConfig, DiagStatus, PreviewUpdate, CaptureProgress, EventLoopStats } from '../types';
@@ -83,6 +85,8 @@ const DiagnosticPanel: React.FC<DiagnosticPanelProps> = ({ onClose, visible }) =
   /** Live ink readout: frame pacing sampled here plus what the ink layer reported
    *  for its last frame. Independent of the long-screenshot diagnostic — this is
    *  for judging whether a change helped, so it runs whenever the panel is open. */
+  const [gpu, setGpu] = useState<Record<string, string> | null>(null);
+  useEffect(() => { if (visible) void window.electronAPI?.getGpuStatus?.().then(setGpu); }, [visible]);
   const [inkLive, setInkLive] = useState<InkLive | null>(null);
 
   // Poll the ink readout. The SAMPLING happens in the ink layer's render loop
@@ -381,6 +385,11 @@ const DiagnosticPanel: React.FC<DiagnosticPanelProps> = ({ onClose, visible }) =
           }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: fsn(8, gfs) }}>
               <span style={{ color: '#8ff' }}>墨迹性能（{inkLive?.surface === 'pdf' ? 'PDF' : '无限画布'}）</span>
+              {import.meta.env.DEV && <button className="glass-btn" onClick={downloadInkDiagnostics}
+                title="导出最近 512 条瓦片更新记录；不含笔迹正文或图片"
+                style={{ marginLeft: 'auto', fontSize: fs(10, gfs), padding: `${fs(2, gfs)} ${fs(8, gfs)}` }}>
+                一键导出现场
+              </button>}
               <button className="glass-btn"
                 onClick={() => { resetInkFrame(); setInkLive(null); }}
                 style={{ marginLeft: 'auto', fontSize: fs(10, gfs), padding: `${fs(2, gfs)} ${fs(8, gfs)}` }}>
@@ -393,6 +402,13 @@ const DiagnosticPanel: React.FC<DiagnosticPanelProps> = ({ onClose, visible }) =
                 <div>{`平移/缩放帧间隔: p50=${inkLive.moving.p50Ms}ms p95=${inkLive.moving.p95Ms}ms worst=${inkLive.moving.worstMs}ms · >33ms=${inkLive.moving.over33} · >50ms=${inkLive.moving.over50}（${inkLive.moving.frames} 帧）`}</div>
                 <div>{`写字/其它重绘帧间隔: p50=${inkLive.other.p50Ms}ms worst=${inkLive.other.worstMs}ms（${inkLive.other.frames} 帧）`}</div>
                 <div>{`墨迹绘制: 上一帧 ${inkLive.drawMs.toFixed(1)}ms · 移动中最差 ${inkLive.movingWorstDrawMs.toFixed(1)}ms · 全局最差 ${inkLive.worstDrawMs.toFixed(1)}ms`}</div>
+                <div>{`材质化(烤tile): 上一帧 ${inkLive.matMs.toFixed(1)}ms · 最差 ${inkLive.worstMatMs.toFixed(1)}ms`}</div>
+                <div>{`画布绘制(清除/背景/点阵): 上一帧 ${inkLive.paintMs.toFixed(1)}ms`}</div>
+                <div>{`输入处理 p95 ${inkLive.inputP95Ms.toFixed(2)}ms · 实时层 p95 ${inkLive.liveP95Ms.toFixed(2)}ms · 后端 ${inkLive.backend}`}</div>
+                <div>{`排队 ${inkLive.queuedTiles} · 瓦片 ${inkLive.tileBuildMs.toFixed(1)}ms · 等待 ${inkLive.tileWaitMs.toFixed(1)}ms · 缓存命中 ${inkLive.cacheHits}`}</div>
+                <div>{`墨迹资源 ${(inkLive.totalInkBytes / 1048576).toFixed(1)} / ${INK_MEMORY_BUDGET / 1048576} MiB · 长任务 ${inkLive.longTasks}（最大 ${inkLive.longestTaskMs.toFixed(1)}ms）`}</div>
+                <div>{`GPU 画布 ${gpu?.['2d_canvas'] ?? '待确认'} · 合成 ${gpu?.gpu_compositing ?? '待确认'}`}</div>
+                <div>{`保存: 正文 ${inkLive.saveBodyMs.toFixed(0)}ms · 视图 ${inkLive.saveViewMs.toFixed(0)}ms（异步事务等待时间，不是输入线程 CPU 时间）`}</div>
                 <div style={{ color: '#fc8' }}>
                   {inkLive.moving.frames < 5
                     ? '→ 先在画布上滚动/缩放几下（不用开这个面板），再回来看'

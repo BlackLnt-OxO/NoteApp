@@ -46,7 +46,8 @@ const CanvasHome: React.FC<{ onOpen: (id: string) => void; onNew: () => void }> 
   const canvases = useCanvasLibrary((s) => s.canvases);
   const categories = useCanvasLibrary((s) => s.categories);
   const renameCanvas = useCanvasLibrary((s) => s.renameCanvas);
-  const deleteCanvas = useCanvasLibrary((s) => s.deleteCanvas);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+  const deleteCanvas = (id: string) => { void useCanvasLibrary.getState().deleteCanvas(id).catch(error => setDeleteError(error instanceof Error ? error.message : String(error))); };
   const setCanvasCategory = useCanvasLibrary((s) => s.setCanvasCategory);
   const addCategory = useCanvasLibrary((s) => s.addCategory);
   const renameCategory = useCanvasLibrary((s) => s.renameCategory);
@@ -123,6 +124,7 @@ const CanvasHome: React.FC<{ onOpen: (id: string) => void; onNew: () => void }> 
       position: 'absolute', inset: 0, overflowY: 'auto', padding: '28px 32px',
       background: 'var(--page-bg)', color: 'var(--text-primary)',
     }}>
+      {deleteError && <div role="alert">删除失败：{deleteError}<button onClick={() => setDeleteError(null)}>关闭</button></div>}
       {/* Header */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 20 }}>
         <span style={{ fontSize: fs(18, gfs), fontWeight: 600 }}>画布</span>

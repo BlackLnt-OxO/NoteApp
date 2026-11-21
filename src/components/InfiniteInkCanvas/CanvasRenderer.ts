@@ -4,7 +4,8 @@
 
 import type { Camera, CanvasObject, Stroke, TextNodeData } from './types';
 import { screenToWorld, worldToScreen } from './constants';
-import { drawSmoothStroke, getStrokeBounds } from './StrokeEngine';
+import { drawSmoothStroke } from './StrokeEngine';
+import { getCommittedStrokeBounds } from '../PdfAnnotation/InkStrokeIndex';
 
 // ---- Public entry point ------------------------------------------------------
 
@@ -70,7 +71,9 @@ export function drawSelectionHighlight(ctx: CanvasRenderingContext2D, objects: C
   const set = new Set(selectedIds);
   for (const obj of objects) {
     if (obj.type !== 'stroke' || !set.has(obj.id)) continue;
-    const b = getStrokeBounds(obj);
+    // Cached on stroke identity (stores replace strokes, never mutate them) —
+    // this runs per frame for every selected stroke.
+    const b = getCommittedStrokeBounds(obj);
     ctx.strokeRect(b.minX, b.minY, b.maxX - b.minX, b.maxY - b.minY);
   }
   ctx.restore();

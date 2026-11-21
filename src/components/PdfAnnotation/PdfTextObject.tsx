@@ -27,6 +27,7 @@ interface Props {
 
 const PdfTextObject: React.FC<Props> = ({ node, page, camera, interactive }) => {
   const uiScale = useNoteStore((s) => s.uiScale);
+  const selected = usePdfStore((s) => s.selectedIds.includes(node.id));
   const updateTextNode = usePdfStore((s) => s.updateTextNode);
   const deleteTextNode = usePdfStore((s) => s.deleteTextNode);
   const setEditingTextId = usePdfStore((s) => s.setEditingTextId);
@@ -151,8 +152,11 @@ const PdfTextObject: React.FC<Props> = ({ node, page, camera, interactive }) => 
 
   return (
     <>
-      <div
+      <div data-ink-object-id={node.id}
+        data-ink-selected={selected || undefined}
         style={{
+          outline: selected ? '1.5px dashed #6b5ce7' : undefined,
+          outlineOffset: 3,
           position: 'absolute',
           left,
           top,
@@ -212,6 +216,7 @@ const PdfTextObject: React.FC<Props> = ({ node, page, camera, interactive }) => 
             </button>
             <div
               title="拖拽调整宽度"
+              data-ink-object-control=""
               onPointerDown={onRzDown}
               onPointerMove={onRzMove}
               onPointerUp={onRzUp}

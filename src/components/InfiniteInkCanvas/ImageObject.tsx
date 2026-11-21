@@ -22,6 +22,7 @@ const ImageObject: React.FC<Props> = ({ obj, camera }) => {
   const updateImageObject = useCanvasStore((s) => s.updateImageObject);
   const deleteObject = useCanvasStore((s) => s.deleteObject);
   const pushHistory = useCanvasStore((s) => s.pushHistory);
+  const selected = useCanvasStore((s) => s.selectedIds.includes(obj.id));
   const uiScale = useNoteStore((s) => s.uiScale);
   const [hover, setHover] = useState(false);
   const [lightbox, setLightbox] = useState(false);
@@ -36,6 +37,10 @@ const ImageObject: React.FC<Props> = ({ obj, camera }) => {
   // ---- drag to move (world delta = screen delta / zoom) ----------------------
   const dragRef = useRef<{ startX: number; startY: number; ox: number; oy: number } | null>(null);
   const onDragDown = useCallback((e: React.PointerEvent) => {
+    // Middle button belongs to canvas panning (the container's capture-phase
+    // listener owns it and never lets it reach here) — only the left button
+    // moves the image.
+    if (e.button !== 0) return;
     e.preventDefault(); e.stopPropagation();
     (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
     dragRef.current = { startX: e.clientX, startY: e.clientY, ox: obj.x, oy: obj.y };
@@ -57,6 +62,7 @@ const ImageObject: React.FC<Props> = ({ obj, camera }) => {
   // ---- corner resize (bottom-right) ------------------------------------------
   const resizeRef = useRef<{ startX: number; startY: number; ow: number; oh: number } | null>(null);
   const onResizeDown = useCallback((e: React.PointerEvent) => {
+    if (e.button !== 0) return; // middle belongs to canvas panning
     e.preventDefault(); e.stopPropagation();
     (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
     resizeRef.current = { startX: e.clientX, startY: e.clientY, ow: obj.width, oh: obj.height };
@@ -77,7 +83,8 @@ const ImageObject: React.FC<Props> = ({ obj, camera }) => {
 
   return (
     <>
-      <div
+      <div data-ink-object-id={obj.id}
+        data-ink-selected={selected || undefined}
         onPointerDown={onDragDown}
         onPointerMove={onDragMove}
         onPointerUp={onDragUp}
@@ -92,6 +99,8 @@ const ImageObject: React.FC<Props> = ({ obj, camera }) => {
           cursor: 'grabbing',
           zIndex: 1, // below the canvas (ink draws on top)
           userSelect: 'none',
+          outline: selected ? '1.5px dashed #6b5ce7' : undefined,
+          outlineOffset: 3,
         }}
       >
         <img
@@ -118,6 +127,7 @@ const ImageObject: React.FC<Props> = ({ obj, camera }) => {
             </button>
             <div
               title="缩放"
+              data-ink-object-control=""
               onPointerDown={onResizeDown}
               onPointerMove={onResizeMove}
               onPointerUp={onResizeUp}
@@ -133,6 +143,7 @@ const ImageObject: React.FC<Props> = ({ obj, camera }) => {
 
       {lightbox && (
         <div
+          data-lightbox=""
           onClick={() => setLightbox(false)}
           style={{
             position: 'fixed', inset: 0, zIndex: 10000,

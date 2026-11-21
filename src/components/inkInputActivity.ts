@@ -4,9 +4,19 @@ import { useEffect, type RefObject } from 'react';
 // down. Keep this outside React/Zustand so input does not notify subscribers.
 const activeInputs = new Set<symbol>();
 let lastInputEnd = -Infinity;
+/** Pointer holds the canvas's own listeners never see (a middle-button pan is
+ *  intercepted by the container's capture-phase listener, so no pointerdown
+ *  reaches the canvas) — persistence must defer for them all the same. */
+let holdCount = 0;
 
 export function isInkInputBusy(): boolean {
-  return activeInputs.size > 0 || performance.now() - lastInputEnd < 200;
+  return activeInputs.size > 0 || holdCount > 0 || performance.now() - lastInputEnd < 200;
+}
+
+/** Claim/release a pointer hold for gestures the canvas's input listeners miss. */
+export function setPointerHold(active: boolean): void {
+  holdCount = Math.max(0, holdCount + (active ? 1 : -1));
+  if (!active) lastInputEnd = performance.now();
 }
 
 export function useInkInputActivity(canvasRef: RefObject<HTMLCanvasElement>): void {

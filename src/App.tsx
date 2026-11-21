@@ -9,6 +9,8 @@ import DataDirectoryPrompt from './components/DataDirectoryPrompt';
 import ScreenshotTool from './components/ScreenshotTool';
 import DiagnosticPanel from './components/DiagnosticPanel';
 import CanvasView from './components/InfiniteInkCanvas/CanvasView';
+import { canvasRepository } from './components/InfiniteInkCanvas/CanvasRepository';
+import { useCanvasLibrary } from './components/InfiniteInkCanvas/useCanvasLibrary';
 import { useCanvasStore } from './components/InfiniteInkCanvas/useCanvasStore';
 import PdfView from './components/PdfAnnotation/PdfView';
 import { usePdfStore } from './components/PdfAnnotation/PdfStore';
@@ -36,6 +38,13 @@ const App: React.FC = () => {
   const [showSettings, setShowSettings] = useState(false);
   const [showDiagnostic, setShowDiagnostic] = useState(false);
   const [dataDirState, setDataDirState] = useState<'checking' | 'ready' | 'prompt'>('checking');
+  const [storageBarrier, setStorageBarrier] = useState(false);
+  useEffect(() => {
+    if (!storageBarrier) return;
+    const blockKeys = (event: KeyboardEvent) => { event.preventDefault(); event.stopImmediatePropagation(); };
+    document.addEventListener('keydown', blockKeys, true);
+    return () => document.removeEventListener('keydown', blockKeys, true);
+  }, [storageBarrier]);
   const [isMaximized, setIsMaximized] = useState(false);
   const [fontToast, setFontToast] = useState({ show: false, size: 14, fading: false });
   const [uiZoomToast, setUiZoomToast] = useState({ show: false, value: 0, fading: false });
@@ -170,6 +179,33 @@ const App: React.FC = () => {
     }
   }, [setNoteFloating]);
 
+  useEffect(() => window.electronAPI?.onStorageFlush?.(async id => {
+    setStorageBarrier(true);
+    try {
+      window.dispatchEvent(new Event('ink:flush-gesture'));
+      window.dispatchEvent(new Event('ink:suspend-background'));
+      await useNoteStore.getState().saveData();
+      useCanvasLibrary.getState().saveState();
+      while (useCanvasStore.getState().currentCanvasId && useCanvasStore.getState().loaded) {
+        if (!await useCanvasStore.getState().saveCanvasData()) throw new Error(useCanvasStore.getState().saveError ?? '保存失败');
+        if (useCanvasStore.getState().saveStatus === 'saved') break;
+      }
+      do {
+        const pdf = await usePdfStore.getState().saveAnnotations();
+        if (!pdf.ok) throw new Error('PDF 标注保存失败');
+      } while (usePdfStore.getState().dirty);
+      await canvasRepository.close();
+      window.electronAPI?.storageFlushed(id);
+    } catch (error) {
+      setStorageBarrier(false); window.dispatchEvent(new Event('ink:resume-background'));
+      window.electronAPI?.storageFlushed(id, error instanceof Error ? error.message : String(error));
+    }
+  }), []);
+
+  useEffect(() => window.electronAPI?.onStorageResume?.(() => {
+    setStorageBarrier(false); window.dispatchEvent(new Event('ink:resume-background'));
+  }), []);
+
   const handleMinimize = useCallback(() => window.electronAPI?.minimize(), []);
   const handleMaximize = useCallback(async () => {
     if (window.electronAPI) {
@@ -200,6 +236,7 @@ const App: React.FC = () => {
       backgroundColor: 'var(--page-bg)',
       borderRadius: '12px', overflow: 'hidden',
     }}>
+      {storageBarrier && <div role="status" style={{ position: 'fixed', inset: 0, zIndex: 10000, display: 'grid', placeItems: 'center', background: 'rgba(0,0,0,.3)' }}>正在保存…</div>}
 
       {/* Background image via <img>, NOT CSS url(data:) — Chromium drops very large
           base64 data URLs in CSS, which is why the background never painted even

@@ -1,6 +1,10 @@
 import { create } from 'zustand';
+import { canvasRepository } from './CanvasRepository';
 import { isInkInputBusy } from '../inkInputActivity';
+import { reportInkFrame } from '../InkFrameStats';
 import { loadQuickSizes, saveQuickSizes } from '../inkToolPrefs';
+import { replaceStrokePoints } from '../InkShapeGeometry';
+import { moveSelectedItem } from '../InkSelection';
 import type {
   Camera,
   BrushSettings,
@@ -17,8 +21,6 @@ import type {
 import {
   DEFAULT_CAMERA,
   DEFAULT_BRUSH,
-  canvasDataKey,
-  canvasViewKey,
   TEXT_DEFAULTS,
   MAX_HISTORY,
 } from './constants';
@@ -55,6 +57,7 @@ export interface CanvasStore {
 
   // Actions
   addStroke: (stroke: Stroke) => void;
+  replaceStroke: (stroke: Stroke, recordHistory?: boolean) => void;
   updateStrokePoints: (id: string, points: StrokePoint[]) => void;
   addTextNode: (x: number, y: number) => string;
   updateTextNode: (id: string, data: Partial<TextNodeData>) => void;
@@ -98,7 +101,11 @@ export interface CanvasStore {
    *  only those strokes back here — a page-wide rebuild would make dropping a
    *  selection on a dense canvas take seconds. */
   commitStrokesPoints: (entries: { id: string; points: StrokePoint[] }[]) => void;
-  saveCanvasData: () => Promise<void>;
+  commitSelectionMove: (ids: string[], dx: number, dy: number) => void;
+  saveStatus: 'saved' | 'pending' | 'saving' | 'error';
+  saveError: string | null;
+  storageWarning: string | null;
+  saveCanvasData: () => Promise<boolean>;
   loadCanvasData: (canvasId?: string) => Promise<void>;
   /** Persist the current canvas, then swap in the target canvas's data. */
   switchCanvas: (canvasId: string) => Promise<void>;
@@ -114,12 +121,7 @@ function makeId(prefix: string): string {
  *  (per surface — the canvas keeps its own, independent of the PDF toolbar). */
 const QUICK_SIZES_KEY = 'stickynotes-inkcanvas-quick-sizes';
 
-// What the last successful save actually wrote, so a change to one half of the
-// persisted state never re-writes the other. Compared by REFERENCE — the store
-// replaces `objects`/`camera` whenever they change and shares the reference
-// otherwise (the history model depends on exactly that).
-let savedBody: { id: string | null; objects: CanvasObject[] | null } = { id: null, objects: null };
-let savedView: { id: string | null; camera: Camera | null; grid: boolean | null } = { id: null, camera: null, grid: null };
+let loadTicket = 0;
 
 // ---- Store -------------------------------------------------------------------
 
@@ -140,6 +142,9 @@ export const useCanvasStore = create<CanvasStore>((set, get) => ({
   history: [],
   redoStack: [],
   loaded: false,
+  saveStatus: 'saved',
+  saveError: null,
+  storageWarning: null,
   currentCanvasId: null,
   renderEpoch: 0,
   pendingImageInsert: null,
@@ -180,10 +185,17 @@ export const useCanvasStore = create<CanvasStore>((set, get) => ({
     set((s) => ({ objects: [...s.objects, stroke], redoStack: [] }));
   },
 
+  replaceStroke: (stroke, recordHistory = true) => {
+    if (!get().objects.some(o => o.type === 'stroke' && o.id === stroke.id)) return;
+    if (recordHistory) get().pushHistory();
+    set(s => ({ objects: s.objects.map(o => o.type === 'stroke' && o.id === stroke.id ? { ...stroke } : o),
+      renderEpoch: s.renderEpoch + 1, redoStack: recordHistory ? [] : s.redoStack }));
+  },
+
   updateStrokePoints: (id, points) => {
     set((s) => ({
       objects: s.objects.map((o) =>
-        o.type === 'stroke' && o.id === id ? { ...o, points } : o,
+        o.type === 'stroke' && o.id === id ? replaceStrokePoints(o, points) : o,
       ),
     }));
   },
@@ -301,10 +313,18 @@ export const useCanvasStore = create<CanvasStore>((set, get) => ({
     if (entries.length === 0) return;
     const map = new Map(entries.map((e) => [e.id, e.points]));
     const next = get().objects.map((o) =>
-      o.type === 'stroke' && map.has(o.id) ? { ...o, points: map.get(o.id)! } : o,
+      o.type === 'stroke' && map.has(o.id) ? replaceStrokePoints(o, map.get(o.id)!) : o,
     );
     // No renderEpoch bump — see the interface comment.
     set(() => ({ objects: next, redoStack: [] }));
+  },
+
+  commitSelectionMove: (ids, dx, dy) => {
+    if ((!dx && !dy) || !Number.isFinite(dx) || !Number.isFinite(dy)) return;
+    const selected = new Set(ids);
+    if (!get().objects.some(o => selected.has(o.id))) return;
+    get().pushHistory();
+    set(s => ({ objects: s.objects.map(o => selected.has(o.id) ? moveSelectedItem(o, dx, dy) : o), redoStack: [] }));
   },
 
   // --- Simple setters ---
@@ -352,60 +372,39 @@ export const useCanvasStore = create<CanvasStore>((set, get) => ({
   // --- Persistence ---
 
   saveCanvasData: async () => {
+    const snapshot = get(), id = snapshot.currentCanvasId;
+    if (!id || !snapshot.loaded) return true;
+    set({ saveStatus: 'saving', saveError: null });
+    const t0 = performance.now();
     try {
-      const { objects, camera, showDotGrid, currentCanvasId } = get();
-      if (!currentCanvasId) return;
-      // The body is written only when it actually changed. Serializing a dense
-      // canvas is ~100 ms of main-thread work and the write is another blocking
-      // hop to the storage process, so it must not ride along with a pan.
-      if (savedBody.id !== currentCanvasId || savedBody.objects !== objects) {
-        localStorage.setItem(canvasDataKey(currentCanvasId), JSON.stringify({ objects }));
-        savedBody = { id: currentCanvasId, objects };
-      }
-      if (savedView.id !== currentCanvasId || savedView.camera !== camera || savedView.grid !== showDotGrid) {
-        localStorage.setItem(canvasViewKey(currentCanvasId), JSON.stringify({ camera, showDotGrid }));
-        savedView = { id: currentCanvasId, camera, grid: showDotGrid };
-      }
-    } catch (e) {
-      console.error('Failed to save canvas data:', e);
+      await canvasRepository.save(id, snapshot.objects, snapshot.camera, snapshot.showDotGrid);
+      const latest = get();
+      if (latest.currentCanvasId === id) set({ saveStatus: latest.objects === snapshot.objects
+        && latest.camera === snapshot.camera && latest.showDotGrid === snapshot.showDotGrid ? 'saved' : 'pending' });
+      reportInkFrame({ saveBodyMs: performance.now() - t0 });
+      return true;
+    } catch (error) {
+      if (get().currentCanvasId === id) set({ saveStatus: 'error', saveError: error instanceof Error ? error.message : String(error) });
+      return false;
     }
   },
-
   loadCanvasData: async (canvasId?: string) => {
-    try {
-      const id = canvasId ?? get().currentCanvasId;
-      if (!id) { set({ loaded: true }); return; }
-      let data = null;
-      const raw = localStorage.getItem(canvasDataKey(id));
-      if (raw) data = JSON.parse(raw);
-      // The view lives under its own key; documents written before that split
-      // carried it in the body, so fall back to the body's copy.
-      let view = null;
-      const rawView = localStorage.getItem(canvasViewKey(id));
-      if (rawView) { try { view = JSON.parse(rawView); } catch { view = null; } }
-      savedBody = { id, objects: data?.objects || [] };
-      set({
-        loaded: true,
-        currentCanvasId: id,
-        objects: data?.objects || [],
-        camera: { ...DEFAULT_CAMERA, ...(view?.camera ?? data?.camera) },
-        showDotGrid: view?.showDotGrid ?? data?.showDotGrid ?? true,
-        history: [],
-        redoStack: [],
-        selectedIds: [],
-        editingTextId: null,
-        textCommitReturnTool: null,
-        renderEpoch: get().renderEpoch + 1,
-      });
-    } catch (e) {
-      console.error('Failed to load canvas data:', e);
-      set({ loaded: true });
-    }
+    const id = canvasId ?? get().currentCanvasId, ticket = ++loadTicket;
+    if (!id) { set({ loaded: true }); return; }
+    const data = await canvasRepository.load(id);
+    if (ticket !== loadTicket) return;
+    set({ loaded: true, currentCanvasId: id, objects: data.objects, camera: data.camera,
+      showDotGrid: data.showDotGrid, history: [], redoStack: [], selectedIds: [], editingTextId: null,
+      textCommitReturnTool: null, saveStatus: 'saved', saveError: null,
+      storageWarning: canvasRepository.migrationErrors.get(id) ?? null, renderEpoch: get().renderEpoch + 1 });
   },
-
   switchCanvas: async (canvasId: string) => {
-    // Flush the current canvas immediately (don't wait for the 1s debounce).
-    await get().saveCanvasData();
+    window.dispatchEvent(new Event('ink:flush-gesture'));
+    // Edits arriving while a transaction is in flight also cross the save barrier.
+    while (get().loaded && get().currentCanvasId) {
+      if (!await get().saveCanvasData()) throw new Error(get().saveError ?? '画布保存失败');
+      if (get().saveStatus === 'saved') break;
+    }
     await get().loadCanvasData(canvasId);
   },
 }));
@@ -414,7 +413,7 @@ export const useCanvasStore = create<CanvasStore>((set, get) => ({
 
 let saveTimeout: ReturnType<typeof setTimeout>;
 function autoSaveCanvas(): void {
-  if (isInkInputBusy()) {
+  if (!canvasRepository.background && isInkInputBusy()) {
     saveTimeout = setTimeout(autoSaveCanvas, 250);
     return;
   }
@@ -426,6 +425,7 @@ useCanvasStore.subscribe((state, previous) => {
   if (state.objects === previous.objects && state.camera === previous.camera
       && state.showDotGrid === previous.showDotGrid
       && state.currentCanvasId === previous.currentCanvasId && state.loaded === previous.loaded) return;
+  if (state.loaded && state.currentCanvasId && state.saveStatus === 'saved') useCanvasStore.setState({ saveStatus: 'pending' });
   clearTimeout(saveTimeout);
   saveTimeout = setTimeout(autoSaveCanvas, 1000);
 });

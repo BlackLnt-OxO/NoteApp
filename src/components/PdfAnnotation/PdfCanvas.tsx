@@ -1,4 +1,14 @@
+import { inkStrokesOnly, inkObjectVisible } from '../InkViewportObjects';
+import { InkRenderBackend, strokeTileKeys, protectInkSegment } from '../InfiniteInkCanvas/InkRenderBackend';
+import { InkDisplayLayers } from '../InkDisplayLayers';
+import { inkTraceId, recordInkTrace, traceInkStrokes } from '../InkDiagnostics';
+import { inkPointerSamples, InkPointerQueue } from '../InkPointerSamples';
 import { releaseStreamingInk } from './StreamingInkStroke';
+import { useInkShapeGesture } from '../useInkShapeGesture';
+import InkShapeEditor from '../InkShapeEditor';
+import { beginSelectionCapture, endSelectionCapture, cancelSelectionCapture, inkSelectionCaptureHandlers,
+  selectionOperation, combineSelection, hitSelectable, boxSelectableIds, createObjectDragPreview,
+  drawObjectDragPreview, clearObjectDragPreview, type SelectionOperation, type SelectionCapture, type ObjectDragPreview } from '../InkSelection';
 /**
  * PdfCanvas — the interactive canvas for the PDF annotation view.
  *
@@ -26,8 +36,12 @@ import { useBrushCursor } from '../useBrushCursor';
 import { useInkInputActivity } from '../inkInputActivity';
 import { eraseStrokeRegions, getCommittedStrokeBounds } from './InkTileErase';
 import { usePdfToolbarStore } from '../InfiniteInkCanvas/useToolbarStore';
-import { indexInkStrokes, materializeTiles, inkTileBytes, inkTileCount, targetBakeScale } from '../InfiniteInkCanvas/InkTiles';
-import { reportInkFrame, noteCameraMove, noteInkFrame, cameraSettled, CAMERA_SETTLE_MS } from '../InkFrameStats';
+import { indexInkStrokes, materializeTiles, inkTileBytes, inkTileCount, targetBakeScale, abandonBuilds } from '../InfiniteInkCanvas/InkTiles';
+import { reportInkFrame, noteCameraMove, noteInkFrame, cameraSettled, cameraMoving, CAMERA_SETTLE_MS } from '../InkFrameStats';
+
+/** How long after the pointer's last move materialization still yields to it. */
+const POINTER_ACTIVE_MS = 250;
+const EMPTY_ITEMS: PdfItem[] = [];
 import { bakeDragPreview, drawDragPreview, type DragPreview } from './InkDragPreview';
 import { useNoteStore } from '../../store';
 import { themeCanvasColors } from '../../themeColors';
@@ -39,8 +53,6 @@ import {
   drawEraserSegment,
   drawEraserDot,
   drawDotGrid,
-  hitTestStroke,
-  getStrokeBounds,
   boundsIntersectRect,
   screenToWorld,
   worldToScreen,
@@ -64,7 +76,7 @@ import PdfImageObject from './PdfImageObject';
 
 /** Subset of page items that are ink strokes (the rest are DOM-only objects). */
 function strokesOnly(items: PdfItem[]): PdfStroke[] {
-  return items.filter((o): o is PdfStroke => o.type === 'stroke');
+  return inkStrokesOnly(items);
 }
 
 /** Transient laser-pointer stroke segment (never committed / persisted). */
@@ -264,10 +276,34 @@ function drawSelectionRect(
 
 const PdfCanvas: React.FC = () => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const backgroundLayerRef = useRef<HTMLCanvasElement>(null);
+  const committedLayerRef = useRef<HTMLCanvasElement>(null);
+  const displayLayersRef = useRef(new InkDisplayLayers());
+  const manipulatedIdsRef = useRef(new Set<string>());
+  const backgroundPausedRef = useRef(false);
+  const backendRef = useRef<InkRenderBackend | null>(null);
+  const backendPageRef = useRef(0);
+  const boundsRef = useRef<DOMRect | null>(null);
+  const inputQueueRef = useRef(new InkPointerQueue());
+  const pointerUpRef = useRef<((event: React.PointerEvent<HTMLCanvasElement>) => void) | null>(null);
+  const pointerOwnerRef = useRef<number | null>(null);
+  const pendingPanRef = useRef<{ x: number; y: number } | null>(null);
+  const flushPanCamera = useCallback(() => {
+    const camera = pendingPanRef.current; pendingPanRef.current = null;
+    if (camera) usePdfStore.getState().setCamera(camera);
+  }, []);
+  const lastQueuedRef = useRef<{ x: number; y: number } | undefined>();
+  const gestureTilesRef = useRef(new Set<string>());
   const containerRef = useRef<HTMLDivElement>(null);
   const bgCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const bgCacheRef = useRef<Map<number, HTMLCanvasElement>>(new Map());
   const inkTilesRef = useRef<Map<string, HTMLCanvasElement>>(new Map());
+  /** When the pointer last moved — see the canvas's twin. */
+  const lastPointerAtRef = useRef(-Infinity);
+  /** What the ink layer currently holds: the page it was synced to, and the
+   *  stroke list it was synced from. Written only by rebuildInk, so a structural
+   *  change can repair just the difference instead of re-rasterizing the page. */
+  const prevPageInkRef = useRef<{ page: number; strokes: PdfStroke[] } | null>(null);
   /** Pending frame of the lazy tile materialization chain (see InkTiles). */
   const materializeRafRef = useRef(0);
   /** Timer that re-runs materialization once the camera stops moving. */
@@ -278,6 +314,8 @@ const PdfCanvas: React.FC = () => {
   const dirtyRef = useRef(false);
 
   const currentStrokeRef = useRef<PdfStroke | null>(null);
+  const shapeEditPreviewRef = useRef<PdfStroke | null>(null);
+  const shapeEditorIdRef = useRef<string | null>(null);
   const eraserStrokeRef = useRef<PdfStroke | null>(null);
   const isDrawingRef = useRef(false);
   const panAnchorRef = useRef<{ sx: number; sy: number; camX: number; camY: number } | null>(null);
@@ -289,6 +327,8 @@ const PdfCanvas: React.FC = () => {
   const laserRafRef = useRef(0);
 
   const selectAnchorRef = useRef<{ x: number; y: number } | null>(null);
+  const selectionCaptureRef = useRef<SelectionCapture | null>(null);
+  const selectionOperationRef = useRef<{ operation: SelectionOperation; base: string[] }>({ operation: 'replace', base: [] });
   const selectionRectRef = useRef<{ x1: number; y1: number; x2: number; y2: number } | null>(null);
   // Drag-move state: absolute snapshots + live delta (no cumulative drift).
   // `strokes` holds the ORIGINAL objects so the live preview can be drawn with a
@@ -296,11 +336,11 @@ const PdfCanvas: React.FC = () => {
   const selectDragRef = useRef<{
     start: { x: number; y: number };
     ids: string[];
-    snapshots: Map<string, PdfPoint[]>;
     strokes: PdfStroke[];
     /** Raster of the dragged strokes, baked once at drag start — see
      *  InkDragPreview. */
     preview: DragPreview | null;
+    objects: ObjectDragPreview;
     dx: number;
     dy: number;
   } | null>(null);
@@ -334,6 +374,13 @@ const PdfCanvas: React.FC = () => {
   } | null>(null);
 
   useEffect(() => () => {
+    const owner = pointerOwnerRef.current;
+    if (owner !== null) pointerUpRef.current?.({ pointerId: owner, type: 'pointercancel' } as React.PointerEvent<HTMLCanvasElement>);
+    clearObjectDragPreview(selectDragRef.current?.objects);
+    cancelSelectionCapture(selectionCaptureRef, pointerOwnerRef);
+    backendRef.current?.dispose(); backendRef.current = null;
+    displayLayersRef.current.dispose();
+    inputQueueRef.current.clear(); gestureTilesRef.current.clear();
     if (currentStrokeRef.current) releaseStreamingInk(currentStrokeRef.current);
     if (rafRef.current) cancelAnimationFrame(rafRef.current);
     if (laserRafRef.current) cancelAnimationFrame(laserRafRef.current);
@@ -345,6 +392,7 @@ const PdfCanvas: React.FC = () => {
     // document (on EITHER surface) start by evicting all of it.
     disposeTiles(inkTilesRef.current);
     inkTilesRef.current = new Map();
+    prevPageInkRef.current = null;
     releaseDocumentInkCaches();
     // StrictMode replays effects on mount; cancelled frame IDs must not prevent
     // the replayed sizing/render effects from scheduling their first frame.
@@ -364,13 +412,16 @@ const PdfCanvas: React.FC = () => {
   // React-level subscriptions
   const pdfDoc = usePdfStore((s) => s.pdfDoc);
   const currentPage = usePdfStore((s) => s.currentPage);
+  const currentItemId = usePdfStore((s) => s.currentItemId);
+  const selectedIds = usePdfStore((s) => s.selectedIds);
+  const shapeScope = `${currentItemId ?? ''}/${currentPage}`;
   const renderEpoch = usePdfStore((s) => s.renderEpoch);
   const activeTool = usePdfStore((s) => s.activeTool);
   const brushType = usePdfStore((s) => s.brushType);
   const brush = usePdfStore((s) => s.brush);
   const showDotGrid = usePdfStore((s) => s.showDotGrid);
   const camera = usePdfStore((s) => s.camera);
-  const currentItems = usePdfStore((s) => s.items[s.currentPage] ?? []);
+  const currentItems = usePdfStore((s) => s.items[s.currentPage] ?? EMPTY_ITEMS);
   const editingTextId = usePdfStore((s) => s.editingTextId);
   const insertMode = usePdfStore((s) => s.insertMode);
   const pendingImageInsert = usePdfStore((s) => s.pendingImageInsert);
@@ -401,15 +452,25 @@ const PdfCanvas: React.FC = () => {
     // Element CSS size = layout px; the CSS scale renders it at the visual size.
     canvas.style.width = lw + 'px';
     canvas.style.height = lh + 'px';
+    boundsRef.current = container.getBoundingClientRect();
+    for (const layer of [backgroundLayerRef.current, committedLayerRef.current]) {
+      if (!layer) continue;
+      layer.width = canvas.width; layer.height = canvas.height;
+      layer.style.width = canvas.style.width; layer.style.height = canvas.style.height;
+    }
+    displayLayersRef.current.resize();
     dirtyRef.current = true;
     scheduleRender();
   }, [uiScale]);
 
   useEffect(() => {
     resizeCanvas();
+    window.addEventListener('resize', resizeCanvas);
+    const refreshBounds = () => { if (containerRef.current) boundsRef.current = containerRef.current.getBoundingClientRect(); };
+    window.addEventListener('scroll', refreshBounds, true);
     const ro = new ResizeObserver(() => resizeCanvas());
     if (containerRef.current) ro.observe(containerRef.current);
-    return () => ro.disconnect();
+    return () => { ro.disconnect(); window.removeEventListener('resize', resizeCanvas); window.removeEventListener('scroll', refreshBounds, true); };
   }, [resizeCanvas]);
 
   // transform: scale doesn't fire ResizeObserver → re-size on uiScale changes.
@@ -419,7 +480,24 @@ const PdfCanvas: React.FC = () => {
 
   // ---- Render loop ------------------------------------------------------------
 
+  const flushInput = useCallback(() => {
+    const stroke = currentStrokeRef.current ?? eraserStrokeRef.current;
+    if (!stroke) { inputQueueRef.current.clear(); return; }
+    if (stroke.geometry) { inputQueueRef.current.clear(); return; }
+    inputQueueRef.current.drain(sample => {
+      const previous = stroke.points[stroke.points.length - 1];
+      addRawPoint(stroke, sample.x, sample.y, sample.pressure, sample.t);
+      if (stroke.compositeOperation === 'destination-out' && previous) {
+        eraseSegTiles(inkTilesRef.current, previous.x, previous.y, sample.x, sample.y, stroke.size);
+        displayLayersRef.current.invalidate(gestureTilesRef.current);
+      }
+    });
+  }, []);
+
   const doRender = useCallback(() => {
+    flushPanCamera();
+    flushInput();
+    const liveStart = performance.now();
     const canvas = canvasRef.current;
     if (!canvas) return;
     const ctx = canvas.getContext('2d');
@@ -429,41 +507,31 @@ const PdfCanvas: React.FC = () => {
     const st = usePdfStore.getState();
     const container = containerRef.current;
     if (!container) return;
-    const rect = container.getBoundingClientRect();
+    const rect = boundsRef.current ?? container.getBoundingClientRect();
     const vw = rect.width, vh = rect.height;
     const dpr = dprRef.current;
     const cam = st.camera;
     const size = st.pageSizes[st.currentPage];
 
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    ctx.clearRect(0, 0, vw, vh);
     const colors = themeCanvasColors(useNoteStore.getState().settings.theme);
-    ctx.fillStyle = colors.background;
-    ctx.fillRect(0, 0, vw, vh);
-
-    // Dot grid (behind everything, screen-space, zoom-consistent)
-    if (st.showDotGrid) drawDotGrid(ctx, cam, vw, vh, colors.dotColor);
+    const bgLayer = backgroundLayerRef.current, inkLayer = committedLayerRef.current;
+    if (bgLayer && inkLayer) {
+      displayLayersRef.current.paint({ background: bgLayer, ink: inkLayer, tiles: inkTilesRef.current,
+        camera: cam, width: vw, height: vh, dpr, uiScale: useNoteStore.getState().uiScale,
+        drawTile: (context, key, tile, x, y, w, h) => { const backend = backendRef.current; if (backend) backend.drawTile(context, key, tile, x, y, w, h); else context.drawImage(tile, x, y, w, h); }, backgroundColor: colors.background,
+        dotColor: colors.dotColor, showDotGrid: st.showDotGrid,
+        page: size && bgCanvasRef.current ? { canvas: bgCanvasRef.current, width: size.width, height: size.height } : undefined });
+    }
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0); ctx.clearRect(0, 0, vw, vh);
 
     if (size) {
       ctx.save();
       ctx.translate(cam.x, cam.y);
       ctx.scale(cam.zoom, cam.zoom);
 
-      const bg = bgCanvasRef.current;
-      if (bg) ctx.drawImage(bg, 0, 0, size.width, size.height);
+      backendRef.current?.drawPending(ctx);
+      if (shapeEditPreviewRef.current) drawAnnotatedStroke(ctx, shapeEditPreviewRef.current);
 
-      const inkStart = performance.now();
-      const visibleTiles = drawVisibleTiles(ctx, inkTilesRef.current, cam, vw, vh, dpr);
-      reportInkFrame({
-        drawMs: performance.now() - inkStart,
-        visibleTiles,
-        tileCount: inkTileCount(inkTilesRef.current),
-        tileBytes: inkTileBytes(inkTilesRef.current),
-        bakeScale: targetBakeScale(inkTilesRef.current),
-        zoom: cam.zoom,
-        dpr,
-        surface: 'pdf',
-      });
 
       const strokes = strokesOnly(st.items[st.currentPage] ?? []);
 
@@ -473,6 +541,7 @@ const PdfCanvas: React.FC = () => {
       // on every frame.
       if (selectDragRef.current) {
         const d = selectDragRef.current;
+        drawObjectDragPreview(d.objects, containerRef.current, d.dx, d.dy, cam.zoom, useNoteStore.getState().uiScale);
         // One blit of the raster baked at drag start; the strokes themselves are
         // only drawn when the raster was refused (too large).
         if (d.preview) drawDragPreview(ctx, d.preview, d.dx, d.dy);
@@ -491,7 +560,7 @@ const PdfCanvas: React.FC = () => {
           ctx.restore();
         }
       } else if (st.selectedIds.length > 0) {
-        drawSelectionHighlight(ctx, strokes, st.selectedIds);
+        drawSelectionHighlight(ctx, strokes, st.selectedIds.filter(id => id !== shapeEditorIdRef.current));
       }
 
       if (selectionRectRef.current) drawSelectionRect(ctx, selectionRectRef.current);
@@ -499,6 +568,8 @@ const PdfCanvas: React.FC = () => {
       if (isDrawingRef.current && currentStrokeRef.current) {
         drawAnnotatedStroke(ctx, currentStrokeRef.current);
       }
+
+      if (eraserStrokeRef.current) drawAnnotatedStroke(ctx, eraserStrokeRef.current);
 
       // Transient laser-pointer strokes. While writing, all trails stay lit
       // (a new stroke re-lights earlier ones); when idle they fade together from
@@ -515,6 +586,7 @@ const PdfCanvas: React.FC = () => {
       ctx.restore();
     }
 
+    reportInkFrame({ liveMs: performance.now() - liveStart, zoom: cam.zoom, dpr, surface: 'pdf', bakeScale: targetBakeScale(inkTilesRef.current) });
     dirtyRef.current = false;
   }, []);
 
@@ -525,6 +597,48 @@ const PdfCanvas: React.FC = () => {
       if (dirtyRef.current) doRender();
     });
   }, [doRender]);
+
+  const shapeGesture = useInkShapeGesture({
+    scope: shapeScope, enabled: activeTool === 'pen' && brushType !== 'laser',
+    getScope: () => { const s = usePdfStore.getState(); return `${s.currentItemId ?? ''}/${s.currentPage}`; },
+    zoom: () => usePdfStore.getState().camera.zoom,
+    getStroke: () => currentStrokeRef.current,
+    setStroke: stroke => { currentStrokeRef.current = stroke; },
+    flush: flushInput, repaint: () => { dirtyRef.current = true; scheduleRender(); },
+  });
+  useEffect(() => {
+    const recent = shapeGesture.recent;
+    if (activeTool === 'pen' && recent && selectedIds.length === 0
+        && currentItems.some(o => o.id === recent.id && o.type === 'stroke' && o.geometry)) usePdfStore.getState().setSelectedIds([recent.id]);
+  }, [currentItems, selectedIds, activeTool, shapeGesture.recent]);
+  useEffect(() => {
+    dirtyRef.current = true;
+    scheduleRender();
+  }, [selectedIds, scheduleRender]);
+  const previewShapeEdit = (next: PdfStroke, original: PdfStroke) => {
+    const tiles = inkTilesRef.current, index = getInkStrokeIndex(tiles);
+    if (!shapeEditPreviewRef.current) {
+      const ids = new Set([original.id]);
+      removeStrokesFromInk(tiles, index.grid, ids, [original], index.bounds);
+      index.remove(ids); backendRef.current?.suppress(ids); displayLayersRef.current.invalidate();
+    }
+    shapeEditPreviewRef.current = next;
+    for (const s of [original, next]) for (const key of strokeTileKeys(s)) gestureTilesRef.current.add(key);
+    dirtyRef.current = true; scheduleRender();
+  };
+  const finishShapeEdit = (next: PdfStroke, original: PdfStroke, recordHistory: boolean) => {
+    const st = usePdfStore.getState();
+    if (`${st.currentItemId ?? ''}/${st.currentPage}` !== shapeScope || !(st.items[currentPage] ?? []).includes(original)) {
+      shapeEditPreviewRef.current = null; gestureTilesRef.current.clear(); return;
+    }
+    previewShapeEdit(next, original);
+    st.replaceStroke(currentPage, next, recordHistory);
+    const actual = (usePdfStore.getState().items[currentPage] ?? []).find((o): o is PdfStroke => o.type === 'stroke' && o.id === next.id)!;
+    getInkStrokeIndex(inkTilesRef.current).add(actual);
+    backendRef.current?.retain(actual, strokesOnly(usePdfStore.getState().items[currentPage] ?? []));
+    shapeEditPreviewRef.current = null; gestureTilesRef.current.clear();
+    dirtyRef.current = true; scheduleRender();
+  };
 
   // Laser fade loop: advance frames while any segment is still visible, then stop.
   const tickLaser = useCallback(() => {
@@ -551,39 +665,50 @@ const PdfCanvas: React.FC = () => {
 
   // ---- Rebuild ink tiles from vector source of truth --------------------------
 
-  /** True while a pointer gesture owns the tiles (see the canvas's twin). */
+  /** True while a pointer gesture owns the tiles (see the canvas's twin). A
+   *  marquee is gated too — nothing needs the tiles mid-drag, and the pending
+   *  materialize/re-bake chain would steal frames from it. */
   const inkGestureActive = useCallback(() => (
+    shapeEditPreviewRef.current !== null ||
     currentStrokeRef.current !== null || eraserStrokeRef.current !== null
-    || strokeEraseRef.current !== null || selectDragRef.current !== null || isDrawingRef.current
+    || strokeEraseRef.current !== null || selectDragRef.current !== null
+    || selectAnchorRef.current !== null || isDrawingRef.current
   ), []);
 
   /** Bring the tiles the camera is looking at up to date; one budgeted pass per
    *  call. Returns how many still need work, so the caller can continue on the
    *  next frame instead of blocking this one. */
   const materializePage = useCallback((): number => {
+    if (backgroundPausedRef.current) return 0;
     const container = containerRef.current;
-    if (!container || inkGestureActive()) return 0;
-    const st = usePdfStore.getState();
-    if (!st.pageSizes[st.currentPage]) return 0;
-    const rect = container.getBoundingClientRect();
-    const res = materializeTiles(
-      inkTilesRef.current,
-      { x: st.camera.x, y: st.camera.y, zoom: st.camera.zoom },
-      rect.width, rect.height, dprRef.current,
-      { fixedScale: SCALE, rebake: cameraSettled() },
-    );
-    if (res.materialized > 0) dirtyRef.current = true;
-    return res.remaining;
-  }, [inkGestureActive]);
+    if (!container) return 0;
+    const state = usePdfStore.getState();
+    if (!state.pageSizes[state.currentPage]) return 0;
+    if (backendPageRef.current !== state.currentPage) { backendRef.current?.dispose(); backendRef.current = null; backendPageRef.current = state.currentPage; }
+    const rect = boundsRef.current ?? container.getBoundingClientRect();
+    if (!backendRef.current) backendRef.current = new InkRenderBackend({ surface: 'pdf', tiles: () => inkTilesRef.current,
+        displayBytes: () => [canvasRef.current, backgroundLayerRef.current, committedLayerRef.current].reduce((bytes, canvas) => bytes + (canvas ? canvas.width * canvas.height * 4 : 0), 0), fixedScale: SCALE,
+      protectedKeys: () => {
+        const keys = new Set(gestureTilesRef.current);
+        if (selectDragRef.current) for (const stroke of selectDragRef.current.strokes) for (const key of strokeTileKeys(stroke)) keys.add(key);
+        const wipe = strokeEraseRef.current;
+        if (wipe) for (const id of wipe.pendingIds) {
+          const b = wipe.bounds.get(id); if (b) protectInkSegment(keys, b.minX, b.minY, { x: b.maxX, y: b.maxY }, 0);
+        }
+        return keys;
+      },
+      publish: keys => { displayLayersRef.current.invalidate(keys); dirtyRef.current = true; scheduleRender(); },
+    });
+    backendRef.current.sync(strokesOnly(state.items[state.currentPage] ?? []));
+    return backendRef.current.requestViewport(state.camera, rect.width, rect.height, dprRef.current, cameraSettled());
+  }, [scheduleRender]);
 
   const scheduleMaterialize = useCallback(() => {
     if (materializeRafRef.current) return;
     const step = () => {
       materializeRafRef.current = 0;
       if (materializePage() > 0) materializeRafRef.current = requestAnimationFrame(step);
-      dirtyRef.current = true;
-      if (rafRef.current) { cancelAnimationFrame(rafRef.current); rafRef.current = 0; }
-      doRender();
+      if (dirtyRef.current) scheduleRender();
     };
     materializeRafRef.current = requestAnimationFrame(step);
   }, [materializePage, doRender]);
@@ -602,18 +727,67 @@ const PdfCanvas: React.FC = () => {
    */
   const rebuildInk = useCallback(() => {
     const st = usePdfStore.getState();
-    const strokes = strokesOnly(st.items[st.currentPage] ?? []);
-    const tiles = new Map<string, HTMLCanvasElement>();
-    indexInkStrokes(tiles, strokes);
-    const previous = inkTilesRef.current;
-    inkTilesRef.current = tiles;
-    // Free the replaced tiles' pixels now rather than leaving a dense page's
-    // ~1 GiB of surfaces for the GC while the new ones are allocated.
-    disposeTiles(previous);
+    const page = st.currentPage;
+    const strokes = strokesOnly(st.items[page] ?? []);
+    const layer = inkTilesRef.current;
+    const prev = prevPageInkRef.current;
+
+    // Small change? Repair the EXISTING tiles instead of rebuilding them. The
+    // history snapshots share stroke references, so an undo differs from the
+    // current page by just the last gesture's strokes — repairing their
+    // rectangles leaves every other tile untouched, where a rebuild re-rendered
+    // the whole visible page (undo flashed like a page load). The baseline is
+    // taken here rather than from a store subscription because this is the ONLY
+    // function that syncs the layer; a page change (asynchronous) makes the whole
+    // list differ, which is exactly when the rebuild below is the right answer.
+    let incremental = false;
+    if (prev && prev.page === page) {
+      const prevById = new Map<string, PdfStroke>();
+      for (const s of prev.strokes) prevById.set(s.id, s);
+      const nowById = new Map<string, PdfStroke>();
+      for (const s of strokes) nowById.set(s.id, s);
+      const added: PdfStroke[] = [], removed: PdfStroke[] = [];
+      for (const [id, s] of nowById) {
+        const p = prevById.get(id);
+        if (!p) added.push(s);
+        else if (p !== s) { removed.push(p); added.push(s); } // same id, points replaced
+      }
+      for (const [id, s] of prevById) if (!nowById.has(id)) removed.push(s);
+      if (added.length + removed.length <= 64) {
+        incremental = true;
+        prevPageInkRef.current = { page, strokes };
+        if (added.length + removed.length > 0) {
+          const index = getInkStrokeIndex(layer);
+          abandonBuilds(layer);
+          const removedIds = new Set(removed.map((s) => s.id));
+          if (removed.length > 0) removeStrokesFromInk(layer, index.grid, removedIds, removed, index.bounds);
+          index.remove(removedIds);
+          // See the canvas's twin: only stamp what the layer does not already
+          // hold, or a translucent stroke composites twice and darkens.
+          for (const s of added) if (!index.has(s.id)) index.add(s);
+          backendRef.current?.sync(strokes);
+        }
+      }
+    }
+
+    if (!incremental) {
+      const tiles = new Map<string, HTMLCanvasElement>();
+      indexInkStrokes(tiles, strokes);
+      inkTilesRef.current = tiles;
+      if (import.meta.env.DEV) recordInkTrace(tiles, 'layer-rebuild', { surface: 'pdf', layer: inkTraceId(tiles),
+        previousLayer: inkTraceId(layer), strokeCount: strokes.length, page });
+      // Free the replaced tiles' pixels now rather than leaving a dense page's
+      // ~1 GiB of surfaces for the GC while the new ones are allocated.
+      disposeTiles(layer);
+      prevPageInkRef.current = { page, strokes };
+    }
     // A gesture captured the OLD layer's index/grid/bounds; its repairs would now
     // write into disposed canvases, which silently becomes a no-op. Drop it.
     strokeEraseRef.current = null;
+    clearObjectDragPreview(selectDragRef.current?.objects);
     selectDragRef.current = null;
+    cancelSelectionCapture(selectionCaptureRef, pointerOwnerRef);
+    displayLayersRef.current.invalidate();
     scheduleMaterialize();
   }, [scheduleMaterialize]);
 
@@ -760,7 +934,7 @@ const PdfCanvas: React.FC = () => {
   // ---- Helpers ----------------------------------------------------------------
 
   const getCanvasPos = useCallback((e: React.PointerEvent) => {
-    const rect = canvasRef.current?.getBoundingClientRect();
+    const rect = boundsRef.current ?? canvasRef.current?.getBoundingClientRect();
     return rect ? { sx: e.clientX - rect.left, sy: e.clientY - rect.top } : { sx: 0, sy: 0 };
   }, []);
 
@@ -772,7 +946,7 @@ const PdfCanvas: React.FC = () => {
     if (!el || !canvas) return;
     const st = usePdfStore.getState();
     const size = st.pageSizes[st.currentPage];
-    const rect = canvas.getBoundingClientRect();
+    const rect = boundsRef.current ?? canvas.getBoundingClientRect();
     const world = screenToWorld(clientX - rect.left, clientY - rect.top, st.camera);
     const insidePage =
       !!size &&
@@ -815,6 +989,8 @@ const PdfCanvas: React.FC = () => {
     const wipe = strokeEraseRef.current;
     if (!wipe) return;
     for (const t of targets) wipe.pendingIds.add(t.id);
+    backendRef.current?.suppress(targets.map(t => t.id));
+    displayLayersRef.current.invalidate();
     const tRestamp = performance.now();
     removeStrokesFromInk(inkTilesRef.current, wipe.grid, wipe.pendingIds, targets, wipe.bounds);
     addEraserRestamp(wipe.perf, targets.length, performance.now() - tRestamp);
@@ -898,7 +1074,9 @@ const PdfCanvas: React.FC = () => {
 
   // ---- Pointer Down -----------------------------------------------------------
 
-  const handlePointerDown = useCallback((e: React.PointerEvent<HTMLCanvasElement>) => {
+  const handlePointerDown = useCallback((e: React.PointerEvent<HTMLCanvasElement>, preferredId?: string, captureTarget?: Element) => {
+    if (pointerOwnerRef.current !== null && pointerOwnerRef.current !== e.pointerId) return;
+    pointerOwnerRef.current = e.pointerId; gestureTilesRef.current.clear(); inputQueueRef.current.clear(); lastQueuedRef.current = undefined;
     const canvas = canvasRef.current;
     if (!canvas) return;
     const st = usePdfStore.getState();
@@ -914,6 +1092,8 @@ const PdfCanvas: React.FC = () => {
     }
     if (e.button !== 0) return;
     if (!st.pdfDoc || !st.pageSizes[st.currentPage]) return;
+    shapeGesture.dismiss();
+    if (st.activeTool === 'pen') st.clearSelection();
 
     const world = screenToWorld(sx, sy, st.camera);
 
@@ -940,26 +1120,31 @@ const PdfCanvas: React.FC = () => {
 
     // Selection tool
     if (st.activeTool === 'select') {
-      canvas.setPointerCapture(e.pointerId);
-      const strokes = strokesOnly(st.items[st.currentPage] ?? []);
-      const hit = [...strokes].reverse().find((o) => hitTestStroke(o, world.x, world.y));
+      beginSelectionCapture(selectionCaptureRef, captureTarget ?? canvas, e.pointerId, canvas);
+      const operation = selectionOperation(e);
+      selectionOperationRef.current = { operation, base: st.selectedIds.slice() };
+      const items = st.items[st.currentPage] ?? [], strokes = strokesOnly(items);
+      const hit = hitSelectable(items, world.x, world.y, preferredId);
 
       if (hit) {
+        if (operation !== 'replace') {
+          st.setSelectedIds(combineSelection(st.selectedIds, [hit.id], operation));
+          return;
+        }
         // Press on a stroke → select (or keep the group) and begin drag-move.
         const alreadySelected = st.selectedIds.includes(hit.id);
         const ids = alreadySelected ? st.selectedIds : [hit.id];
         if (!alreadySelected) st.setSelectedIds(ids);
 
-        // Snapshot the selected strokes' points (absolute), record history once.
+        // Keep original ink for the raster preview; commit the mixed group once on drop.
         const idSet = new Set(ids);
-        const snapshots = new Map<string, PdfPoint[]>();
         const dragged: PdfStroke[] = [];
         for (const s of strokes) {
-          if (idSet.has(s.id)) { snapshots.set(s.id, s.points.map((p) => ({ ...p }))); dragged.push(s); }
+          if (idSet.has(s.id)) dragged.push(s);
         }
-        st.pushHistory(st.currentPage);
         selectDragRef.current = {
-          start: world, ids, snapshots, strokes: dragged,
+          start: world, ids, strokes: dragged,
+          objects: createObjectDragPreview(items, ids, containerRef.current),
           preview: bakeDragPreview(dragged, SCALE),
           dx: 0, dy: 0,
         };
@@ -968,12 +1153,15 @@ const PdfCanvas: React.FC = () => {
         // is what made dragging on a dense page stall for seconds.
         const tiles = inkTilesRef.current;
         const index = getInkStrokeIndex(tiles);
+        traceInkStrokes('drag-start', tiles, dragged, { surface: 'pdf' });
         removeStrokesFromInk(tiles, index.grid, idSet, dragged, index.bounds);
         index.remove(idSet);
+    backendRef.current?.suppress(idSet);
+    displayLayersRef.current.invalidate();
         dirtyRef.current = true;
         scheduleRender();
       } else if (st.selectionMode === 'click') {
-        st.clearSelection();
+        if (operation === 'replace') st.clearSelection();
       } else {
         // Box select
         selectAnchorRef.current = { x: world.x, y: world.y };
@@ -1042,10 +1230,14 @@ const PdfCanvas: React.FC = () => {
     addRawPoint(stroke, world.x, world.y, getPressure(e), e.timeStamp);
     if (isEraser) {
       eraserStrokeRef.current = stroke;
+      protectInkSegment(gestureTilesRef.current, world.x, world.y, undefined, stroke.size / 2 + 8);
       // Erase the initial dot immediately for instant feedback.
       eraseDotTiles(inkTilesRef.current, world.x, world.y, stroke.size);
+      displayLayersRef.current.invalidate();
     } else {
       currentStrokeRef.current = stroke;
+      shapeGesture.begin({ x: e.clientX, y: e.clientY }, e.pointerType);
+    protectInkSegment(gestureTilesRef.current, world.x, world.y, undefined, stroke.size / 2 + 8);
     }
     dirtyRef.current = true;
     scheduleRender();
@@ -1054,18 +1246,22 @@ const PdfCanvas: React.FC = () => {
   // ---- Pointer Move -----------------------------------------------------------
 
   const handlePointerMove = useCallback((e: React.PointerEvent<HTMLCanvasElement>) => {
+    const inputStart = performance.now();
+    try {
+    if (pointerOwnerRef.current !== null && pointerOwnerRef.current !== e.pointerId) return;
     const canvas = canvasRef.current;
     if (!canvas) return;
     const { sx, sy } = getCanvasPos(e);
     const st = usePdfStore.getState();
+    lastPointerAtRef.current = performance.now();
     moveCursor(sx, sy);
     updateRingColor(e.clientX, e.clientY);
 
     if (panAnchorRef.current) {
-      st.setCamera({
+      pendingPanRef.current = {
         x: panAnchorRef.current.camX + e.clientX - panAnchorRef.current.sx,
         y: panAnchorRef.current.camY + e.clientY - panAnchorRef.current.sy,
-      });
+      };
       dirtyRef.current = true;
       scheduleRender();
       return;
@@ -1107,8 +1303,8 @@ const PdfCanvas: React.FC = () => {
     if (isDrawingRef.current && st.brushType === 'laser') {
       const seg = laserRef.current[laserRef.current.length - 1];
       if (seg) {
-        const rect = canvas.getBoundingClientRect();
-        const events: PointerEvent[] = (e.nativeEvent as any).getCoalescedEvents?.() || [e.nativeEvent];
+        const rect = boundsRef.current ?? canvas.getBoundingClientRect();
+        const events: PointerEvent[] = inkPointerSamples(e.nativeEvent);
         for (const ce of events) {
           const w = screenToWorld(ce.clientX - rect.left, ce.clientY - rect.top, st.camera);
           addRawPoint(seg as any, w.x, w.y, getPressure(ce), ce.timeStamp);
@@ -1126,17 +1322,13 @@ const PdfCanvas: React.FC = () => {
     // Free eraser — erase into tiles incrementally (destination-out)
     if (eraserStrokeRef.current) {
       const es = eraserStrokeRef.current;
-      const rect = canvas.getBoundingClientRect();
-      const events: PointerEvent[] = (e.nativeEvent as any).getCoalescedEvents?.() || [e.nativeEvent];
+      const rect = boundsRef.current ?? canvas.getBoundingClientRect();
+      const events: PointerEvent[] = inkPointerSamples(e.nativeEvent);
       for (const ce of events) {
         const w = screenToWorld(ce.clientX - rect.left, ce.clientY - rect.top, st.camera);
-        const last = es.points[es.points.length - 1];
-        if (last && Math.hypot(w.x - last.x, w.y - last.y) < 0.5) continue;
-        addRawPoint(es, w.x, w.y, 1, ce.timeStamp);
-        if (es.points.length >= 2) {
-          const a = es.points[es.points.length - 2];
-          eraseSegTiles(inkTilesRef.current, a.x, a.y, w.x, w.y, es.size);
-        }
+        protectInkSegment(gestureTilesRef.current, w.x, w.y, lastQueuedRef.current ?? es.points[es.points.length - 1], es.size / 2 + 8);
+        lastQueuedRef.current = w;
+        inputQueueRef.current.push({ x: w.x, y: w.y, pressure: 1, t: ce.timeStamp });
       }
       dirtyRef.current = true;
       scheduleRender();
@@ -1145,24 +1337,55 @@ const PdfCanvas: React.FC = () => {
 
     // Pen — collect coalesced raw points; the live stroke is drawn each frame
     if (currentStrokeRef.current) {
-      const rect = canvas.getBoundingClientRect();
+      const rect = boundsRef.current ?? canvas.getBoundingClientRect();
       const stroke = currentStrokeRef.current;
-      const events: PointerEvent[] = (e.nativeEvent as any).getCoalescedEvents?.() || [e.nativeEvent];
+      const events: PointerEvent[] = inkPointerSamples(e.nativeEvent);
+      const inputStart = performance.now();
       for (const ce of events) {
         const w = screenToWorld(ce.clientX - rect.left, ce.clientY - rect.top, st.camera);
-        addRawPoint(stroke, w.x, w.y, getPressure(ce), ce.timeStamp);
+        if (shapeGesture.move({ x: ce.clientX, y: ce.clientY }, w)) continue;
+        protectInkSegment(gestureTilesRef.current, w.x, w.y, lastQueuedRef.current ?? stroke.points[stroke.points.length - 1], stroke.size / 2 + 8);
+        lastQueuedRef.current = w;
+        inputQueueRef.current.push({ x: w.x, y: w.y, pressure: getPressure(ce), t: ce.timeStamp });
       }
+      reportInkFrame({ inputMs: performance.now() - inputStart });
       dirtyRef.current = true;
       scheduleRender();
     }
+    } finally { reportInkFrame({ inputMs: performance.now() - inputStart }); }
   }, [getCanvasPos, scheduleRender, updateRingColor]);
 
   // ---- Pointer Up -------------------------------------------------------------
 
   const handlePointerUp = useCallback((e: React.PointerEvent<HTMLCanvasElement>) => {
+    if (pointerOwnerRef.current === null || pointerOwnerRef.current !== e.pointerId) return;
+    shapeGesture.stop();
+    const selectionCapture = endSelectionCapture(selectionCaptureRef);
+    if (e.type === 'pointerup' && (selectDragRef.current || selectAnchorRef.current)) {
+      const { sx, sy } = getCanvasPos(e), cam = usePdfStore.getState().camera;
+      const at = screenToWorld(sx, sy, cam);
+      if (selectDragRef.current) { selectDragRef.current.dx = at.x - selectDragRef.current.start.x; selectDragRef.current.dy = at.y - selectDragRef.current.start.y; }
+      if (selectionRectRef.current) { selectionRectRef.current.x2 = at.x; selectionRectRef.current.y2 = at.y; }
+    }
+    flushPanCamera();
+    flushInput();
+    const tailStroke = currentStrokeRef.current ?? eraserStrokeRef.current;
+    if (e.type === 'pointerup' && tailStroke?.points.length) {
+      const rect = boundsRef.current ?? canvasRef.current?.getBoundingClientRect();
+      if (rect) {
+        const cam = usePdfStore.getState().camera;
+        const point = screenToWorld(e.clientX - rect.left, e.clientY - rect.top, cam);
+        const last = tailStroke.points[tailStroke.points.length - 1];
+        if (tailStroke.geometry) shapeGesture.move({ x: e.clientX, y: e.clientY }, point);
+        else if (point.x !== last.x || point.y !== last.y) {
+          inputQueueRef.current.push({ x: point.x, y: point.y, pressure: e.pressure > 0 ? e.pressure : last.pressure, t: e.timeStamp });
+          flushInput();
+        }
+      }
+    } pointerOwnerRef.current = null; gestureTilesRef.current.clear();
+    setTimeout(() => { materializePage(); scheduleMaterialize(); }, 0);
     const canvas = canvasRef.current;
-    if (!canvas) return;
-    canvas.releasePointerCapture?.(e.pointerId);
+    try { (selectionCapture ?? canvas)?.releasePointerCapture?.(e.pointerId); } catch { /* already lost */ }
 
     // End any whole-stroke-eraser wipe session. Flush any samples that arrived
     // since the last animation frame, then commit every visually-erased stroke
@@ -1192,11 +1415,9 @@ const PdfCanvas: React.FC = () => {
     if (selectAnchorRef.current && selectionRectRef.current) {
       const r = selectionRectRef.current;
       const st = usePdfStore.getState();
-      const strokes = strokesOnly(st.items[st.currentPage] ?? []);
-      const ids = strokes
-        .filter((o) => boundsIntersectRect(getStrokeBounds(o), r.x1, r.y1, r.x2, r.y2))
-        .map((o) => o.id);
-      st.setSelectedIds(ids);
+      const ids = boxSelectableIds(st.items[st.currentPage] ?? [], r, containerRef.current, st.camera);
+      const { operation, base } = selectionOperationRef.current;
+      st.setSelectedIds(combineSelection(base, ids, operation));
       selectAnchorRef.current = null;
       selectionRectRef.current = null;
       dirtyRef.current = true;
@@ -1210,19 +1431,21 @@ const PdfCanvas: React.FC = () => {
     if (selectDragRef.current) {
       const d = selectDragRef.current;
       selectDragRef.current = null;
+      clearObjectDragPreview(d.objects);
       const st = usePdfStore.getState();
-      const entries = d.ids
-        .map((id) => {
-          const snap = d.snapshots.get(id);
-          return snap ? { id, points: snap.map((p) => ({ ...p, x: p.x + d.dx, y: p.y + d.dy })) } : null;
-        })
-        .filter((x): x is { id: string; points: PdfPoint[] } => x !== null);
-      st.commitStrokesPoints(st.currentPage, entries);
+      if (!d.dx && !d.dy && d.strokes.length) st.commitStrokesPoints(st.currentPage, d.strokes.map(s => ({ id: s.id, points: s.points })));
+      else st.commitSelectionMove(st.currentPage, d.ids, d.dx, d.dy);
       const tiles = inkTilesRef.current;
-      const movedIds = new Set(d.snapshots.keys());
+      const movedIds = new Set(d.strokes.map(s => s.id));
       for (const o of usePdfStore.getState().items[st.currentPage] ?? []) {
-        if (o.type === 'stroke' && movedIds.has(o.id)) stampStroke(tiles, o);
+        if (o.type === 'stroke' && movedIds.has(o.id)) {
+          getInkStrokeIndex(tiles).add(o);
+          backendRef.current?.retain(o, strokesOnly(usePdfStore.getState().items[usePdfStore.getState().currentPage] ?? []));
+        }
       }
+      if (import.meta.env.DEV) traceInkStrokes('drag-end', tiles,
+        strokesOnly(usePdfStore.getState().items[st.currentPage] ?? []).filter(o => movedIds.has(o.id)),
+        { surface: 'pdf', dx: d.dx, dy: d.dy });
       dirtyRef.current = true;
       scheduleRender();
       return;
@@ -1251,6 +1474,8 @@ const PdfCanvas: React.FC = () => {
       if (es.points.length > 0) {
         getInkStrokeIndex(inkTilesRef.current).add(es);
         st.commitStroke(st.currentPage, es);
+        if (!backendRef.current) materializePage();
+        backendRef.current?.retain(es, strokesOnly(usePdfStore.getState().items[st.currentPage] ?? EMPTY_ITEMS));
       }
       isDrawingRef.current = false;
       dirtyRef.current = true;
@@ -1261,11 +1486,15 @@ const PdfCanvas: React.FC = () => {
     // Pen — stamp the finished stroke into tiles, then commit
     if (currentStrokeRef.current) {
       const stroke = currentStrokeRef.current;
+      shapeGesture.finish(stroke);
       currentStrokeRef.current = null;
       if (stroke.points.length > 0) {
         const st = usePdfStore.getState();
-        stampStroke(inkTilesRef.current, stroke);
+        getInkStrokeIndex(inkTilesRef.current).add(stroke);
         st.commitStroke(st.currentPage, stroke);
+        if (stroke.geometry) st.setSelectedIds([stroke.id]);
+        if (!backendRef.current) materializePage();
+        backendRef.current?.retain(stroke, strokesOnly(usePdfStore.getState().items[st.currentPage] ?? []));
       }
       isDrawingRef.current = false;
       dirtyRef.current = true;
@@ -1276,6 +1505,8 @@ const PdfCanvas: React.FC = () => {
     panAnchorRef.current = null;
   }, [scheduleRender]);
 
+  pointerUpRef.current = handlePointerUp;
+
   // ---- Wheel ------------------------------------------------------------------
 
   // Attached natively, NOT via React's `onWheel`: React registers wheel listeners
@@ -1284,12 +1515,14 @@ const PdfCanvas: React.FC = () => {
   // default action still runs, so ctrl+wheel would zoom the whole app window as
   // well as panning the page.
   useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
+    const container = containerRef.current;
+    if (!container) return;
     const onWheel = (e: WheelEvent) => {
+      if ((e.target as HTMLElement | null)?.closest?.('[data-lightbox], [data-ink-shape-panel]')) return;
       e.preventDefault();
+      flushPanCamera();
       const st = usePdfStore.getState();
-      const rect = canvas.getBoundingClientRect();
+      const rect = boundsRef.current ?? container.getBoundingClientRect();
       const sx = e.clientX - rect.left, sy = e.clientY - rect.top;
       if (e.ctrlKey) {
         st.setCamera({ x: st.camera.x - e.deltaX, y: st.camera.y - e.deltaY });
@@ -1297,12 +1530,19 @@ const PdfCanvas: React.FC = () => {
         const newZoom = clampZoom(st.camera.zoom * (1 - e.deltaY * 0.001));
         st.setCamera(zoomAt(st.camera, sx, sy, newZoom));
       }
+      // A trailing wheel event must not leave the active pan at its old origin.
+      if (panAnchorRef.current) {
+        const cam = usePdfStore.getState().camera;
+        panAnchorRef.current = { sx: e.clientX, sy: e.clientY, camX: cam.x, camY: cam.y };
+      }
       dirtyRef.current = true;
       scheduleRender();
     };
-    canvas.addEventListener('wheel', onWheel, { passive: false });
-    return () => canvas.removeEventListener('wheel', onWheel);
-  }, [scheduleRender]);
+    // Capture-phase on the container — see the canvas's twin: the DOM cards sit
+    // above the canvas and would otherwise swallow a wheel aimed at them.
+    container.addEventListener('wheel', onWheel, { passive: false, capture: true });
+    return () => container.removeEventListener('wheel', onWheel, { capture: true });
+  }, [scheduleRender, flushPanCamera]);
 
   // ---- Insert: pick image files, downscale + place page-scaled at the click -----
   const downscaleImage = useCallback(
@@ -1393,8 +1633,36 @@ const PdfCanvas: React.FC = () => {
     : brushType === 'laser' ? laserSize : brush.size) * camera.zoom;
   const editingTextNode = currentItems.find((o): o is PdfTextObjectData => o.type === 'text' && o.id === editingTextId);
 
+  useEffect(() => {
+    const flushGesture = () => {
+      const owner = pointerOwnerRef.current;
+      if (owner !== null) canvasRef.current?.dispatchEvent(new PointerEvent('pointercancel', { bubbles: true, pointerId: owner }));
+    };
+    const suspend = () => { backgroundPausedRef.current = true; if (materializeRafRef.current) cancelAnimationFrame(materializeRafRef.current); materializeRafRef.current = 0; backendRef.current?.dispose(); backendRef.current = null; };
+    const resume = () => { backgroundPausedRef.current = false; dirtyRef.current = true; scheduleRender(); scheduleMaterialize(); };
+    window.addEventListener('ink:flush-gesture', flushGesture);
+    window.addEventListener('ink:suspend-background', suspend);
+    window.addEventListener('ink:resume-background', resume);
+    return () => {
+      window.removeEventListener('ink:flush-gesture', flushGesture);
+      window.removeEventListener('ink:suspend-background', suspend);
+      window.removeEventListener('ink:resume-background', resume);
+    };
+  }, []);
+
+  const selectedShape = (activeTool === 'select' || shapeGesture.recent?.id === selectedIds[0]) && selectedIds.length === 1
+    ? currentItems.find((o): o is PdfStroke => o.type === 'stroke' && !!o.geometry && o.id === selectedIds[0]) : undefined;
+  shapeEditorIdRef.current = selectedShape?.id ?? null;
+  const selectionEvents = inkSelectionCaptureHandlers({ enabled: () => usePdfStore.getState().activeTool === 'select',
+    canvas: canvasRef, capture: selectionCaptureRef, owner: pointerOwnerRef, shapeId: shapeEditorIdRef,
+    down: handlePointerDown, move: handlePointerMove, up: handlePointerUp });
+
   return (
-    <div ref={containerRef} style={{ position: 'absolute', inset: 0, overflow: 'hidden', background: 'var(--page-bg)' }}>
+    <div ref={containerRef}
+      {...selectionEvents}
+      onGotPointerCaptureCapture={event => { const id = (event.target as HTMLElement).closest('[data-ink-object-id]')?.getAttribute('data-ink-object-id'); if (id) manipulatedIdsRef.current.add(id); }}
+      onLostPointerCaptureCapture={event => { const id = (event.target as HTMLElement).closest('[data-ink-object-id]')?.getAttribute('data-ink-object-id'); if (id) manipulatedIdsRef.current.delete(id); }}
+      style={{ isolation: 'isolate', position: 'absolute', inset: 0, overflow: 'hidden', background: 'var(--page-bg)' }}>
       <canvas
         ref={canvasRef}
         style={{ position: 'absolute', inset: 0, touchAction: 'none', userSelect: 'none', cursor: cursorStyle }}
@@ -1405,6 +1673,11 @@ const PdfCanvas: React.FC = () => {
         onLostPointerCapture={handlePointerUp}
         onPointerLeave={hideCursor}
       />
+      <canvas ref={backgroundLayerRef} aria-hidden="true" data-ink-layer="background" style={{ position: 'absolute', inset: 0, pointerEvents: 'none', zIndex: -2 }} />
+      <canvas ref={committedLayerRef} aria-hidden="true" data-ink-layer="committed" style={{ position: 'absolute', inset: 0, pointerEvents: 'none', zIndex: -1 }} />
+      {selectedShape && <InkShapeEditor key={shapeScope + selectedShape.id} stroke={selectedShape} camera={camera} uiScale={uiScale} container={containerRef}
+        original={shapeGesture.recent} onPreview={previewShapeEdit} onFinish={finishShapeEdit}
+        onDismiss={() => { shapeGesture.dismiss(); usePdfStore.getState().clearSelection(); }} />}
 
       {/* Insert tool: hidden image picker (opened on an insert-image click). */}
       <input
@@ -1419,6 +1692,8 @@ const PdfCanvas: React.FC = () => {
       {/* DOM overlays for inserted objects (text cards / images), above the canvas
           but gated to pointer-events none unless the tool makes them interactive. */}
       {currentItems.map((o) => {
+        if (o.type !== 'stroke' && !inkObjectVisible(o, camera, boundsRef.current?.width ?? window.innerWidth,
+          boundsRef.current?.height ?? window.innerHeight, [...usePdfStore.getState().selectedIds, ...manipulatedIdsRef.current, editingTextId ?? ''])) return null;
         if (o.type === 'text') {
           if (o.id === editingTextId) return null; // editor overlay handles it below
           return <PdfTextObject key={o.id} node={o} page={currentPage} camera={camera} interactive={textInteractive} />;

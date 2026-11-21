@@ -10,6 +10,7 @@ import { useCanvasStore } from './useCanvasStore';
 import { askConfirm } from '../ConfirmDialog';
 import { PDF_ANNOTATION_BLUE } from '../../themeColors';
 import type { ToolType } from './types';
+import { InkShapePreferences } from '../InkShapePreferences';
 
 // ---- SVG Icons ---------------------------------------------------------------
 
@@ -365,6 +366,10 @@ const Toolbar: React.FC = () => {
         />
       </div>
 
+      {activeTool === 'select' && <div style={{ fontSize: fs(10, gfs), color: 'var(--text-muted)', paddingBottom: 8 }}>
+        单击／框选 · Shift 加选 · Ctrl 减选
+      </div>}
+
       {/* ---- Color palette ---- */}
       <div style={sectionStyle}>
         <div style={labelStyle(gfs)}><span>颜色</span></div>
@@ -411,6 +416,7 @@ const Toolbar: React.FC = () => {
         <input type="range" min={1} max={100} value={Math.round(brushSettings.opacity * 100)} onChange={(e) => update({ opacity: Number(e.target.value) / 100 })} style={trackStyle} />
       </div>
 
+      {activeTool === 'pen' && brush !== 'laser' && <InkShapePreferences />}
       {/* ---- Smoothing (0–20%) ---- */}
       <div style={sectionStyle}>
         <div style={labelStyle(gfs)}><span>平滑</span><span>{Math.round(brushSettings.smoothing * 100)}%</span></div>

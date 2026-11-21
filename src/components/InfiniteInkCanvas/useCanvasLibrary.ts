@@ -2,15 +2,17 @@
  * useCanvasLibrary — persisted library of ink canvases (home screen).
  *
  * Mirrors PdfLibrary: a small metadata list in localStorage (id/name/timestamps)
- * while each canvas's strokes live under `stickynotes-inkcanvas-<id>` and its
- * view state (camera + dot grid) under `<id>-view` — see canvasViewKey.
+ * while canvas objects and view state use asynchronous IndexedDB transactions.
+ * Legacy per-canvas localStorage keys remain available as migration backups.
  *
  * Migration: the pre-multi-canvas build stored a single document at the legacy
  * `stickynotes-inkcanvas` key. On first load, if that key exists and the list is
- * empty, it becomes "未命名1" and the legacy key is removed.
+ * empty, it becomes "未命名1"; the original key is retained as a recovery copy.
  */
 
 import { create } from 'zustand';
+import { useCanvasStore } from './useCanvasStore';
+import { canvasRepository } from './CanvasRepository';
 import type { CanvasCategory, CanvasMeta } from './types';
 import { CANVAS_LIST_KEY, canvasDataKey, canvasViewKey, STORAGE_KEY } from './constants';
 
@@ -23,10 +25,10 @@ export interface CanvasLibraryStore {
 
   loadLibrary: () => void;
   saveState: () => void;
-  /** Create a new untitled canvas, seed empty data, and open it. */
+  /** Create metadata for an untitled canvas; CanvasView awaits its asynchronous open. */
   addCanvas: () => string;
   renameCanvas: (id: string, name: string) => void;
-  deleteCanvas: (id: string) => void;
+  deleteCanvas: (id: string) => Promise<void>;
   setCanvasCategory: (id: string, categoryId: string | null) => void;
   addCategory: (name: string) => string;
   renameCategory: (id: string, name: string) => void;
@@ -71,12 +73,13 @@ export const useCanvasLibrary = create<CanvasLibraryStore>((set, get) => ({
           list = parsed; // legacy list-only shape
         }
       }
-      if (legacy && list.length === 0) {
+      if (legacy && list.length === 0 && !localStorage.getItem('stickynotes-inkcanvas-library-migrated')) {
         const id = makeId();
         localStorage.setItem(canvasDataKey(id), legacy);
-        localStorage.removeItem(STORAGE_KEY);
+        // Retain the original single-document key as a read-only recovery copy.
         list = [{ id, name: '未命名1', categoryId: null, createdAt: Date.now(), updatedAt: Date.now() }];
         localStorage.setItem(CANVAS_LIST_KEY, JSON.stringify({ canvases: list, categories }));
+        localStorage.setItem('stickynotes-inkcanvas-library-migrated', id);
       }
       set({ canvases: list, categories, loaded: true });
     } catch {
@@ -99,7 +102,7 @@ export const useCanvasLibrary = create<CanvasLibraryStore>((set, get) => ({
         JSON.stringify({ objects: [], camera: { x: 0, y: 0, zoom: 1 }, showDotGrid: true }),
       );
     } catch { /* ignore */ }
-    set((s) => ({ canvases: [meta, ...s.canvases], currentCanvasId: id }));
+    set((s) => ({ canvases: [meta, ...s.canvases] }));
     get().saveState();
     return id;
   },
@@ -109,7 +112,9 @@ export const useCanvasLibrary = create<CanvasLibraryStore>((set, get) => ({
       canvases: s.canvases.map((c) => (c.id === id ? { ...c, name, updatedAt: Date.now() } : c)),
     })),
 
-  deleteCanvas: (id) => {
+  deleteCanvas: async (id) => {
+    await canvasRepository.delete(id);
+    if (useCanvasStore.getState().currentCanvasId === id) useCanvasStore.setState({ currentCanvasId: null, loaded: false, objects: [], saveStatus: 'saved', saveError: null });
     try {
       localStorage.removeItem(canvasDataKey(id));
       localStorage.removeItem(canvasViewKey(id));

@@ -3,6 +3,10 @@ export {};
 declare global {
   interface Window {
     electronAPI?: {
+      onStorageFlush: (callback: (id: number) => void) => () => void;
+      onStorageResume: (callback: () => void) => () => void;
+      storageFlushed: (id: number, error?: string) => void;
+      getGpuStatus: () => Promise<Record<string, string> | null>;
       minimize: () => Promise<void>;
       maximize: () => Promise<boolean>;
       close: () => Promise<void>;

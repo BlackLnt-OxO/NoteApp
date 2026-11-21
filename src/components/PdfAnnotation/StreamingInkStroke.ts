@@ -1,3 +1,6 @@
+import { finishInkWork } from '../InkCooperativeWork';
+import { previewGeometry } from './InkPreviewGeometry';
+import { createInkCanvas } from '../InkCanvasSurface';
 import type { PdfPoint, PdfStroke } from './PdfTypes';
 import { smoothingToMinCutoff, type Bounds } from './PdfEngine';
 import { clamp01, markerStrokeAlpha, pressureToWidth, resolveFeatherWorld } from './InkMath';
@@ -70,6 +73,280 @@ function samplePoint(stroke: PdfStroke, raw: PdfPoint, prev: Sample | null, tip:
  * whose mark sequence is only defined incrementally, so pencil keeps the
  * incremental raster above.
  */
+// Pooled scratch canvases for the one-pass renderer's INTERMEDIATES. A dense
+// tile renders hundreds of strokes and each call used to allocate 2–3 canvases
+// plus contexts, which dominated a raster's fixed cost (measured ~0.9 ms/stroke
+// on a 135-stroke tile, nearly independent of bake scale — i.e. overhead, not
+// pixels). Checkout is EXCLUSIVE: a checked-out canvas is out of the pool until
+// returned, so two same-sized intermediates can never alias one canvas — the
+// coverage and blur steps of one call would otherwise be the same surface, and
+// the blur step would composite it onto itself. Only the canvas RETURNED to the
+// raster cache is ever fresh; pooled ones are reset to a pristine state on
+// checkout, because the renderer leaves transform/composite/filter/alpha dirty.
+const scratchPool = new Map<string, HTMLCanvasElement>();
+const SCRATCH_POOL_MAX = 32;
+function scratchCheckout(width: number, height: number): HTMLCanvasElement {
+  const key = `${width}:${height}`;
+  let c = scratchPool.get(key);
+  if (c) scratchPool.delete(key);
+  else {
+    c = createInkCanvas();
+    c.width = width; c.height = height;
+  }
+  const ctx = c.getContext('2d')!;
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.globalCompositeOperation = 'source-over';
+  ctx.globalAlpha = 1;
+  ctx.filter = 'none';
+  ctx.clearRect(0, 0, width, height);
+  return c;
+}
+export function scratchInkBytes(): number {
+  let bytes = 0; for (const canvas of scratchPool.values()) bytes += canvas.width * canvas.height * 4; return bytes;
+}
+export function clearInkScratch(): void { for (const canvas of scratchPool.values()) canvas.width = 0; scratchPool.clear(); }
+function scratchReturn(c: HTMLCanvasElement): void {
+  const key = c.width + ':' + c.height;
+  const size = c.width * c.height * 4;
+  if (scratchPool.has(key) || size > 16 * 1024 * 1024) { c.width = 0; return; }
+  while (scratchPool.size && (scratchPool.size >= SCRATCH_POOL_MAX || scratchInkBytes() + size > 16 * 1024 * 1024)) {
+    const oldest = scratchPool.keys().next().value!;
+    scratchPool.get(oldest)!.width = 0; scratchPool.delete(oldest);
+  }
+  scratchPool.set(key, c);
+}
+function freshCanvas(width: number, height: number): HTMLCanvasElement {
+  const c = createInkCanvas();
+  c.width = width; c.height = height;
+  return c;
+}
+function scratchCanvas(width: number, height: number): HTMLCanvasElement {
+  const key = `${width}:${height}`;
+  let c = scratchPool.get(key);
+  if (c) scratchPool.delete(key);
+  else {
+    c = createInkCanvas();
+    c.width = width; c.height = height;
+    if (scratchPool.size >= SCRATCH_POOL_MAX) {
+      const oldest = scratchPool.keys().next().value!; scratchPool.get(oldest)!.width = 0; scratchPool.delete(oldest);
+    }
+  }
+  scratchPool.set(key, c);
+  const ctx = c.getContext('2d')!;
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.globalCompositeOperation = 'source-over';
+  ctx.globalAlpha = 1;
+  ctx.filter = 'none';
+  ctx.clearRect(0, 0, width, height);
+  return c;
+}
+
+interface StrokeSamples { samples: Sample[]; pressureSum: number; widthSum: number; maxWidth: number }
+// Sampling a stroke depends only on the stroke, but renderStrokeOnce runs per
+// (stroke, tile) — a long stroke crossing several tiles was re-sampled whole for
+// each of them. Cache on stroke identity (strokes are replaced, never mutated).
+const sampleCache = new WeakMap<PdfStroke, StrokeSamples>();
+function strokeSamples(stroke: PdfStroke): StrokeSamples { return finishInkWork(strokeSamplesWork(stroke)); }
+
+function* strokeSamplesWork(stroke: PdfStroke): Generator<void, StrokeSamples, unknown> {
+    const cached = sampleCache.get(stroke);
+    if (cached)
+        return cached;
+    const pts = stroke.points;
+    const n = pts.length;
+    const samples: Sample[] = new Array(n);
+    let prev: Sample | null = null;
+    let pressureSum = 0, widthSum = 0, maxWidth = 0;
+    for (let i = 0; i < n; i++) {
+        yield;
+        const s = samplePoint(stroke, pts[i], prev, i === n - 1, false);
+        samples[i] = s;
+        if (i < n - 1) {
+            pressureSum += s.p;
+            widthSum += s.width;
+        }
+        if (s.width > maxWidth)
+            maxWidth = s.width;
+        prev = s;
+    }
+    const record = { samples, pressureSum, widthSum, maxWidth };
+    sampleCache.set(stroke, record);
+    return record;
+}
+
+export interface StrokeOnceBuild {
+  stroke: PdfStroke;
+  /** World rect the raster covers (padded past the tile edge by the feather's
+   *  3σ footprint — see InkRasterCache, which owns the crop maths). */
+  minX: number; minY: number; maxX: number; maxY: number;
+  width: number;
+  height: number;
+  coverage: HTMLCanvasElement;
+  cctx: CanvasRenderingContext2D;
+  pts: { x: number; y: number }[];
+  widths: number[];
+  /** Next sample of the run to draw; 0 = the seed disc is still pending. */
+  next: number;
+  count: number;
+  blurPx: number;
+  alpha: number;
+}
+
+/** Decide everything about a one-pass rasterization EXCEPT the segments:
+ *  sampling (cached per stroke), the reachable run, the crop canvas, the blur
+ *  radius and the whole-stroke alpha. Returns null when the stroke cannot reach
+ *  the rect — nothing to build. The returned build is resumable: its segments
+ *  are drawn by pumpStrokeOnceBuild, possibly across frames. */
+export function startStrokeOnceBuild(
+  stroke: PdfStroke,
+  scale: number,
+  minX: number,
+  minY: number,
+  maxX: number,
+  maxY: number,
+): StrokeOnceBuild | null { return finishInkWork(startStrokeOnceBuildWork(stroke, scale, minX, minY, maxX, maxY)); }
+
+export function* startStrokeOnceBuildWork(
+  stroke: PdfStroke,
+  scale: number,
+  minX: number,
+  minY: number,
+  maxX: number,
+  maxY: number,
+): Generator<void, StrokeOnceBuild | null, unknown> {
+    const n = stroke.points.length;
+    if (n === 0)
+        return null;
+    const { samples, pressureSum, widthSum, maxWidth } = (yield* strokeSamplesWork(stroke));
+    const reach = maxWidth / 2 + 2;
+    const near = (a: {
+        x: number;
+        y: number;
+    }, b: {
+        x: number;
+        y: number;
+    }) => Math.min(a.x, b.x) - reach <= maxX && Math.max(a.x, b.x) + reach >= minX &&
+        Math.min(a.y, b.y) - reach <= maxY && Math.max(a.y, b.y) + reach >= minY;
+    let lo = -1, hi = -1; // first / last SEGMENT index that can reach the rect
+    for (let i = 0; i + 1 < n; i++) {
+        yield;
+        if (!near(samples[i], samples[i + 1]))
+            continue;
+        if (lo === -1)
+            lo = i;
+        hi = i;
+    }
+    if (lo === -1) {
+        // No segment reaches the rect — a lone sample (a dot, or a run of coincident
+        // samples) still can.
+        for (let i = 0; i < samples.length; i++) {
+            yield;
+            const s = samples[i];
+            if (s.x >= minX - reach && s.x <= maxX + reach && s.y >= minY - reach && s.y <= maxY + reach) { hi = i; break; }
+        }
+        if (hi === -1)
+            return null;
+        lo = hi;
+    }
+    else {
+        // Draw one segment past the run: the LAST sample of a run is also the start
+        // of the next segment, and the incremental compositor paints that disc twice
+        // (once per segment it joins). Stopping at the run would leave that one disc
+        // a level lighter than the same ink drawn live.
+        hi = Math.min(n - 1, hi + 2);
+    }
+    const count = hi - lo + 1;
+    const pts = new Array<{
+        x: number;
+        y: number;
+    }>(count);
+    const widths = new Array<number>(count);
+    for (let i = 0; i < count; i++) {
+        yield;
+        const s = samples[lo + i];
+        pts[i] = { x: s.x, y: s.y };
+        widths[i] = s.width;
+    }
+    const width = Math.max(1, Math.round((maxX - minX) * scale));
+    const height = Math.max(1, Math.round((maxY - minY) * scale));
+    // Held by the build across passes — it cannot come from the scratch pool,
+    // which resets a canvas on every checkout.
+    const coverage = createInkCanvas();
+    coverage.width = width;
+    coverage.height = height;
+    const cctx = coverage.getContext('2d')!;
+    cctx.setTransform(scale, 0, 0, scale, -minX * scale, -minY * scale);
+    const avgWidth = (widthSum + samples[n - 1].width) / n;
+    const blurPx = Math.round(resolveFeatherWorld(stroke, [avgWidth]) * scale * 16) / 16;
+    const alpha = markerStrokeAlpha(stroke.opacity, (pressureSum + samples[n - 1].p) / n, stroke.pressureOpacity === true);
+    return { stroke, minX, minY, maxX, maxY, width, height, coverage, cctx, pts, widths, next: 0, count, blurPx, alpha };
+}
+
+/** Draw a build's next segments — at most `maxPoints` points' worth, seed disc
+ *  included. Each segment is an independent composite onto the same canvas in
+ *  the incremental compositor's exact order and multiplicity, so pausing between
+ *  them cannot change a single pixel. Returns whether the coverage is COMPLETE. */
+export function pumpStrokeOnceBuild(b: StrokeOnceBuild, maxPoints: number): { done: boolean; drawn: number } {
+  let drawn = 0;
+  if (b.next === 0) {
+    drawVariableRibbon(b.cctx, [b.pts[0], b.pts[0]], [b.widths[0], b.widths[0]],
+      '#000000', 1, 'source-over', 0, 0, false);
+    b.next = 1;
+    drawn++;
+  }
+  while (b.next < b.count && drawn < maxPoints) {
+    const i = b.next;
+    drawVariableRibbon(b.cctx, [b.pts[i - 1], b.pts[i]], [b.widths[i - 1], b.widths[i]],
+      '#000000', 1, 'source-over', 0, 0, false);
+    b.next++;
+    drawn++;
+  }
+  return { done: b.next >= b.count, drawn };
+}
+
+/** Composite the finished coverage: colour in, feather, whole-stroke alpha. This
+ *  is the only part of a raster that cannot be sliced — the blur is one operation
+ *  over the whole canvas — everything before it pauses freely between segments. */
+export function finishStrokeOnceBuild(b: StrokeOnceBuild): HTMLCanvasElement {
+  const cctx = b.cctx;
+  cctx.setTransform(1, 0, 0, 1, 0, 0);
+  cctx.globalCompositeOperation = 'source-in';
+  cctx.fillStyle = b.stroke.color;
+  cctx.fillRect(0, 0, b.width, b.height);
+
+  const blurred = b.alpha >= 1 ? freshCanvas(b.width, b.height) : scratchCheckout(b.width, b.height);
+  const bctx = blurred.getContext('2d')!;
+  // 1/64 px, not 1/16: a thin stroke's width-derived feather is ~0.04 world px,
+  // which is 0.12 px at a 3x bake but only 0.04 px at 1x. A coarse threshold
+  // would silently drop the feather from committed hairlines exactly when the
+  // tile is baked at the display's density.
+  if (b.blurPx >= 1 / 64) bctx.filter = `blur(${b.blurPx}px)`;
+  bctx.drawImage(b.coverage, 0, 0);
+  scratchReturn(b.coverage);
+  if (b.alpha >= 1) return blurred;
+
+  const out = freshCanvas(b.width, b.height);
+  out.width = b.width; out.height = b.height;
+  const octx = out.getContext('2d')!;
+  octx.globalAlpha = b.alpha;
+  octx.drawImage(blurred, 0, 0);
+  scratchReturn(blurred);
+  return out;
+}
+/** Coarse historical preview: one opaque union instead of one fill per sample.
+ * Geometry, pressure, feather and stroke alpha are retained; final quality uses
+ * the original incremental coverage multiplicity for pixel-exact handoff. */
+export function renderStrokePreview(stroke: PdfStroke, scale: number, minX: number, minY: number, maxX: number, maxY: number): HTMLCanvasElement | null {
+  const build = startStrokeOnceBuild(stroke, scale, minX, minY, maxX, maxY);
+  if (!build) return null;
+  const geometry = previewGeometry(build.pts, build.widths, scale);
+  drawVariableRibbon(build.cctx, geometry.points, geometry.widths, '#000', 1, 'source-over', 0, 0, false);
+  return finishStrokeOnceBuild(build);
+}
+
+/** The synchronous form: start, pump to the end, finish. The sliced path used by
+ *  the tile builder is this same code with pauses, so both produce the same
+ *  pixels by construction. */
 export function renderStrokeOnce(
   stroke: PdfStroke,
   scale: number,
@@ -78,129 +355,14 @@ export function renderStrokeOnce(
   maxX: number,
   maxY: number,
 ): HTMLCanvasElement | null {
-  const pts = stroke.points;
-  const n = pts.length;
-  if (n === 0) return null;
-
-  const samples: Sample[] = new Array(n);
-  let prev: Sample | null = null;
-  let pressureSum = 0, widthSum = 0, maxWidth = 0;
-  for (let i = 0; i < n; i++) {
-    const s = samplePoint(stroke, pts[i], prev, i === n - 1, false);
-    samples[i] = s;
-    if (i < n - 1) { pressureSum += s.p; widthSum += s.width; }
-    if (s.width > maxWidth) maxWidth = s.width;
-    prev = s;
-  }
-
-  // Only the contiguous run of segments that can reach the rect contributes
-  // pixels there, and every quad/disc in that run is part of the same union — so
-  // drawing the run is pixel-identical to drawing the whole stroke (this is what
-  // keeps a long stroke cheap when it only crosses a corner of the raster).
-  //
-  // The run is chosen by SEGMENT, not by sample: a fast flick between two
-  // distant samples crosses the rect with BOTH endpoints far outside it, and a
-  // sample-based filter would find nothing and silently drop the ink.
-  const reach = maxWidth / 2 + 2;
-  const near = (a: { x: number; y: number }, b: { x: number; y: number }) =>
-    Math.min(a.x, b.x) - reach <= maxX && Math.max(a.x, b.x) + reach >= minX &&
-    Math.min(a.y, b.y) - reach <= maxY && Math.max(a.y, b.y) + reach >= minY;
-
-  let lo = -1, hi = -1; // first / last SEGMENT index that can reach the rect
-  for (let i = 0; i + 1 < n; i++) {
-    if (!near(samples[i], samples[i + 1])) continue;
-    if (lo === -1) lo = i;
-    hi = i;
-  }
-  if (lo === -1) {
-    // No segment reaches the rect — a lone sample (a dot, or a run of coincident
-    // samples) still can.
-    hi = samples.findIndex((s) => s.x >= minX - reach && s.x <= maxX + reach
-      && s.y >= minY - reach && s.y <= maxY + reach);
-    if (hi === -1) return null;
-    lo = hi;
-  } else {
-    // Draw one segment past the run: the LAST sample of a run is also the start
-    // of the next segment, and the incremental compositor paints that disc twice
-    // (once per segment it joins). Stopping at the run would leave that one disc
-    // a level lighter than the same ink drawn live.
-    hi = Math.min(n - 1, hi + 2);
-  }
-
-  const count = hi - lo + 1;
-  const drawPts = new Array<{ x: number; y: number }>(count);
-  const drawWidths = new Array<number>(count);
-  for (let i = 0; i < count; i++) {
-    const s = samples[lo + i];
-    drawPts[i] = { x: s.x, y: s.y };
-    drawWidths[i] = s.width;
-  }
-
-  const width = Math.max(1, Math.round((maxX - minX) * scale));
-  const height = Math.max(1, Math.round((maxY - minY) * scale));
-
-  // 1. Opaque coverage, crisply (no feather yet). Drawn one segment at a time,
-  //    in the incremental compositor's exact order and multiplicity: a seed disc
-  //    on the first sample, then `quad(sample[i-1], sample[i])` with a disc on
-  //    each end. Drawing the whole union in one pass instead would compute
-  //    antialiasing once over the outline rather than accumulating it per
-  //    segment, shifting the round caps' edge pixels by a level or two — enough
-  //    for ink to visibly change the moment it is reloaded.
-  const coverage = document.createElement('canvas');
-  coverage.width = width; coverage.height = height;
-  const cctx = coverage.getContext('2d')!;
-  cctx.setTransform(scale, 0, 0, scale, -minX * scale, -minY * scale);
-  drawVariableRibbon(cctx, [drawPts[0], drawPts[0]], [drawWidths[0], drawWidths[0]],
-    '#000000', 1, 'source-over', 0, 0, false);
-  for (let i = 1; i < count; i++) {
-    drawVariableRibbon(cctx, [drawPts[i - 1], drawPts[i]], [drawWidths[i - 1], drawWidths[i]],
-      '#000000', 1, 'source-over', 0, 0, false);
-  }
-  // 2. Colour it in.
-  cctx.setTransform(1, 0, 0, 1, 0, 0);
-  cctx.globalCompositeOperation = 'source-in';
-  cctx.fillStyle = stroke.color;
-  cctx.fillRect(0, 0, width, height);
-
-  // 3. Feather, then 4. whole-stroke alpha. Both steps are separate composites
-  //    because that is what the incremental path does — it blurs each cell with
-  //    no alpha, then applies `globalAlpha` when compositing the cell in. Each
-  //    composite rounds to 8 bits, so folding the two together would shift edge
-  //    pixels by a level. Identity transform, so `blur(n px)` means n device px
-  //    whatever the engine does with filter lengths under a transform.
-  //
-  //    The radius is the stroke's WORLD feather converted with THIS raster's own
-  //    px-per-world factor — the raster's scale, never the live layer's. Using
-  //    the wrong one is invisible while the two are equal and gives a 3×-to-12×
-  //    too-large halo as soon as a tile is baked at another density.
-  const avgWidth = (widthSum + samples[n - 1].width) / n;
-  const blurPx = Math.round(resolveFeatherWorld(stroke, [avgWidth]) * scale * 16) / 16;
-  const alpha = markerStrokeAlpha(
-    stroke.opacity,
-    (pressureSum + samples[n - 1].p) / n,
-    stroke.pressureOpacity === true,
-  );
-  const blurred = document.createElement('canvas');
-  blurred.width = width; blurred.height = height;
-  const bctx = blurred.getContext('2d')!;
-  // 1/64 px, not 1/16: a thin stroke's width-derived feather is ~0.04 world px,
-  // which is 0.12 px at a 3x bake but only 0.04 px at 1x. A coarse threshold
-  // would silently drop the feather from committed hairlines exactly when the
-  // tile is baked at the display's density.
-  if (blurPx >= 1 / 64) bctx.filter = `blur(${blurPx}px)`;
-  bctx.drawImage(coverage, 0, 0);
-  if (alpha >= 1) return blurred;
-
-  const out = document.createElement('canvas');
-  out.width = width; out.height = height;
-  const octx = out.getContext('2d')!;
-  octx.globalAlpha = alpha;
-  octx.drawImage(blurred, 0, 0);
-  return out;
+  const b = startStrokeOnceBuild(stroke, scale, minX, minY, maxX, maxY);
+  if (!b) return null;
+  pumpStrokeOnceBuild(b, Infinity);
+  return finishStrokeOnceBuild(b);
 }
 interface Tile { x: number; y: number; mask: HTMLCanvasElement; image: HTMLCanvasElement; grain?: HTMLCanvasElement; dirty: boolean }
 const canvas = () => {
-  const c = document.createElement('canvas');
+  const c = createInkCanvas();
   c.width = c.height = PIXELS;
   // Small masks are updated and filtered every frame. Keep these scratch
   // surfaces on the CPU to avoid GPU filter initialization/readback stalls;
@@ -236,11 +398,10 @@ export class StreamingInkStroke {
 
   /** Account a newly allocated tile canvas against the live-cache budget. */
   private grew(): void {
-    accountLive(this.stroke);
-    trimLive(this.stroke);
+    if (!this.clipBounds) { accountLive(this.stroke); trimLive(this.stroke); }
   }
 
-  constructor(private readonly stroke: PdfStroke) {
+  constructor(private readonly stroke: PdfStroke, private readonly clipBounds?: Bounds) {
     this.grain = stroke.style === 'pencil' ? new StreamingPencilGrain(stroke) : null;
   }
 
@@ -265,6 +426,7 @@ export class StreamingInkStroke {
     const keys = new Set<string>();
     for (let ty = Math.floor((Math.min(a.y, b.y) - pad) / CELL); ty <= Math.floor((Math.max(a.y, b.y) + pad) / CELL); ty++) {
       for (let tx = Math.floor((Math.min(a.x, b.x) - pad) / CELL); tx <= Math.floor((Math.max(a.x, b.x) + pad) / CELL); tx++) {
+        if (!this.cellNeeded(tx, ty)) continue;
         const key = `${tx}:${ty}`;
         const tile = this.tile(tx, ty);
         tile.dirty = true;
@@ -280,6 +442,11 @@ export class StreamingInkStroke {
     // Each raw segment has bounded geometry (one quad + two caps). Inserting
     // hundreds of 1px discs along an already straight segment adds no detail.
     drawVariableRibbon(ctx, [a, b], [a.width, b.width], '#000000', 1, 'source-over', 0, 0, false);
+  }
+  private cellNeeded(tx: number, ty: number): boolean {
+    const bounds = this.clipBounds;
+    return !bounds || ((tx + 1) * CELL >= bounds.minX && tx * CELL <= bounds.maxX
+      && (ty + 1) * CELL >= bounds.minY && ty * CELL <= bounds.maxY);
   }
 
   private drawGrain(ctx: CanvasRenderingContext2D, tile: Tile, marks: PencilGrainMark[]): void {
@@ -299,6 +466,7 @@ export class StreamingInkStroke {
     for (const mark of marks) {
       for (let ty = Math.floor((Math.min(mark.a.y, mark.b.y) - pad) / CELL); ty <= Math.floor((Math.max(mark.a.y, mark.b.y) + pad) / CELL); ty++) {
         for (let tx = Math.floor((Math.min(mark.a.x, mark.b.x) - pad) / CELL); tx <= Math.floor((Math.max(mark.a.x, mark.b.x) + pad) / CELL); tx++) {
+          if (!this.cellNeeded(tx, ty)) continue;
           const key = `${tx}:${ty}`;
           this.tile(tx, ty).dirty = true;
           let list = buckets.get(key);
@@ -314,7 +482,7 @@ export class StreamingInkStroke {
     }
   }
 
-  update(): void {
+  update(maxPoints = Infinity, deferRefresh = false): void {
     const points = this.stroke.points;
     if (points.length === this.count) return;
     this.stats.lastUpdatePoints = 0;
@@ -324,7 +492,8 @@ export class StreamingInkStroke {
     for (const key of this.oldTipTiles) this.tiles.get(key)!.dirty = true;
     // The final raw sample is a replaceable tip, not part of the stable mask.
     // On the next event it goes through the filter before being baked once.
-    while (this.processed < Math.max(0, points.length - 1)) {
+    const limit = Math.min(Math.max(0, points.length - 1), this.processed + maxPoints);
+    while (this.processed < limit) {
       const next = this.sample(points[this.processed], false);
       this.visit(this.last ?? next, next, true);
       if (this.grain) this.visitGrain(this.grain.advance(this.last ?? next, next), true);
@@ -335,7 +504,8 @@ export class StreamingInkStroke {
       this.stats.processedPoints++;
       this.stats.lastUpdatePoints++;
     }
-    this.tip = points.length ? this.sample(points[points.length - 1], true) : null;
+    if (deferRefresh && this.processed < Math.max(0, points.length - 1)) { this.count = this.processed + 1; return; }
+    this.tip = points.length ? this.sample(points[this.processed], true) : null;
     this.oldTipTiles = this.tip ? this.visit(this.last ?? this.tip, this.tip, false) : new Set();
     if (this.grain && this.tip) this.visitGrain(this.grain.preview(this.last ?? this.tip, this.tip), false);
     this.stats.grainCandidates = this.grain?.stats.candidates ?? 0;
@@ -383,8 +553,10 @@ export class StreamingInkStroke {
       tile.dirty = false;
       this.stats.refreshedTiles++;
     }
-    this.count = points.length;
+    this.count = Math.min(points.length, this.processed + 1);
   }
+
+  get prepared(): boolean { return this.count === this.stroke.points.length; }
 
   draw(ctx: CanvasRenderingContext2D, dx = 0, dy = 0, bounds?: Bounds): void {
     this.update();
@@ -418,7 +590,7 @@ let liveBytes = 0;
  *  so that a raster-cache miss can be RE-COMPOSITED from them (~1ms) instead of
  *  re-processed from the raw point list (~70ms for a long stroke). Both caches
  *  are regenerable, so evicting here only trades memory for repair latency. */
-const LIVE_LIMIT = 96 * 1024 * 1024;
+const LIVE_LIMIT = (typeof document === 'undefined' ? 8 : 96) * 1024 * 1024;
 
 /** Re-account an entry after its stroke allocated more tiles. */
 function accountLive(stroke: PdfStroke): void {
@@ -468,6 +640,7 @@ export function releaseStreamingInk(stroke: PdfStroke): void {
 }
 /** Drop every retained entry (tests, or closing a document). */
 export function clearStreamingInk(): void {
+  clearInkScratch();
   for (const entry of live.values()) entry.value.dispose();
   live.clear();
   liveBytes = 0;

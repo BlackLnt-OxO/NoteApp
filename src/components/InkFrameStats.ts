@@ -33,6 +33,19 @@ export interface FrameWindow {
 }
 
 export interface InkFrameStats {
+  backend: 'worker' | 'fallback';
+  queuedTiles: number;
+  tileBuildMs: number;
+  tileWaitMs: number;
+  cacheHits: number;
+  workerBytes: number;
+  totalInkBytes: number;
+  inputMs: number;
+  liveMs: number;
+  inputP95Ms: number;
+  liveP95Ms: number;
+  longTasks: number;
+  longestTaskMs: number;
   /** Milliseconds the last frame spent drawing the ink layer (committed tiles +
    *  the live stroke), and the worst seen since the last reset. */
   drawMs: number;
@@ -40,6 +53,19 @@ export interface InkFrameStats {
   /** Worst ink draw time observed WHILE the camera was moving — the figure that
    *  matters for a pan or a zoom. */
   movingWorstDrawMs: number;
+  /** Milliseconds the last materialization pass spent rasterizing (budgeted,
+   *  but a single stroke raster can overshoot), and the worst since reset. */
+  matMs: number;
+  worstMatMs: number;
+  /** The canvas paint the ink metrics do NOT cover: clear + background + dot
+   *  grid. When frame intervals are bad but 墨迹绘制 is small, this row says
+   *  whether the rest of the canvas paint is the reason. */
+  paintMs: number;
+  /** Last persistence write: the document body and the small view state.
+   *  A dense body costs a join + a blocking storage hop — when frame intervals
+   *  spike ~a second after a gesture, this is where it shows. */
+  saveBodyMs: number;
+  saveViewMs: number;
   /** Tiles rasterized and held by the layer. */
   tileCount: number;
   /** How many of them the last frame actually drew. */
@@ -74,7 +100,11 @@ const WINDOW = 600;
 const MAX_PLAUSIBLE_FRAME_MS = 1000;
 
 const EMPTY: InkFrameStats = {
-  drawMs: 0, worstDrawMs: 0, movingWorstDrawMs: 0,
+  backend: 'fallback', queuedTiles: 0, tileBuildMs: 0, tileWaitMs: 0,
+  cacheHits: 0, workerBytes: 0, totalInkBytes: 0, inputMs: 0, liveMs: 0,
+  inputP95Ms: 0, liveP95Ms: 0, longTasks: 0, longestTaskMs: 0,
+  drawMs: 0, worstDrawMs: 0, movingWorstDrawMs: 0, matMs: 0, worstMatMs: 0,
+  paintMs: 0, saveBodyMs: 0, saveViewMs: 0,
   tileCount: 0, visibleTiles: 0, tileBytes: 0, bakeScale: 0,
   zoom: 1, dpr: 1, surface: 'canvas',
 };
@@ -84,6 +114,13 @@ let cameraMovedAt = -Infinity;
 let lastFrameAt = -Infinity;
 const movingFrames: number[] = [];
 const otherFrames: number[] = [];
+const inputTimes: number[] = [], liveTimes: number[] = [];
+if (typeof PerformanceObserver !== 'undefined' && PerformanceObserver.supportedEntryTypes?.includes('longtask')) {
+  const observer = new PerformanceObserver(list => {
+    for (const entry of list.getEntries()) { stats.longTasks++; stats.longestTaskMs = Math.max(stats.longestTaskMs, entry.duration); }
+  });
+  observer.observe({ type: 'longtask' });
+}
 
 function push(window: number[], value: number): void {
   window.push(value);
@@ -102,11 +139,15 @@ export function noteInkFrame(): void {
 }
 
 export function reportInkFrame(partial: Partial<InkFrameStats>): void {
-  stats = { ...stats, ...partial };
+  if (partial.inputMs !== undefined) push(inputTimes, partial.inputMs);
+  if (partial.liveMs !== undefined) push(liveTimes, partial.liveMs);
+  if (partial.cacheHits !== undefined) partial.cacheHits += stats.cacheHits;
+  Object.assign(stats, partial);
   if (stats.drawMs > stats.worstDrawMs) stats.worstDrawMs = stats.drawMs;
   if (cameraMoving() && stats.drawMs > stats.movingWorstDrawMs) {
     stats.movingWorstDrawMs = stats.drawMs;
   }
+  if (stats.matMs > stats.worstMatMs) stats.worstMatMs = stats.matMs;
 }
 
 /** Called on every camera change (pan / zoom), from the input path. */
@@ -150,6 +191,8 @@ export function readFrameWindows(): { moving: FrameWindow; other: FrameWindow } 
 }
 
 export function readInkFrame(): InkFrameStats {
+  stats.inputP95Ms = summarize(inputTimes).p95Ms;
+  stats.liveP95Ms = summarize(liveTimes).p95Ms;
   return stats;
 }
 
@@ -160,4 +203,5 @@ export function resetInkFrame(): void {
   lastFrameAt = -Infinity;
   movingFrames.length = 0;
   otherFrames.length = 0;
+  inputTimes.length = 0; liveTimes.length = 0;
 }

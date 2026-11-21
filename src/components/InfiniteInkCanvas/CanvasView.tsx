@@ -9,7 +9,7 @@
  * loads the target one; going home saves the current canvas first.
  */
 
-import React, { useEffect, useState, useCallback } from 'react';
+import React, { useEffect, useState, useCallback, useRef } from 'react';
 import { useNoteStore } from "../../store";
 import { fs } from "../../utils";
 import { useCanvasLibrary } from './useCanvasLibrary';
@@ -116,6 +116,13 @@ const FullscreenButton: React.FC = () => {
 // ---- CanvasView ----------------------------------------------------------------
 
 const CanvasView: React.FC = () => {
+  const navigation = useRef(0);
+  const navigationBusy = useRef(false);
+  const [navigationLoading, setNavigationLoading] = useState(false);
+  const [navigationError, setNavigationError] = useState<string | null>(null);
+  const saveStatus = useCanvasStore(s => s.saveStatus);
+  const saveError = useCanvasStore(s => s.saveError);
+  const storageWarning = useCanvasStore(s => s.storageWarning);
   const currentCanvasId = useCanvasLibrary((s) => s.currentCanvasId);
   const canvases = useCanvasLibrary((s) => s.canvases);
   const loadLibrary = useCanvasLibrary((s) => s.loadLibrary);
@@ -123,28 +130,55 @@ const CanvasView: React.FC = () => {
   const renameCanvas = useCanvasLibrary((s) => s.renameCanvas);
 
   useEffect(() => { loadLibrary(); }, [loadLibrary]);
-
-  const openCanvas = useCallback((id: string) => {
-    setCurrentCanvasId(id);
-    useCanvasStore.getState().switchCanvas(id);
-  }, [setCurrentCanvasId]);
-
-  const newCanvas = useCallback(() => {
-    const id = useCanvasLibrary.getState().addCanvas();
-    useCanvasStore.getState().switchCanvas(id);
+  useEffect(() => {
+    const blockKeys = (event: KeyboardEvent) => {
+      if (!navigationBusy.current) return;
+      event.preventDefault(); event.stopImmediatePropagation();
+    };
+    document.addEventListener('keydown', blockKeys, true);
+    return () => document.removeEventListener('keydown', blockKeys, true);
   }, []);
 
-  const goHome = useCallback(() => {
+  const openCanvas = useCallback(async (id: string) => {
+    if (navigationBusy.current) return;
+    navigationBusy.current = true; setNavigationLoading(true);
+    const ticket = ++navigation.current;
+    setNavigationError(null);
+    try {
+      await useCanvasStore.getState().switchCanvas(id);
+      if (ticket === navigation.current) setCurrentCanvasId(id);
+    } catch (error) { setNavigationError(error instanceof Error ? error.message : String(error)); }
+    finally { navigationBusy.current = false; setNavigationLoading(false); }
+  }, [setCurrentCanvasId]);
+  const newCanvas = useCallback(() => { void openCanvas(useCanvasLibrary.getState().addCanvas()); }, [openCanvas]);
+  const goHome = useCallback(async () => {
+    if (navigationBusy.current) return;
+    navigationBusy.current = true; setNavigationLoading(true);
+    window.dispatchEvent(new Event('ink:flush-gesture'));
+    ++navigation.current;
     const st = useCanvasStore.getState();
-    if (st.loaded && st.currentCanvasId) st.saveCanvasData();
-    setCurrentCanvasId(null);
-    useCanvasStore.setState({ currentCanvasId: null });
+    try {
+      while (st.loaded && st.currentCanvasId) {
+        if (!await useCanvasStore.getState().saveCanvasData()) return;
+        if (useCanvasStore.getState().saveStatus === 'saved') break;
+      }
+      setCurrentCanvasId(null);
+      useCanvasStore.setState({ currentCanvasId: null });
+    } finally {
+      navigationBusy.current = false; setNavigationLoading(false);
+    }
   }, [setCurrentCanvasId]);
 
   const current = canvases.find((c) => c.id === currentCanvasId);
 
   return (
     <div style={{ position: 'absolute', inset: 0, overflow: 'hidden', background: 'var(--page-bg)' }}>
+      {navigationLoading && <div role="status" aria-live="polite" style={{ position: 'absolute', inset: 0, zIndex: 150,
+        display: 'grid', placeItems: 'center', background: 'var(--glass-bg)', cursor: 'wait' }}>正在保存并打开画布…</div>}
+      {(navigationError || saveStatus === 'error' || storageWarning) && <div role="alert" style={{ position: 'absolute', top: 48, right: 12, zIndex: 130, background: 'var(--chrome-bg)', padding: 12 }}>
+        {navigationError || saveError || storageWarning || '画布保存失败'}
+        {saveStatus === 'error' && <button onClick={() => { setNavigationError(null); void useCanvasStore.getState().saveCanvasData(); }}>重试保存</button>}
+      </div>}
       <div key={currentCanvasId || 'home'} className="animate-fade-in" style={{ position: 'absolute', inset: 0 }}>
         {!currentCanvasId || !current ? (
           <CanvasHome onOpen={openCanvas} onNew={newCanvas} />

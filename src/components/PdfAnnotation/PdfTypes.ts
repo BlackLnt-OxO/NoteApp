@@ -14,6 +14,8 @@ export interface PdfPoint {
 }
 
 export interface PdfStroke {
+  /** Optional editable geometry, shared with the infinite canvas. */
+  geometry?: import('../InkShapeGeometry').InkShapeGeometry;
   id: string;
   type: 'stroke';
   points: PdfPoint[];

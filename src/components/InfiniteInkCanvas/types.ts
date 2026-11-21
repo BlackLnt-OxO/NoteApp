@@ -52,6 +52,8 @@ export interface StrokePoint {
 }
 
 export interface Stroke {
+  /** Optional editable geometry; absent on ordinary/legacy handwriting. */
+  geometry?: import('../InkShapeGeometry').InkShapeGeometry;
   id: string;
   type: 'stroke';
   points: StrokePoint[];

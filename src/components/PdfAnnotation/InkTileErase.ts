@@ -1,3 +1,4 @@
+import { reusableInkCanvas } from '../InkCanvasSurface';
 import { boundsIntersectRect, type Bounds } from './PdfEngine';
 import type { PdfStroke } from './PdfTypes';
 import { getCommittedStrokeBounds } from './InkStrokeIndex';
@@ -8,12 +9,8 @@ export { getCommittedStrokeBounds } from './InkStrokeIndex';
 // One reusable tile (about 9 MiB at 3x), shared by both editors. Render with the
 // original tile transform and no path clip: clipping vector paths at a dirty
 // rectangle can change their edge antialiasing. Copy only repaired pixels back.
-let repairCanvas: HTMLCanvasElement | undefined;
 function getRepairCanvas(width: number, height: number): HTMLCanvasElement {
-  if (!repairCanvas) repairCanvas = document.createElement('canvas');
-  if (repairCanvas.width !== width) repairCanvas.width = width;
-  if (repairCanvas.height !== height) repairCanvas.height = height;
-  return repairCanvas;
+  return reusableInkCanvas('tile-repair', width, height);
 }
 
 /** Repair only the removed ink's pixel rectangle within each affected tile.
@@ -70,7 +67,7 @@ export function eraseStrokeRegions(
     const target = canvas.getContext('2d');
     if (!target) continue;
     const survivors = (grid.get(key) ?? []).filter(s => !skipIds.has(s.id));
-    if (survivors.length === 0) { tiles.delete(key); continue; }
+    if (survivors.length === 0) { canvas.width = 0; tiles.delete(key); continue; }
     // The repair rectangle and every raster that goes back in are in THIS tile's
     // own pixel space. The `scale` argument is only the requested/default one —
     // tiles at another bake scale coexist, so read the tile's (see tileScaleOf).

@@ -1,3 +1,4 @@
+import { createInkCanvas } from '../InkCanvasSurface';
 /**
  * InkDragPreview — the raster of a drag-move selection, shared by both surfaces.
  *
@@ -52,7 +53,7 @@ export function bakeDragPreview(strokes: PdfStroke[], scale: number): DragPrevie
   const w = Math.ceil((maxX - minX) * scale), h = Math.ceil((maxY - minY) * scale);
   if (w <= 0 || h <= 0 || w * h > PREVIEW_MAX_PIXELS) return null;
 
-  const canvas = document.createElement('canvas');
+  const canvas = createInkCanvas();
   canvas.width = w; canvas.height = h;
   const ctx = canvas.getContext('2d')!;
   ctx.setTransform(scale, 0, 0, scale, -minX * scale, -minY * scale);

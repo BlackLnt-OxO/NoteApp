@@ -20,6 +20,7 @@ interface Props {
 
 const PdfImageObject: React.FC<Props> = ({ obj, page, camera, interactive }) => {
   const uiScale = useNoteStore((s) => s.uiScale);
+  const selected = usePdfStore((s) => s.selectedIds.includes(obj.id));
   const updateImageObject = usePdfStore((s) => s.updateImageObject);
   const deleteObject = usePdfStore((s) => s.deleteObject);
   const pushHistory = usePdfStore((s) => s.pushHistory);
@@ -87,7 +88,8 @@ const PdfImageObject: React.FC<Props> = ({ obj, page, camera, interactive }) => 
 
   return (
     <>
-      <div
+      <div data-ink-object-id={obj.id}
+        data-ink-selected={selected || undefined}
         onPointerDown={interactive ? onDragDown : undefined}
         onPointerMove={interactive ? onDragMove : undefined}
         onPointerUp={interactive ? onDragUp : undefined}
@@ -96,6 +98,8 @@ const PdfImageObject: React.FC<Props> = ({ obj, page, camera, interactive }) => 
         onMouseLeave={() => setHover(false)}
         style={{
           position: 'absolute',
+          outline: selected ? '1.5px dashed #6b5ce7' : undefined,
+          outlineOffset: 3,
           left: screenX,
           top: screenY,
           width: screenW,
@@ -134,6 +138,7 @@ const PdfImageObject: React.FC<Props> = ({ obj, page, camera, interactive }) => 
             </button>
             <div
               title="缩放"
+              data-ink-object-control=""
               onPointerDown={onResizeDown}
               onPointerMove={onResizeMove}
               onPointerUp={onResizeUp}

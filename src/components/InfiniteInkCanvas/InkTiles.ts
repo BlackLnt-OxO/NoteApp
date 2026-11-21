@@ -1,3 +1,4 @@
+import { createInkCanvas } from '../InkCanvasSurface';
 /**
  * InkTiles — sparse rasterized ink layer for the infinite canvas, ported from
  * PdfCanvas's tiled two-layer model.
@@ -15,6 +16,7 @@ import type { Camera, Stroke } from './types';
 import {
   stampCachedStroke, getStrokeRaster, drawStrokeRaster,
   registerTileScale, tileScaleOf, LEGACY_BAKE_SCALE,
+  requestStrokeRaster, pumpStrokeRasterBuilds, pendingRasterBuilds,
 } from '../PdfAnnotation/InkRasterCache';
 import { eraseStrokeRegions } from '../PdfAnnotation/InkTileErase';
 import { getInkStrokeIndex, type InkStrokeIndex } from '../PdfAnnotation/InkStrokeIndex';
@@ -88,6 +90,16 @@ export function setTargetBakeScale(
   tiles: Map<string, HTMLCanvasElement>,
   deviceScale: number,
 ): number {
+  // A layer's FIRST contact jumps straight to the display's step. The hysteresis
+  // bands are relative to the current step, and an unset layer reads as MAX — so
+  // hysteresis alone would pin a fresh document at deviceScale 1.25–3.45 to 3×
+  // forever: tiles 2.25× the pixels (and GPU upload) per completed tile than the
+  // display asks for, in exactly the zoom range the user actually works in.
+  if (!layerBakeScale.has(tiles)) {
+    const ideal = bakeStepAtLeast(deviceScale);
+    layerBakeScale.set(tiles, ideal);
+    return ideal;
+  }
   const next = bakeStepFor(deviceScale, targetBakeScale(tiles));
   layerBakeScale.set(tiles, next);
   return next;
@@ -149,7 +161,7 @@ export function eraseDotTiles(
   }
 }
 
-/** Draw all ink tiles that intersect the current viewport (camera already
+/** Draw viewport ink, optionally restricted to dirty keys (camera already
  *  applied). Returns how many it drew, for the perf readout. */
 export function drawVisibleTiles(
   ctx: CanvasRenderingContext2D,
@@ -158,6 +170,8 @@ export function drawVisibleTiles(
   vw: number,
   vh: number,
   dpr: number,
+  drawTile?: (ctx: CanvasRenderingContext2D, key: string, canvas: HTMLCanvasElement, x: number, y: number, w: number, h: number) => void,
+  keys?: ReadonlySet<string>,
 ): number {
   const tl = screenToWorld(0, 0, cam);
   const br = screenToWorld(vw, vh, cam);
@@ -183,7 +197,9 @@ export function drawVisibleTiles(
   let drawn = 0;
   for (let ty = ty0; ty <= ty1; ty++) {
     for (let tx = tx0; tx <= tx1; tx++) {
-      const c = tiles.get(tileKey(tx, ty));
+      const key = tileKey(tx, ty);
+      if (keys && !keys.has(key)) continue;
+      const c = tiles.get(key);
       if (!c) continue;
       drawn++;
       // Snap each tile's SHARED boundary once. A tile's lower-right corner is the
@@ -197,7 +213,8 @@ export function drawVisibleTiles(
       const y0 = Math.round(tl.y * dpr) / dpr;
       const x1 = Math.round(br.x * dpr) / dpr;
       const y1 = Math.round(br.y * dpr) / dpr;
-      ctx.drawImage(c, x0, y0, x1 - x0, y1 - y0);
+      if (drawTile) drawTile(ctx, key, c, x0, y0, x1 - x0, y1 - y0);
+      else ctx.drawImage(c, x0, y0, x1 - x0, y1 - y0);
     }
   }
 
@@ -262,9 +279,27 @@ export function indexInkStrokes(
 }
 
 export interface MaterializeOptions {
+  preview?: boolean;
+  /** Same-density tiles invalidated by source edits also need reconstruction. */
+  forceKeys?: ReadonlySet<string>;
+  /** Gesture-local protection; unrelated tiles may continue loading. */
+  protectedKeys?: ReadonlySet<string>;
   margin?: number;
   /** Rasterization time this pass may use (default MATERIALIZE_BUDGET_MS). */
   budgetMs?: number;
+  /** Hard cap on strokes rasterized in this pass.
+   *
+   *  The time budget alone cannot bound a frame: it is checked BETWEEN strokes,
+   *  and one stroke's raster (a fresh canvas, the ribbon, the blit) can cost
+   *  several ms by itself, so a dense tile overshoots by a whole stroke however
+   *  tight the budget is. That overshoot IS the stutter felt when panning fast,
+   *  so while the camera is moving the caller caps the count instead — a few
+   *  strokes a frame fills new ground in tens of frames, still far faster than
+   *  the eye needs, and every frame stays short. */
+  /** Points rasterized in this pass. The frame-cost proxy that actually holds:
+   *  a stroke's raster cost is ~linear in its points, and a stroke is indivisible,
+   *  so a points budget bounds the pass (plus at most one indivisible stroke). */
+  maxPoints?: number;
   /** Re-rasterize tiles that are already built, at the current bake scale.
    *
    *  The editor turns this OFF while the camera is moving. Crossing a bake step
@@ -317,6 +352,15 @@ function buildsFor(tiles: Map<string, HTMLCanvasElement>): Map<string, TileBuild
   return builds;
 }
 
+/** Drop every in-progress tile build of this layer. For callers about to mutate
+ *  the tiles OUTSIDE the materialize chain (structural repair): an in-flight
+ *  build captured the index buckets as they were, and completing it would
+ *  overwrite the repair. Builds restart lazily if their tile is still needed. */
+export function abandonBuilds(tiles: Map<string, HTMLCanvasElement>): void {
+  for (const build of buildsFor(tiles).values()) build.canvas.width = 0;
+  buildsFor(tiles).clear();
+}
+
 function startBuild(
   index: InkStrokeIndex,
   tx: number,
@@ -325,7 +369,7 @@ function startBuild(
 ): TileBuild | null {
   const strokes = index.grid.get(tileKey(tx, ty));
   if (!strokes || strokes.length === 0) return null;
-  const canvas = document.createElement('canvas');
+  const canvas = createInkCanvas();
   canvas.width = canvas.height = Math.max(1, Math.round(TILE * scale));
   const ctx = canvas.getContext('2d')!;
   ctx.setTransform(scale, 0, 0, scale, -tx * TILE * scale, -ty * TILE * scale);
@@ -334,15 +378,35 @@ function startBuild(
 
 /** Rasterize strokes of `build` until the deadline, leaving it resumable. The
  *  only unit that can be sliced is a stroke — the smallest thing a dense tile is
- *  made of — so the clock is checked between strokes (every few, to keep the
- *  check itself negligible). */
-function advanceBuild(build: TileBuild, deadline: number, skipIds?: Set<string>): void {
+ *  made of — so the clock is checked BEFORE each stroke: a stroke raster costs
+ *  far more than the check, and checking only after every 8th stroke let a dense
+ *  tile run up to 8 rasters past the deadline on every pass, which is felt as a
+ *  stutter on each frame of a fast pan. */
+function advanceBuild(build: TileBuild, deadline: number, skipIds: Set<string> | undefined, quota: { points: number }, drewThisPass: { n: number }, preview = false): void {
   while (build.next < build.strokes.length) {
-    const s = build.strokes[build.next++];
-    if (skipIds?.has(s.id)) continue;
-    drawStrokeRaster(build.ctx, s, getStrokeRaster(s, build.tx, build.ty, TILE, build.scale), build.scale);
+    const s = build.strokes[build.next];
+    // A stroke's raster cost is ~linear in its POINT count (every segment is
+    // drawn separately, for pixel fidelity), and the count is known BEFORE the
+    // work — so points, not milliseconds, are what bounds a frame. The first
+    // stroke of a pass is always taken (unless the quota is already spent — the
+    // pump shares it): otherwise a stroke costing more than the whole budget
+    // would stall its tile forever.
+    if (quota.points <= 0) break;
+    if (drewThisPass.n > 0 && s.points.length > quota.points) break;
+    if (performance.now() >= deadline) break;
+    if (skipIds?.has(s.id)) { build.next++; continue; }
+    // The raster may still be cooking: one monster stroke measured 46 ms whole,
+    // so long ones are sliced across passes (see InkRasterCache). The tile PAUSES
+    // here — drawing any later stroke first would break z-order, and drawing a
+    // half-cooked raster is impossible by construction (it is swapped into the
+    // cache only on completion).
+    const raster = requestStrokeRaster(s, build.tx, build.ty, TILE, build.scale, preview);
+    if (!raster) break;
+    build.next++;
+    drawStrokeRaster(build.ctx, s, raster, build.scale);
     build.drew = true;
-    if ((build.next & 7) === 0 && performance.now() >= deadline) break;
+    quota.points -= s.points.length;
+    drewThisPass.n++;
   }
 }
 
@@ -364,7 +428,7 @@ export function materializeTiles(
   vh: number,
   dpr: number,
   opts: MaterializeOptions = {},
-): { materialized: number; remaining: number; scale: number } {
+): { materialized: number; remaining: number; scale: number; completed: string[] } {
   const margin = opts.margin ?? MATERIALIZE_MARGIN;
   const rebake = opts.rebake ?? true;
   // The scale is tracked even when a re-bake is deferred: new tiles must be born
@@ -379,11 +443,18 @@ export function materializeTiles(
   const ty0 = Math.floor(tl.y / TILE) - margin, ty1 = Math.floor(br.y / TILE) + margin;
   const cx = (tl.x + br.x) / 2, cy = (tl.y + br.y) / 2;
   const inView = (tx: number, ty: number) => tx >= tx0 && tx <= tx1 && ty >= ty0 && ty <= ty1;
+  // The viewport WITHOUT the margin — the part of the layer the user can see.
+  const inViewport = (tx: number, ty: number) =>
+    tx >= Math.floor(tl.x / TILE) && tx <= Math.floor(br.x / TILE)
+    && ty >= Math.floor(tl.y / TILE) && ty <= Math.floor(br.y / TILE);
 
   // Abandon builds that became pointless — the density target moved, or the tile
   // scrolled away. They restart if either changes back.
   for (const [key, build] of [...builds]) {
-    if (build.scale !== scale || !inView(build.tx, build.ty)) builds.delete(key);
+    if (build.scale !== scale || !inView(build.tx, build.ty)) {
+      build.canvas.width = 0;
+      builds.delete(key);
+    }
   }
 
   // Work list: builds already part-rasterized first (they are part-paid for),
@@ -393,14 +464,20 @@ export function materializeTiles(
   for (let ty = ty0; ty <= ty1; ty++) {
     for (let tx = tx0; tx <= tx1; tx++) {
       const key = tileKey(tx, ty);
+      if (opts.protectedKeys?.has(key)) continue;
       if (builds.has(key)) continue;
       const strokes = index.grid.get(key);
       if (!strokes || strokes.length === 0) continue; // no ink here — nothing to build
       const existing = tiles.get(key);
       // A tile already at the right density is done; one at another density waits
       // for the view to settle (see `rebake`).
-      if (existing && tileScaleOf(existing) === scale) continue;
+      if (existing && tileScaleOf(existing) === scale && !opts.forceKeys?.has(key)) continue;
       if (existing && !rebake) continue;
+      // Re-bake only what is being LOOKED at. The margin exists so a short pan
+      // finds tiles already there — not so tiles the camera can't see churn
+      // every time the bake step moves. A margin tile at another density keeps
+      // rendering (slightly soft) and upgrades if it ever scrolls into view.
+      if (existing && !inViewport(tx, ty)) continue;
       // A tile whose every stroke is suppressed has nothing to draw; counting it
       // would leave the caller's chain spinning on it forever.
       if (opts.skipIds && strokes.every((s) => opts.skipIds!.has(s.id))) continue;
@@ -408,16 +485,30 @@ export function materializeTiles(
       work.push({ tx, ty, d: dx * dx + dy * dy });
     }
   }
-  if (work.length === 0) return { materialized: 0, remaining: 0, scale };
+  // A tile needing nothing can still have a raster cooking for a tile that is
+  // about to scroll in — keep the caller's chain alive while builds are out.
+  if (work.length === 0) return { materialized: 0, remaining: pendingRasterBuilds(), scale, completed: [] };
   work.sort((a, b) => a.d - b.d);
 
   const deadline = performance.now() + (opts.budgetMs ?? MATERIALIZE_BUDGET_MS);
+  const quota = { points: opts.maxPoints ?? Infinity };
+  const drewThisPass = { n: 0 };
+  // Cook the stroke rasters tiles are paused on FIRST — a paused tile cannot
+  // advance past an unbuilt stroke, so cooking is the bottleneck, and a monster
+  // stroke's raster only finishes if these slices get their share of the frames.
+  // But the pump draws from a SLICE of the quota, so tiles keep drawing strokes
+  // whose raster is already ready; an unlimited quota cooks at full width.
+  const pumpShare = { points: quota.points === Infinity ? Infinity : Math.ceil(quota.points / 3) };
+  pumpStrokeRasterBuilds(deadline, pumpShare);
+  quota.points -= pumpShare.points === Infinity ? 0 : Math.ceil((opts.maxPoints ?? Infinity) / 3) - pumpShare.points;
   let materialized = 0, unfinished = 0, visited = 0;
+  const completed: string[] = [];
   for (const w of work) {
     // Always advance at least one build; then stop as soon as the budget is gone.
-    if (visited > 0 && performance.now() >= deadline) break;
+    if (visited > 0 && (performance.now() >= deadline || quota.points <= 0)) break;
     visited++;
     const key = tileKey(w.tx, w.ty);
+    if (opts.protectedKeys?.has(key)) continue;
     let build = builds.get(key);
     if (!build) {
       const started = startBuild(index, w.tx, w.ty, scale);
@@ -425,7 +516,7 @@ export function materializeTiles(
       build = started;
       builds.set(key, build);
     }
-    advanceBuild(build, deadline, opts.skipIds);
+    advanceBuild(build, deadline, opts.skipIds, quota, drewThisPass, opts.preview);
     if (build.next < build.strokes.length) { unfinished++; continue; }
     builds.delete(key);
     if (build.drew) {
@@ -435,8 +526,18 @@ export function materializeTiles(
       if (previous) previous.width = 0;
     }
     materialized++;
+    completed.push(key);
   }
-  return { materialized, remaining: unfinished + (work.length - visited), scale };
+  return { materialized, remaining: unfinished + (work.length - visited) + pendingRasterBuilds(), scale, completed };
+}
+
+/** Cancel only builds touched by a source edit. Keep complete pixels as previews. */
+export function invalidateTileBuilds(tiles: Map<string, HTMLCanvasElement>, keys: ReadonlySet<string>): void {
+  const builds = buildsFor(tiles);
+  for (const key of keys) {
+    const build = builds.get(key);
+    if (build) { build.canvas.width = 0; builds.delete(key); }
+  }
 }
 
 /** Estimated bytes held by a tile layer's canvases. */
@@ -444,6 +545,11 @@ export function inkTileBytes(tiles: Map<string, HTMLCanvasElement>): number {
   let total = 0;
   for (const c of tiles.values()) total += c.width * c.height * 4;
   return total;
+}
+export function inkTileBuildBytes(tiles: Map<string, HTMLCanvasElement>): number {
+  let bytes = 0;
+  for (const build of buildsFor(tiles).values()) bytes += build.canvas.width * build.canvas.height * 4;
+  return bytes;
 }
 
 /** How many tiles a layer holds, for diagnostics. */
@@ -504,6 +610,7 @@ export function evictDistantTiles(
  * instance to a fresh `rebuildTiles` if it wants to.
  */
 export function disposeTiles(tiles: Map<string, HTMLCanvasElement>): void {
+  abandonBuilds(tiles);
   for (const c of tiles.values()) c.width = 0;
   tiles.clear();
 }
