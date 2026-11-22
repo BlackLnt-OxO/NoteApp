@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useNoteStore } from '../../store';
 import { rebindAsset, resolveAsset, showAssetPreview, useAssetLibrary } from './assetLibrary';
 import { fileKind, fileName, fileTypeLabel, isImageFile, type LinkedAssetObject } from './fileTypes';
+import { boxResizePreview, usePreviewGesture } from '../usePreviewGesture';
 import './fileLibrary.css';
 
 interface Props {
@@ -41,12 +42,13 @@ export default function AssetObject({ object, camera, interactive, selected, onD
   const online = useAssetLibrary(state => asset ? state.available[asset.id] : false);
   const image = useAssetImage(object.assetId, true);
   const [menu, setMenu] = useState(false);
-  const sizing = useRef<{ x: number; y: number; width: number; height: number } | null>(null);
+  const boxRef = useRef<HTMLDivElement>(null);
+  const previewResize = usePreviewGesture(interactive && selected);
   const path = asset?.path ?? '';
   const isImage = isImageFile(path);
   const offline = online === false;
 
-  return <div className="linked-asset-object" data-ink-object-id={object.id}
+  return <div ref={boxRef} className="linked-asset-object" data-ink-object-id={object.id}
     data-ink-selected={selected || undefined} data-offline={offline} data-image={isImage && !offline}
     data-tooltip={offline ? '文件离线' : fileName(path)}
     onDoubleClick={event => {
@@ -72,25 +74,20 @@ export default function AssetObject({ object, camera, interactive, selected, onD
     </div>}
     {interactive && selected && <button className="linked-asset-resize" data-tooltip="调整大小" aria-label="调整大小"
       onPointerDown={event => {
-        if (event.button !== 0) return;
-        event.stopPropagation();
-        event.currentTarget.setPointerCapture(event.pointerId);
-        sizing.current = { x: event.clientX, y: event.clientY, width: object.width, height: object.height };
-        startResize();
-      }}
-      onPointerMove={event => {
-        const start = sizing.current;
-        if (!start) return;
-        if (isImage) {
-          const ratio = Math.max(1 / start.width, 1 / start.height, 1 + (event.clientX - start.x) / camera.zoom / start.width);
-          resize(start.width * ratio, start.height * ratio);
-        } else {
-          resize(Math.max(54, start.width + (event.clientX - start.x) / camera.zoom),
-            Math.max(28, start.height + (event.clientY - start.y) / camera.zoom));
-        }
-      }}
-      onLostPointerCapture={() => { sizing.current = null; }}
-      onPointerUp={() => { sizing.current = null; }}
-      onPointerCancel={() => { sizing.current = null; }} />}
+        if (!boxRef.current) return;
+        const { width, height } = object;
+        const dimensions = (dx: number, dy: number) => {
+          if (isImage) {
+            const ratio = Math.max(1 / width, 1 / height, 1 + dx / camera.zoom / width);
+            return { width: width * ratio, height: height * ratio };
+          }
+          return { width: Math.max(54, width + dx / camera.zoom), height: Math.max(28, height + dy / camera.zoom) };
+        };
+        previewResize(event, boxResizePreview(boxRef.current, dimensions, camera.zoom / uiScale, (w, h) => {
+          if (w === width && h === height) return;
+          startResize();
+          resize(w, h);
+        }));
+      }} />}
   </div>;
 }

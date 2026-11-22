@@ -1,19 +1,17 @@
-import { useEffect, useRef, useState } from 'react';
+import { useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import WorkspaceModeSwitch from '../WorkspaceModeSwitch';
 import { rebindAsset, useAssetLibrary } from './assetLibrary';
 import { dispatchAssetDrop } from './assetDrop';
 import { fileKind, fileName, fileTypeLabel } from './fileTypes';
+import { usePreviewGesture } from '../usePreviewGesture';
 import './fileLibrary.css';
-
-interface Drag { id: string; path: string; pointer: number; x: number; y: number }
 
 export default function AssetSidebar() {
   const assets = useAssetLibrary(state => state.assets);
   const available = useAssetLibrary(state => state.available);
-  const pending = useRef<Drag | null>(null);
-  const active = useRef(false);
-  const [ghost, setGhost] = useState<Drag | null>(null);
+  const ghost = useRef<HTMLDivElement>(null);
+  const startPreview = usePreviewGesture();
   const [menu, setMenu] = useState<string | null>(null);
   const [error, setError] = useState('');
   const [picking, setPicking] = useState(false);
@@ -27,33 +25,6 @@ export default function AssetSidebar() {
     } catch (err) { setError(err instanceof Error ? err.message : String(err)); }
     finally { setPicking(false); }
   };
-
-  useEffect(() => {
-    const stopDrag = () => { pending.current = null; active.current = false; setGhost(null); };
-    const move = (event: PointerEvent) => {
-      const start = pending.current;
-      if (!start || start.pointer !== event.pointerId) return;
-      if (!active.current && Math.hypot(event.clientX - start.x, event.clientY - start.y) < 5) return;
-      active.current = true;
-      setGhost({ ...start, x: event.clientX, y: event.clientY });
-    };
-    const drop = (event: PointerEvent) => {
-      const start = pending.current;
-      if (!start || start.pointer !== event.pointerId) return;
-      if (active.current) dispatchAssetDrop(start.id, event.clientX, event.clientY);
-      stopDrag();
-    };
-    window.addEventListener('pointermove', move, true);
-    window.addEventListener('pointerup', drop, true);
-    window.addEventListener('pointercancel', stopDrag);
-    window.addEventListener('blur', stopDrag);
-    return () => {
-      window.removeEventListener('pointermove', move, true);
-      window.removeEventListener('pointerup', drop, true);
-      window.removeEventListener('pointercancel', stopDrag);
-      window.removeEventListener('blur', stopDrag);
-    };
-  }, []);
 
   return <aside className="asset-sidebar">
     <WorkspaceModeSwitch />
@@ -70,10 +41,27 @@ export default function AssetSidebar() {
           <button className="asset-row" data-offline={offline} data-tooltip={asset.path}
             onContextMenu={event => { event.preventDefault(); setMenu(asset.id); }}
             onPointerDown={event => {
-              if (event.button !== 0 || offline) return;
+              const preview = ghost.current;
+              if (event.button !== 0 || offline || !preview) return;
               setMenu(null);
-              pending.current = { id: asset.id, path: asset.path, pointer: event.pointerId, x: event.clientX, y: event.clientY };
-              event.currentTarget.setPointerCapture?.(event.pointerId);
+              const x = event.clientX + 12;
+              const y = event.clientY + 10;
+              let moved = false;
+              startPreview(event, {
+                paint(dx, dy) {
+                  if (!moved && Math.hypot(dx, dy) < 5) return;
+                  if (!moved) {
+                    preview.textContent = fileName(asset.path);
+                    preview.hidden = false;
+                    moved = true;
+                  }
+                  preview.style.transform = `translate3d(${x + dx}px, ${y + dy}px, 0)`;
+                },
+                finish(dx, dy, pointer) {
+                  if (moved || Math.hypot(dx, dy) >= 5) dispatchAssetDrop(asset.id, pointer.clientX, pointer.clientY);
+                },
+                reset() { preview.hidden = true; },
+              });
             }}>
             <span>{fileName(asset.path)}</span><small>{offline ? '文件离线' : fileTypeLabel(fileKind(asset.path))}</small>
           </button>
@@ -84,8 +72,6 @@ export default function AssetSidebar() {
         </div>;
       })}
     </div>
-    {ghost && createPortal(<div className="asset-drag-ghost" style={{ left: ghost.x + 12, top: ghost.y + 10 }}>
-      {fileName(ghost.path)}
-    </div>, document.body)}
+    {createPortal(<div ref={ghost} className="asset-drag-ghost" hidden aria-hidden="true" style={{ left: 0, top: 0 }} />, document.body)}
   </aside>;
 }

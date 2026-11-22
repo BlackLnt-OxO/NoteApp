@@ -218,6 +218,7 @@ document.querySelectorAll('.fi').forEach((wrap, idx) => {
   del.onclick = (e) => { e.stopPropagation(); imgData.splice(idx,1); saveState(); wrap.remove(); };
   // Top-left resize (anchor bottom-right)
   restl.onpointerdown = (e) => {
+    if (e.button !== 0) return;
     e.preventDefault(); e.stopPropagation();
     const startX = e.clientX, startY = e.clientY, startH = imgData[idx]._previewH || 100;
     const startImgX = imgData[idx]._imgX != null ? imgData[idx]._imgX : 10;
@@ -233,11 +234,15 @@ document.querySelectorAll('.fi').forEach((wrap, idx) => {
       imgData[idx]._imgX = startImgX + startW - nw; wrap.style.left = (startImgX + startW - nw) + 'px';
       imgData[idx]._imgY = startImgY + startH - nh; wrap.style.top = (startImgY + startH - nh) + 'px';
     };
-    const mu = () => { document.body.style.cursor=''; window.removeEventListener('pointermove',mm); window.removeEventListener('pointerup',mu); saveState(); };
-    window.addEventListener('pointermove', mm); window.addEventListener('pointerup', mu);
+    followImagePointer(e, mm, saveState, () => {
+      imgData[idx]._previewH = startH; img.style.height = startH+'px';
+      imgData[idx]._imgX = startImgX; wrap.style.left = startImgX+'px';
+      imgData[idx]._imgY = startImgY; wrap.style.top = startImgY+'px';
+    });
   };
   // Bottom-right resize
   res.onpointerdown = (e) => {
+    if (e.button !== 0) return;
     e.preventDefault(); e.stopPropagation();
     const startX = e.clientX, startY = e.clientY, startH = imgData[idx]._previewH || 100;
     document.body.style.cursor = 'nwse-resize';
@@ -246,12 +251,11 @@ document.querySelectorAll('.fi').forEach((wrap, idx) => {
       const nh = Math.max(30, startH + d);
       imgData[idx]._previewH = nh; img.style.height = nh + 'px';
     };
-    const mu = () => { document.body.style.cursor=''; window.removeEventListener('pointermove',mm); window.removeEventListener('pointerup',mu); saveState(); };
-    window.addEventListener('pointermove', mm); window.addEventListener('pointerup', mu);
+    followImagePointer(e, mm, saveState, () => { imgData[idx]._previewH = startH; img.style.height = startH+'px'; });
   };
   // Drag
   img.onpointerdown = (e) => {
-    if (penetrate) return;
+    if (penetrate || e.button !== 0) return;
     e.preventDefault(); e.stopPropagation();
     const ih = imgData[idx]._previewH || 100;
     const ghostH = ih * 0.92;
@@ -260,29 +264,60 @@ document.querySelectorAll('.fi').forEach((wrap, idx) => {
     const sr = ghostH / ih;
     const ghost = document.createElement('img');
     ghost.src = img.src;
-    ghost.style.cssText = 'position:fixed;z-index:10000;pointer-events:none;opacity:0.8;border-radius:6px;box-shadow:0 8px 24px rgba(0,0,0,0.4);';
+    ghost.style.cssText = 'position:fixed;z-index:10000;pointer-events:none;opacity:0.8;border-radius:6px;box-shadow:0 8px 24px rgba(0,0,0,0.4);will-change:transform;';
     ghost.style.height = ghostH+'px'; ghost.style.width = 'auto';
     ghost.style.left = (e.clientX - offX*sr)+'px'; ghost.style.top = (e.clientY - offY*sr)+'px';
     document.body.appendChild(ghost);
-    let moved = false;
-    const mm = (ev) => {
-      moved = true;
-      ghost.style.left = (ev.clientX - offX*sr)+'px'; ghost.style.top = (ev.clientY - offY*sr)+'px';
-    };
-    const mu = (ev) => {
+    followImagePointer(e, (ev) => {
+      ghost.style.transform = 'translate3d('+(ev.clientX-e.clientX)+'px,'+(ev.clientY-e.clientY)+'px,0)';
+    }, (ev) => {
       ghost.remove();
-      window.removeEventListener('pointermove',mm); window.removeEventListener('pointerup',mu);
-      if (!moved) return;
       const srect = scrollArea.getBoundingClientRect();
       imgData[idx]._imgX = ev.clientX - srect.left - offX;
       imgData[idx]._imgY = ev.clientY - srect.top - offY;
       wrap.style.left = imgData[idx]._imgX + 'px';
       wrap.style.top = imgData[idx]._imgY + 'px';
       saveState();
-    };
-    window.addEventListener('pointermove', mm); window.addEventListener('pointerup', mu);
+    }, () => ghost.remove());
   };
 });
+
+function followImagePointer(start, paint, commit, reset) {
+  const handle = start.currentTarget;
+  const pointer = start.pointerId;
+  let latest;
+  let frame;
+  handle.setPointerCapture(pointer);
+  const clear = () => {
+    if (frame !== undefined) cancelAnimationFrame(frame);
+    window.removeEventListener('pointermove', move, true);
+    window.removeEventListener('pointerup', finish, true);
+    window.removeEventListener('pointercancel', cancel, true);
+    window.removeEventListener('blur', abort);
+    handle.removeEventListener('lostpointercapture', cancel);
+    if (handle.hasPointerCapture(pointer)) handle.releasePointerCapture(pointer);
+    document.body.style.cursor = '';
+  };
+  const abort = () => { clear(); reset(); };
+  const cancel = event => { if (event.pointerId === pointer) abort(); };
+  const move = event => {
+    if (event.pointerId !== pointer) return;
+    latest = event;
+    if (frame === undefined) frame = requestAnimationFrame(() => { frame = undefined; paint(latest); });
+  };
+  const finish = event => {
+    if (event.pointerId !== pointer) return;
+    clear();
+    if (!latest && event.clientX === start.clientX && event.clientY === start.clientY) { reset(); return; }
+    paint(event);
+    commit(event);
+  };
+  window.addEventListener('pointermove', move, { capture: true, passive: true });
+  window.addEventListener('pointerup', finish, true);
+  window.addEventListener('pointercancel', cancel, true);
+  window.addEventListener('blur', abort);
+  handle.addEventListener('lostpointercapture', cancel);
+}
 
 function saveState() {
   window.electronAPI.saveFloatState('${noteId}', { images: imgData });

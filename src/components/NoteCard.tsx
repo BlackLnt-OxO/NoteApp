@@ -1,9 +1,10 @@
 import React, { useState, useRef, useCallback, useEffect } from 'react';
 import { createPortal } from 'react-dom';
-import { Note } from '../types';
+import type { Note, NoteImage } from '../types';
 import { useNoteStore } from '../store';
 import { fs, fsn } from '../utils';
 import LiquidGlassCard from './LiquidGlassCard';
+import { boxResizePreview, usePreviewGesture } from './usePreviewGesture';
 
 const QUICK_COLORS = ['#2d2d44', '#6b5ce7', '#e8a0b4', '#95a5a6'];
 const ALL_COLORS = ['#2d2d44', '#6b5ce7', '#e74c3c', '#e67e22', '#2ecc71', '#3498db', '#1abc9c', '#e91e63', '#9b59b6', '#95a5a6', '#f39c12', '#34495e'];
@@ -39,13 +40,11 @@ const NoteCard: React.FC<NoteCardProps> = ({ note, isDragGhost, isDragPlaceholde
   const lbDragging = useRef(false);
   const lbOnImg = useRef(false);
   const lbStart = useRef({ x: 0, y: 0, px: 0, py: 0 });
-  const [cardW, setCardW] = useState(note.width || 260);
-  const [cardH, setCardH] = useState(note.height || 200);
   const contentRef = useRef<HTMLDivElement>(null);
+  const startPreview = usePreviewGesture(note.id);
   const undoStack = useRef<string[]>([]);
   const composing = useRef(false);
   const imgDragMoved = useRef(false);
-  const imgDragJustEnded = useRef(false);
   const rightClickStart = useRef({ x: 0, y: 0 });
 
   const isSelected = useNoteStore(s => s.selectedNoteId === note.id);
@@ -71,7 +70,6 @@ const NoteCard: React.FC<NoteCardProps> = ({ note, isDragGhost, isDragPlaceholde
   }, [note.images, note.color]);
 
   useEffect(() => { setContent(note.content); }, [note.content]);
-  useEffect(() => { setCardW(note.width || 260); setCardH(note.height || 200); }, [note.width, note.height]);
   useEffect(() => {
     if (showExpanded && contentRef.current) {
       contentRef.current.focus();
@@ -187,65 +185,61 @@ const NoteCard: React.FC<NoteCardProps> = ({ note, isDragGhost, isDragPlaceholde
   };
 
   // Image drag between notes (pointer-based, no browser DnD)
-  const handleImagePointerDown = useCallback((imgIdx: number, img: any) => (ev: React.PointerEvent) => {
+  const handleImagePointerDown = useCallback((img: NoteImage) => (ev: React.PointerEvent<HTMLImageElement>) => {
     // Left button only — a right click opens the "另存为…" menu, never a drag.
     if (ev.button !== 0) return;
-    ev.preventDefault(); ev.stopPropagation();
-    selectNote(note.id);
-    const imgH = img._previewH || 100;
-    const ghostH = imgH * 0.92;
+    const image = ev.currentTarget;
+    const card = image.closest<HTMLElement>('.note-card-wrapper');
+    const scale = useNoteStore.getState().uiScale;
+    const imageBounds = image.getBoundingClientRect();
+    const grabX = ev.clientX - imageBounds.left;
+    const grabY = ev.clientY - imageBounds.top;
+    const ratio = .92;
     const ghost = document.createElement('img');
     ghost.src = img.dataUrl;
-    ghost.style.cssText = 'position:fixed;z-index:10000;pointer-events:none;opacity:0.8;border-radius:6px;box-shadow:0 8px 24px rgba(0,0,0,0.4);';
-    ghost.style.height = ghostH + 'px'; ghost.style.width = 'auto';
-    const imgEl = ev.currentTarget as HTMLElement;
-    const imgRect = imgEl.getBoundingClientRect();
-    const offX = ev.clientX - imgRect.left;
-    const offY = ev.clientY - imgRect.top;
-    const scaleRatio = ghostH / (img._previewH || 100);
-    const ghostOffX = offX * scaleRatio;
-    const ghostOffY = offY * scaleRatio;
-    ghost.style.left = (ev.clientX - ghostOffX) + 'px'; ghost.style.top = (ev.clientY - ghostOffY) + 'px';
+    ghost.style.cssText = 'position:fixed;z-index:10000;pointer-events:none;opacity:.8;border-radius:6px;box-shadow:0 8px 24px rgb(0 0 0 / .4);will-change:transform;';
+    ghost.style.height = `${imageBounds.height * ratio}px`;
+    ghost.style.left = `${ev.clientX - grabX * ratio}px`;
+    ghost.style.top = `${ev.clientY - grabY * ratio}px`;
     imgDragMoved.current = false;
-    document.body.appendChild(ghost);
-
-    const onMove = (e: PointerEvent) => {
-      imgDragMoved.current = true;
-      ghost.style.left = (e.clientX - ghostOffX) + 'px'; ghost.style.top = (e.clientY - ghostOffY) + 'px';
-    };
-    const onUp = (e: PointerEvent) => {
-      ghost.remove();
-      window.removeEventListener('pointermove', onMove);
-      window.removeEventListener('pointerup', onUp);
-      if (!imgDragMoved.current) return;
-      (window as any).__imgDragJustEnded = true;
-      setTimeout(() => { (window as any).__imgDragJustEnded = false; }, 200);
-      const el = document.elementFromPoint(e.clientX, e.clientY);
-      const card = el?.closest('.note-card-wrapper');
-      if (!card) { const state = useNoteStore.getState(); const myIdx = state.notes.findIndex(n => n.id === note.id); const myCard = document.querySelectorAll('.note-card-wrapper')[myIdx]; if (myCard) { const myRect = myCard.getBoundingClientRect(); const newX = e.clientX - myRect.left - offX; const newY = e.clientY - myRect.top - offY; const imgs = [...note.images]; imgs[imgIdx] = { ...imgs[imgIdx], _imgX: newX, _imgY: newY }; const ih = img._previewH || 100; const ratio = (img.width && img.height) ? img.width / img.height : 1.5; const iw = ih * ratio; update(note.id, { images: imgs }); } return; }
-      const noteEls = document.querySelectorAll('.note-card-wrapper');
-      let targetIdx = -1;
-      noteEls.forEach((n, i) => { if (n === card) targetIdx = i; });
-      if (targetIdx < 0) return;
-      const state = useNoteStore.getState();
-      const targetNote = state.notes[targetIdx];
-      if (!targetNote) return;
-      if (targetNote.id === note.id) {
-        const cardRect = card.getBoundingClientRect();
-        const imgs = [...note.images];
-        const newX = e.clientX - cardRect.left - offX; const newY = e.clientY - cardRect.top - offY;
-        imgs[imgIdx] = { ...imgs[imgIdx], _imgX: newX, _imgY: newY };
-        const ih = img._previewH || 100; const ratio = (img.width && img.height) ? img.width / img.height : 1.5; const iw = ih * ratio;
-        update(note.id, { images: imgs });
-      } else {
-        state.updateNote(targetNote.id, { images: [...targetNote.images, { id: 'img_' + Date.now(), dataUrl: img.dataUrl, fileName: img.fileName || 'image.png', _imgX: e.clientX - card.getBoundingClientRect().left - offX, _imgY: e.clientY - card.getBoundingClientRect().top - offY, _previewH: imgH }] });
-        state.updateNote(note.id, { images: note.images.filter((_:any, i:number) => i !== imgIdx) });
-        selectNote(targetNote.id);
-      }
-    };
-    window.addEventListener('pointermove', onMove);
-    window.addEventListener('pointerup', onUp);
-  }, [note.id, note.images, selectNote]);
+    const active = startPreview(ev, {
+      paint(dx, dy) {
+        if (!imgDragMoved.current && Math.hypot(dx, dy) < 3) return;
+        imgDragMoved.current = true;
+        if (!ghost.isConnected) document.body.appendChild(ghost);
+        ghost.style.transform = `translate3d(${dx}px, ${dy}px, 0)`;
+      },
+      finish(dx, dy, e) {
+        if (!imgDragMoved.current && Math.hypot(dx, dy) < 3) return;
+        imgDragMoved.current = true;
+        (window as any).__imgDragJustEnded = true;
+        setTimeout(() => { (window as any).__imgDragJustEnded = false; }, 200);
+        const target = document.elementFromPoint(e.clientX, e.clientY)?.closest<HTMLElement>('.note-card-wrapper') ?? card;
+        const content = target?.querySelector<HTMLElement>('.note-scroll-area');
+        if (!target || !content) return;
+        const state = useNoteStore.getState();
+        const source = state.notes.find(item => item.id === note.id);
+        const destination = state.notes.find(item => item.id === target.dataset.noteId);
+        const moved = source?.images.find(item => item.id === img.id);
+        if (!source || !moved || !destination) return;
+        const rect = content.getBoundingClientRect();
+        const position = {
+          _imgX: (e.clientX - rect.left - grabX) / scale + content.scrollLeft,
+          _imgY: (e.clientY - rect.top - grabY) / scale + content.scrollTop,
+        };
+        if (destination === source) {
+          state.updateNote(source.id, { images: source.images.map(item => item.id === moved.id ? { ...item, ...position } : item) });
+        } else {
+          const id = destination.images.some(item => item.id === moved.id) ? crypto.randomUUID() : moved.id;
+          state.updateNote(destination.id, { images: [...destination.images, { ...moved, ...position, id }] });
+          state.updateNote(source.id, { images: source.images.filter(item => item.id !== moved.id) });
+          selectNote(destination.id);
+        }
+      },
+      reset: () => ghost.remove(),
+    });
+    if (active) selectNote(note.id);
+  }, [note.id, selectNote, startPreview]);
 
   const handleContextMenu = (e: React.MouseEvent) => {
     e.preventDefault(); e.stopPropagation();
@@ -315,36 +309,51 @@ const NoteCard: React.FC<NoteCardProps> = ({ note, isDragGhost, isDragPlaceholde
   }, []);
 
   // Resize
-  const resizing = useRef(false);
-  const resizeState = useRef({ sx: 0, sy: 0, sw: 0, sh: 0 });
+  const handleResizeDown = (event: React.PointerEvent<HTMLDivElement>) => {
+    const wrapper = event.currentTarget.closest<HTMLElement>('.note-card-wrapper');
+    if (!wrapper) return;
+    const scale = useNoteStore.getState().uiScale;
+    const startW = wrapper.offsetWidth;
+    const startH = wrapper.offsetHeight;
+    const dimensions = (x: number, y: number) => ({
+      width: Math.max(180, startW + x / scale),
+      height: Math.max(120, startH + y / scale),
+    });
+    startPreview(event, boxResizePreview(wrapper, dimensions, 1, (width, height) => {
+      selectNote(null);
+      update(note.id, { width, height, customSize: true });
+    }));
+  };
 
-  const handleResizeDown = (e: React.PointerEvent) => {
-    e.preventDefault(); e.stopPropagation();
-    selectNote(null);
-    // Use actual rendered size (from grid cell) instead of note.width which
-    // defaults to 260 — otherwise first resize on a new note jumps.
-    const wrapper = (e.currentTarget as HTMLElement).closest('.note-card-wrapper') as HTMLElement | null;
-    const rect = wrapper ? wrapper.getBoundingClientRect() : null;
-    const actualW = rect ? rect.width : cardW;
-    const actualH = rect ? rect.height : cardH;
-    resizing.current = true;
-    resizeState.current = { sx: e.clientX, sy: e.clientY, sw: actualW, sh: actualH };
-
-    const onMove = (ev: PointerEvent) => {
-      const dw = ev.clientX - resizeState.current.sx;
-      const dh = ev.clientY - resizeState.current.sy;
-      const w = Math.max(180, resizeState.current.sw + dw);
-      const h = Math.max(120, resizeState.current.sh + dh);
-      setCardW(w); setCardH(h);
-      update(note.id, { width: w, height: h, customSize: true });
+  const resizeImage = (event: React.PointerEvent<HTMLDivElement>, img: NoteImage, topLeft: boolean) => {
+    const wrap = event.currentTarget.closest<HTMLElement>('.note-image-wrap');
+    const image = wrap?.querySelector('img');
+    if (!wrap || !image) return;
+    const scale = useNoteStore.getState().uiScale;
+    const start = { x: wrap.offsetLeft, y: wrap.offsetTop, w: image.offsetWidth, h: image.offsetHeight };
+    const { left, top } = wrap.style;
+    const { height } = image.style;
+    const dimensions = (dx: number, dy: number) => {
+      const delta = topLeft ? Math.max(-dx, -dy) : Math.max(dx, dy);
+      const h = Math.max(30, start.h + delta / scale);
+      return {
+        _previewH: h,
+        _imgX: topLeft ? start.x + (1 - h / start.h) * start.w : start.x,
+        _imgY: topLeft ? start.y + start.h - h : start.y,
+      };
     };
-    const onUp = () => {
-      resizing.current = false;
-      window.removeEventListener('pointermove', onMove);
-      window.removeEventListener('pointerup', onUp);
-    };
-    window.addEventListener('pointermove', onMove);
-    window.addEventListener('pointerup', onUp);
+    startPreview(event, {
+      paint(dx, dy) {
+        const size = dimensions(dx, dy);
+        image.style.height = `${size._previewH}px`;
+        if (topLeft) { wrap.style.left = `${size._imgX}px`; wrap.style.top = `${size._imgY}px`; }
+      },
+      finish(dx, dy) {
+        const images = useNoteStore.getState().notes.find(item => item.id === note.id)?.images;
+        if (images) update(note.id, { images: images.map(item => item.id === img.id ? { ...item, ...dimensions(dx, dy) } : item) });
+      },
+      reset() { image.style.height = height; wrap.style.left = left; wrap.style.top = top; },
+    });
   };
 
   const handleColorChange = (color: string) => {
@@ -440,7 +449,7 @@ const NoteCard: React.FC<NoteCardProps> = ({ note, isDragGhost, isDragPlaceholde
                   setImgSaveMenu({ x: ev.clientX, y: ev.clientY, dataUrl: img.dataUrl, fileName: img.fileName });
                 }}>
                 <img src={img.dataUrl} alt=""
-                  onPointerDown={handleImagePointerDown(imgIdx, img)}
+                  onPointerDown={handleImagePointerDown(img)}
                   onClick={(ev) => { ev.stopPropagation(); if (imgDragMoved.current) { imgDragMoved.current = false; return; } setLightboxImg(img.dataUrl); setLightboxScale(1); setLbPan({x:0,y:0}); lbScaleRef.current=1; lbPanRef.current={x:0,y:0}; }}
                   style={{ height: imgH, width: 'auto', borderRadius: '5px', cursor: 'grab', display: 'block' }} />
                   <button onClick={(ev) => { ev.stopPropagation(); update(note.id, { images: note.images.filter((_, i) => i !== imgIdx) }); }}
@@ -448,28 +457,7 @@ const NoteCard: React.FC<NoteCardProps> = ({ note, isDragGhost, isDragPlaceholde
                       borderRadius: '50%', background: 'rgba(0,0,0,0.6)', border: 'none', color: '#fff', fontSize: '10px',
                       cursor: 'pointer', opacity: 0, transition: 'opacity 0.15s', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>x</button>
                   <div className="note-img-size note-img-size-tl"
-                    onPointerDown={(ev: React.PointerEvent) => {
-                      ev.preventDefault(); ev.stopPropagation();
-                      const wrapper = (ev.target as HTMLElement).closest('.note-image-wrap') as HTMLElement;
-                      const startX = ev.clientX; const startY = ev.clientY; const startH = imgH;
-                      const startImgX = wrapper ? wrapper.offsetLeft : imgX;
-                      const startImgY = wrapper ? wrapper.offsetTop : imgY;
-                      const ratio = (img.width && img.height) ? img.width / img.height : 1;
-                      const startW = startH * ratio;
-                      const onMove = (e: PointerEvent) => {
-                        const d = Math.max(startX - e.clientX, startY - e.clientY);
-                        const newH = Math.max(30, startH + d);
-                        const newW = newH * ratio;
-                        const imgs = [...note.images]; imgs[imgIdx] = {
-                          ...imgs[imgIdx], _previewH: newH,
-                          _imgX: startImgX + startW - newW,
-                          _imgY: startImgY + startH - newH,
-                        };
-                        update(note.id, { images: imgs });
-                      };
-                      const onUp = () => { window.removeEventListener('pointermove', onMove); window.removeEventListener('pointerup', onUp); };
-                      window.addEventListener('pointermove', onMove); window.addEventListener('pointerup', onUp);
-                    }}
+                    onPointerDown={event => resizeImage(event, img, true)}
                     style={{
                       position: 'absolute', top: 0, left: 0,
                       opacity: 0, transition: 'opacity 0.15s',
@@ -477,22 +465,7 @@ const NoteCard: React.FC<NoteCardProps> = ({ note, isDragGhost, isDragPlaceholde
                       background: 'linear-gradient(135deg, rgba(255,255,255,0.4) 50%, transparent 50%)',
                     }} />
                   <div className="note-img-size"
-                    onPointerDown={(ev: React.PointerEvent) => {
-                      ev.preventDefault(); ev.stopPropagation();
-                      const startX = ev.clientX; const startY = ev.clientY; const startH = imgH;
-                      const onMove = (e: PointerEvent) => {
-                        const d = Math.max(e.clientX - startX, e.clientY - startY);
-                        const newH = Math.max(30, startH + d);
-                        const imgs = [...note.images]; imgs[imgIdx] = { ...imgs[imgIdx], _previewH: newH };
-                        update(note.id, { images: imgs });
-                      };
-                      const onUp = () => {
-                        window.removeEventListener('pointermove', onMove);
-                        window.removeEventListener('pointerup', onUp);
-                      };
-                      window.addEventListener('pointermove', onMove);
-                      window.addEventListener('pointerup', onUp);
-                    }}
+                    onPointerDown={event => resizeImage(event, img, false)}
                     style={{
                       position: 'absolute', bottom: '1px', right: '1px',
                       opacity: 0, transition: 'opacity 0.15s',

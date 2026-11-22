@@ -5,12 +5,13 @@
  * Interactivity mirrors NoteCard's note-image handling but in world space.
  */
 
-import React, { useRef, useState, useCallback, useEffect } from 'react';
+import React, { useRef, useState, useCallback } from 'react';
 import type { ImageObject as ImageObj, Camera } from './types';
 import { worldToScreen } from './constants';
 import { useCanvasStore } from './useCanvasStore';
 import { useNoteStore } from '../../store';
 import { setPointerHold } from '../inkInputActivity';
+import { boxResizePreview, usePreviewGesture } from '../usePreviewGesture';
 
 interface Props {
   obj: ImageObj;
@@ -27,6 +28,8 @@ const ImageObject: React.FC<Props> = ({ obj, camera }) => {
   const uiScale = useNoteStore((s) => s.uiScale);
   const [hover, setHover] = useState(false);
   const [lightbox, setLightbox] = useState(false);
+  const imageRef = useRef<HTMLDivElement>(null);
+  const startPreview = usePreviewGesture();
 
   // worldToScreen is VISUAL px; App is CSS-scaled by uiScale → layout px = /uiScale.
   const screen = worldToScreen(obj.x, obj.y, camera);
@@ -35,75 +38,36 @@ const ImageObject: React.FC<Props> = ({ obj, camera }) => {
   const screenW = (obj.width * camera.zoom) / uiScale;
   const screenH = (obj.height * camera.zoom) / uiScale;
 
-  // Preview on the image's own layer. Publish one world-space edit on release.
-  const dragRef = useRef<{ pointer: number; element: HTMLDivElement; x: number; y: number; translate: string } | null>(null);
-  const clearDrag = useCallback(() => {
-    const drag = dragRef.current;
-    if (!drag) return;
-    dragRef.current = null;
-    drag.element.style.translate = drag.translate;
-    setPointerHold(false);
-    if (drag.element.hasPointerCapture?.(drag.pointer)) drag.element.releasePointerCapture(drag.pointer);
-  }, []);
-  useEffect(() => clearDrag, [clearDrag]);
   const onDragDown = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
-    // Middle button belongs to canvas panning (the container's capture-phase
-    // listener owns it and never lets it reach here) — only the left button
-    // moves the image.
-    if (e.button !== 0 || dragRef.current) return;
-    e.preventDefault(); e.stopPropagation();
     const element = e.currentTarget;
-    element.setPointerCapture(e.pointerId);
-    dragRef.current = { pointer: e.pointerId, element, x: e.clientX, y: e.clientY, translate: element.style.translate };
-    setPointerHold(true);
-  }, []);
+    const before = element.style.translate;
+    const active = startPreview(e, {
+      paint: (x, y) => { element.style.translate = `${x / uiScale}px ${y / uiScale}px`; },
+      finish: (x, y) => useCanvasStore.getState().commitSelectionMove([obj.id], x / camera.zoom, y / camera.zoom),
+      reset: () => { element.style.translate = before; setPointerHold(false); },
+    });
+    if (active) setPointerHold(true);
+  }, [startPreview, uiScale, camera.zoom, obj.id]);
 
-  const onDragMove = useCallback((e: React.PointerEvent) => {
-    const d = dragRef.current;
-    if (d?.pointer !== e.pointerId) return;
-    d.element.style.translate = `${(e.clientX - d.x) / uiScale}px ${(e.clientY - d.y) / uiScale}px`;
-  }, [uiScale]);
-
-  const onDragUp = useCallback((e: React.PointerEvent) => {
-    const d = dragRef.current;
-    if (d?.pointer !== e.pointerId) return;
-    clearDrag();
-    if (e.type === 'pointerup') {
-      useCanvasStore.getState().commitSelectionMove([obj.id], (e.clientX - d.x) / camera.zoom, (e.clientY - d.y) / camera.zoom);
-    }
-  }, [camera.zoom, clearDrag, obj.id]);
-
-  // ---- corner resize (bottom-right) ------------------------------------------
-  const resizeRef = useRef<{ startX: number; startY: number; ow: number; oh: number } | null>(null);
-  const onResizeDown = useCallback((e: React.PointerEvent) => {
-    if (e.button !== 0) return; // middle belongs to canvas panning
-    e.preventDefault(); e.stopPropagation();
-    (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
-    resizeRef.current = { startX: e.clientX, startY: e.clientY, ow: obj.width, oh: obj.height };
-    pushHistory();
-  }, [obj.width, obj.height, pushHistory]);
-
-  const onResizeMove = useCallback((e: React.PointerEvent) => {
-    const r = resizeRef.current;
-    if (!r) return;
-    const dw = (e.clientX - r.startX) / camera.zoom;
-    const dh = (e.clientY - r.startY) / camera.zoom;
-    updateImageObject(obj.id, { width: Math.max(40, r.ow + dw), height: Math.max(30, r.oh + dh) });
-  }, [camera.zoom, obj.id, updateImageObject]);
-
-  const onResizeUp = useCallback((e: React.PointerEvent) => {
-    if (resizeRef.current) { resizeRef.current = null; try { (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId); } catch {} }
-  }, []);
+  const onResizeDown = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    const element = imageRef.current;
+    if (!element) return;
+    const dimensions = (dx: number, dy: number) => ({
+      width: Math.max(40, obj.width + dx / camera.zoom),
+      height: Math.max(30, obj.height + dy / camera.zoom),
+    });
+    startPreview(e, boxResizePreview(element, dimensions, camera.zoom / uiScale, (width, height) => {
+      if (width === obj.width && height === obj.height) return;
+      pushHistory();
+      updateImageObject(obj.id, { width, height });
+    }));
+  }, [startPreview, uiScale, camera.zoom, obj.id, obj.width, obj.height, pushHistory, updateImageObject]);
 
   return (
     <>
-      <div data-ink-object-id={obj.id}
+      <div ref={imageRef} data-ink-object-id={obj.id}
         data-ink-selected={selected || undefined}
         onPointerDown={onDragDown}
-        onPointerMove={onDragMove}
-        onPointerUp={onDragUp}
-        onPointerCancel={onDragUp}
-        onLostPointerCapture={onDragUp}
         onMouseEnter={() => setHover(true)}
         onMouseLeave={() => setHover(false)}
         style={{
@@ -146,8 +110,6 @@ const ImageObject: React.FC<Props> = ({ obj, camera }) => {
               data-tooltip="缩放"
               data-ink-object-control=""
               onPointerDown={onResizeDown}
-              onPointerMove={onResizeMove}
-              onPointerUp={onResizeUp}
               style={{
                 position: 'absolute', bottom: 2, right: 2, width: 14, height: 14, cursor: 'nwse-resize',
                 background: 'linear-gradient(135deg, transparent 50%, rgba(255,255,255,0.6) 50%)',
