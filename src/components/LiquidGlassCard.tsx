@@ -15,7 +15,7 @@ export default function LiquidGlassCard({
   useLayoutEffect(() => {
     const element = card.current;
     if (!element || dragState === 'placeholder') return;
-    return watchGlassCard(element, radius, frostPreview ? 'preview' : 'workspace');
+    return watchGlassCard(element, radius, frostPreview ? 'preview' : 'workspace', dragState === 'preview');
   }, [dragState, radius, frostPreview]);
 
   return <div {...props} ref={card}

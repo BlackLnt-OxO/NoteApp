@@ -265,6 +265,7 @@ body {
 }
 
 .liquid-glass-card--note[data-drag-preview="true"][data-glass-optics="true"],
+.note-card-wrapper[data-note-layout-moving] .liquid-glass-card[data-glass-optics="true"],
 :root[data-glass-scrolling="true"] .liquid-glass-card[data-glass-optics="true"]:not(:hover, :focus-within, [data-selected="true"], [data-drag-preview="true"]) {
   --glass-filter: var(--glass-mono-filter);
 }

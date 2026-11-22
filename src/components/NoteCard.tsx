@@ -19,7 +19,10 @@ interface NoteCardProps {
 }
 
 const NoteCard: React.FC<NoteCardProps> = ({ note, isDragGhost, isDragPlaceholder, isExpanded, onDragStart, onEditStart, onEditEnd }) => {
-  const { updateNote, deleteNote, selectNote, selectedNoteId, setNoteFloating } = useNoteStore();
+  const updateNote = useNoteStore(s => s.updateNote);
+  const deleteNote = useNoteStore(s => s.deleteNote);
+  const selectNote = useNoteStore(s => s.selectNote);
+  const setNoteFloating = useNoteStore(s => s.setNoteFloating);
   const [content, setContent] = useState(note.content);
   const [showMenu, setShowMenu] = useState(false);
   const [menuPos, setMenuPos] = useState({ x: 0, y: 0 });
@@ -45,12 +48,13 @@ const NoteCard: React.FC<NoteCardProps> = ({ note, isDragGhost, isDragPlaceholde
   const imgDragJustEnded = useRef(false);
   const rightClickStart = useRef({ x: 0, y: 0 });
 
-  const isSelected = selectedNoteId === note.id;
+  const isSelected = useNoteStore(s => s.selectedNoteId === note.id);
   const showExpanded = isExpanded || isEditing;
   const tags = useNoteStore((s) => s.tags);
   const tag = tags.find((t) => t.id === note.tag);
   const gfs = useNoteStore((s) => s.settings.fontSize);
-  const settings = useNoteStore((s) => s.settings);
+  const floatCloseKey = useNoteStore(s => s.settings.floatCloseKey);
+  const floatPenetrateKey = useNoteStore(s => s.settings.floatPenetrateKey);
 
   // Keep a floating window in sync when the note's images/color change
   // (debounced — drag/resize update images frequently). Content edits are
@@ -264,8 +268,8 @@ const NoteCard: React.FC<NoteCardProps> = ({ note, isDragGhost, isDragPlaceholde
         setNoteFloating(note.id, false, undefined);
         await new Promise(r => setTimeout(r, 100));
         await window.electronAPI.createFloatingNote({
-          ...note, content, tag: tag?.name || note.tag || '通用', fontSize: settings.fontSize,
-          floatCloseKey: settings.floatCloseKey, floatPenetrateKey: settings.floatPenetrateKey,
+          ...note, content, tag: tag?.name || note.tag || '通用', fontSize: gfs,
+          floatCloseKey, floatPenetrateKey,
         });
         setNoteFloating(note.id, true, '');
       }
@@ -280,8 +284,8 @@ const NoteCard: React.FC<NoteCardProps> = ({ note, isDragGhost, isDragPlaceholde
       } else {
         if (window.electronAPI) {
           await window.electronAPI.createFloatingNote({
-            ...note, content, tag: tag?.name || note.tag || '通用', fontSize: settings.fontSize,
-            floatCloseKey: settings.floatCloseKey, floatPenetrateKey: settings.floatPenetrateKey,
+            ...note, content, tag: tag?.name || note.tag || '通用', fontSize: gfs,
+            floatCloseKey, floatPenetrateKey,
           });
           setNoteFloating(note.id, true, '');
         }
@@ -606,4 +610,4 @@ const NoteCard: React.FC<NoteCardProps> = ({ note, isDragGhost, isDragPlaceholde
   );
 };
 
-export default NoteCard;
+export default React.memo(NoteCard);

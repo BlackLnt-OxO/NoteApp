@@ -2,6 +2,7 @@ import React, { useState, useRef, useCallback, useMemo, useLayoutEffect } from '
 import { useNoteStore } from '../store';
 import NoteCard from './NoteCard';
 import { useGlassEntrance } from './useGlassEntrance';
+import { useNoteGridMotion, type NoteDrop } from './useNoteGridMotion';
 import { fs, fsn } from '../utils';
 
 const PADDING = 36;
@@ -14,6 +15,8 @@ interface NoteDrag {
   startY: number;
   originX: number;
   originY: number;
+  width: number;
+  height: number;
   scale: number;
   x: number;
   y: number;
@@ -21,8 +24,11 @@ interface NoteDrag {
 }
 
 const NoteGrid: React.FC = () => {
-  const { notes, activeTag, selectNote, selectedNoteId, settings } = useNoteStore();
-  const gfs = settings.fontSize;
+  const notes = useNoteStore(s => s.notes);
+  const activeTag = useNoteStore(s => s.activeTag);
+  const selectNote = useNoteStore(s => s.selectNote);
+  const selectedNoteId = useNoteStore(s => s.selectedNoteId);
+  const gfs = useNoteStore(s => s.settings.fontSize);
   const [containerW, setContainerW] = useState(0);
 
   // Cell sizes: proportional to container width (same relative size on any screen)
@@ -36,6 +42,7 @@ const NoteGrid: React.FC = () => {
   const dragFrame = useRef<number>();
   const containerRef = useRef<HTMLDivElement>(null);
   const ghostRef = useRef<HTMLDivElement>(null);
+  const dropRef = useRef<NoteDrop | null>(null);
 
   const filteredNotes = useMemo(
     () => (activeTag === 'all' ? notes : notes.filter((n) => n.tag === activeTag)),
@@ -64,7 +71,7 @@ const NoteGrid: React.FC = () => {
     let rowY = PADDING;
     let rowH = 0;
     let colX = PADDING;
-    const maxRight = (containerRef.current?.clientWidth || 900) - PADDING;
+    const maxRight = containerW - PADDING;
 
     for (let i = 0; i < filteredNotes.length; i++) {
       const note = filteredNotes[i];
@@ -84,11 +91,13 @@ const NoteGrid: React.FC = () => {
     }
 
     return positions;
-  }, [filteredNotes, CELL_W, CELL_H, GAP, gfs]);
+  }, [filteredNotes, containerW, CELL_W, CELL_H, GAP, gfs]);
 
-  const indexToPos = useCallback((idx: number) => {
-    return notePositions[idx] || { x: PADDING, y: PADDING };
-  }, [notePositions]);
+  const cardPositions = useMemo(() => new Map(containerW > 0 ? filteredNotes.map((note, index) => {
+    const pos = notePositions[index];
+    return [note.id, selectedNoteId === note.id ? { x: pos.x - fsn(20, gfs) / 2, y: pos.y - 10 } : pos];
+  }) : []), [containerW, filteredNotes, notePositions, selectedNoteId, gfs]);
+  useNoteGridMotion(containerRef, glassGridRef, activeTag, cardPositions, draggingNoteId, dropRef);
 
   // Total rows height
   const totalHeight = useMemo(() => {
@@ -115,7 +124,10 @@ const NoteGrid: React.FC = () => {
   }, []);
 
   useLayoutEffect(() => {
-    if (draggingNoteId) paintDrag();
+    if (draggingNoteId && ghostRef.current) {
+      ghostRef.current.inert = true;
+      paintDrag();
+    }
   }, [draggingNoteId, paintDrag]);
 
   useLayoutEffect(() => () => {
@@ -124,7 +136,7 @@ const NoteGrid: React.FC = () => {
 
   const handleCardDragStart = useCallback((e: React.PointerEvent, noteId: string) => {
     const grid = containerRef.current;
-    const card = e.currentTarget.closest('.note-card-wrapper');
+    const card = e.currentTarget.closest<HTMLElement>('.note-card-wrapper');
     if (e.button !== 0 || dragRef.current || !grid || !card) return;
     e.preventDefault(); e.stopPropagation();
     const rect = card.getBoundingClientRect();
@@ -135,6 +147,7 @@ const NoteGrid: React.FC = () => {
       startX: e.clientX, startY: e.clientY,
       originX: viewport.left + e.clientX - rect.left,
       originY: viewport.top + e.clientY - rect.top,
+      width: card.offsetWidth, height: card.offsetHeight,
       scale: useNoteStore.getState().uiScale,
       x: e.clientX, y: e.clientY, active: false,
     };
@@ -159,22 +172,33 @@ const NoteGrid: React.FC = () => {
     });
   }, [paintDrag, selectNote]);
 
-  const endDrag = useCallback((e: React.PointerEvent) => {
-    if (dragRef.current?.pointerId !== e.pointerId) return;
+  const finishDrag = useCallback((pointerId: number) => {
+    if (dragRef.current?.pointerId !== pointerId) return;
     dragRef.current = null;
     if (dragFrame.current !== undefined) cancelAnimationFrame(dragFrame.current);
     dragFrame.current = undefined;
     setDraggingNoteId(null);
-    if (e.currentTarget.hasPointerCapture(e.pointerId)) e.currentTarget.releasePointerCapture(e.pointerId);
+    const grid = containerRef.current;
+    if (grid?.hasPointerCapture(pointerId)) grid.releasePointerCapture(pointerId);
   }, []);
+
+  const endDrag = useCallback((e: React.PointerEvent) => finishDrag(e.pointerId), [finishDrag]);
+  useLayoutEffect(() => {
+    const drag = dragRef.current;
+    if (drag) finishDrag(drag.pointerId);
+  }, [activeTag, finishDrag]);
 
   const handlePointerUp = useCallback((e: React.PointerEvent) => {
     const drag = dragRef.current;
     if (!drag || drag.pointerId !== e.pointerId) return;
-    endDrag(e);
     const grid = containerRef.current;
     if (drag.active && grid) {
       const { noteId } = drag;
+      dropRef.current = {
+        id: noteId,
+        x: (e.clientX - drag.originX) / drag.scale + grid.scrollLeft,
+        y: (e.clientY - drag.originY) / drag.scale + grid.scrollTop,
+      };
       const rect = grid.getBoundingClientRect();
       const absX = (e.clientX - rect.left) / drag.scale + grid.scrollLeft;
       const absY = (e.clientY - rect.top) / drag.scale + grid.scrollTop;
@@ -202,16 +226,17 @@ const NoteGrid: React.FC = () => {
         }
       }
     }
-  }, [endDrag, filteredNotes, notePositions, notes, CELL_W, CELL_H]);
+    finishDrag(e.pointerId);
+  }, [finishDrag, filteredNotes, notePositions, notes, CELL_W, CELL_H]);
 
   return (
     <div style={{ position: 'relative', width: '100%', height: '100%', overflow: 'hidden' }}>
       <div ref={containerRef} data-glass-scroll-container onPointerMove={handlePointerMove} onPointerUp={handlePointerUp}
         onPointerCancel={endDrag} onLostPointerCapture={endDrag} onClick={handleContainerClick}
-        style={{ position: 'relative', width: '100%', height: '100%', overflow: 'auto', zIndex: 1, touchAction: 'none' }}>
+        style={{ position: 'relative', width: '100%', height: '100%', overflow: 'auto', scrollbarGutter: 'stable', zIndex: 1, touchAction: 'none' }}>
         <div ref={glassGridRef} style={{ position: 'relative', minHeight: totalHeight }} data-grid-bg="true">
-          {containerW > 0 && filteredNotes.map((note, idx) => {
-            const pos = indexToPos(idx);
+          {containerW > 0 && filteredNotes.map(note => {
+            const pos = cardPositions.get(note.id)!;
             const isBeingDragged = draggingNoteId === note.id;
             const isSelected = selectedNoteId === note.id;
             const isExpanded = isSelected;
@@ -244,13 +269,9 @@ const NoteGrid: React.FC = () => {
             const nh = contentH;
             const w = isExpanded ? nw + expandW : nw - shrink;
             const h = isExpanded ? nh : nh - shrink;
-            const ox = isExpanded ? -expandW / 2 : 0;
-            const oy = isExpanded ? -10 : 0;
-
             return (
-              <div key={note.id} className="note-card-wrapper" style={{
-                position: 'absolute', left: pos.x + ox, top: pos.y + oy, width: w, height: h,
-                transition: 'left 0.25s ease, top 0.25s ease',
+              <div key={note.id} data-note-id={note.id} className="note-card-wrapper" style={{
+                position: 'absolute', left: pos.x, top: pos.y, width: w, height: h,
                 opacity: isBeingDragged ? 0.25 : 1,
                 zIndex: isExpanded ? 10 : isBeingDragged ? 0 : 2,
               }}>
@@ -267,11 +288,11 @@ const NoteGrid: React.FC = () => {
           )}
         </div>
       </div>
-      {draggingNote && (
-        <div ref={ghostRef} style={{
+      {draggingNote && dragRef.current && (
+        <div ref={ghostRef} aria-hidden="true" style={{
           position: 'absolute', left: 0, top: 0, zIndex: 9999, pointerEvents: 'none', willChange: 'transform',
-          width: ((draggingNote.customSize ? draggingNote.width || CELL_W : CELL_W) - fsn(12, gfs)) * 0.92,
-          height: ((draggingNote.customSize ? draggingNote.height || CELL_H : CELL_H) - fsn(12, gfs)) * 0.92,
+          width: dragRef.current.width,
+          height: dragRef.current.height,
         }}>
           <NoteCard note={draggingNote} isDragGhost />
         </div>
@@ -280,4 +301,4 @@ const NoteGrid: React.FC = () => {
   );
 };
 
-export default NoteGrid;
+export default React.memo(NoteGrid);

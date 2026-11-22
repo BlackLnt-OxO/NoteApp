@@ -42,13 +42,18 @@ export function prepareGlassEntrance(grid: HTMLElement, reveal: () => void) {
   reveal();
 }
 
-export function watchGlassCard(element: HTMLElement, radius: number, scope: GlassScope = 'workspace') {
+export function prepareGlassCards(elements: Element[], reveal: () => void) {
+  if (controller) return controller.prepareCards(elements, reveal);
+  reveal();
+}
+
+export function watchGlassCard(element: HTMLElement, radius: number, scope: GlassScope = 'workspace', immediate = false) {
   if (!window.ResizeObserver || !window.IntersectionObserver
     || !window.CSS?.supports('backdrop-filter', 'url("#noteapp-glass")')
     || !/\bChrom(?:e|ium)\//.test(navigator.userAgent)) return;
 
   controller ??= createController();
-  return controller.watch(element, radius, scope);
+  return controller.watch(element, radius, scope, immediate);
 }
 
 function createController() {
@@ -138,7 +143,6 @@ function createController() {
   }
 
   function prepareEntrance(grid: HTMLElement, reveal: () => void) {
-    const deadline = performance.now() + ENTRANCE_TIMEOUT_MS;
     const clip = { left: 0, top: 0, right: document.documentElement.clientWidth, bottom: document.documentElement.clientHeight };
     for (let parent = grid.parentElement; parent; parent = parent.parentElement) {
       if (!parent.hasAttribute('data-glass-scroll-container')) continue;
@@ -149,13 +153,20 @@ function createController() {
       clip.bottom = Math.min(clip.bottom, bounds.bottom);
     }
 
-    const visible: { card: Card; width: number; height: number }[] = [];
-    for (const element of grid.querySelectorAll<HTMLElement>('.liquid-glass-card')) {
-      const card = cards.get(element);
-      if (!card) continue;
+    const elements = Array.from(grid.querySelectorAll('.liquid-glass-card')).filter(element => {
+      if (!cards.has(element)) return false;
       const bounds = element.getBoundingClientRect();
-      if (bounds.right <= clip.left || bounds.left >= clip.right || bounds.bottom <= clip.top || bounds.top >= clip.bottom) continue;
-      visible.push({ card, width: element.offsetWidth, height: element.offsetHeight });
+      return bounds.right > clip.left && bounds.left < clip.right && bounds.bottom > clip.top && bounds.top < clip.bottom;
+    });
+    return prepareCards(elements, reveal);
+  }
+
+  function prepareCards(elements: Element[], reveal: () => void) {
+    const deadline = performance.now() + ENTRANCE_TIMEOUT_MS;
+    const visible: { card: Card; width: number; height: number }[] = [];
+    for (const element of elements) {
+      const card = cards.get(element);
+      if (card) visible.push({ card, width: card.element.offsetWidth, height: card.element.offsetHeight });
     }
 
     const loading = new Set<Promise<void>>();
@@ -249,15 +260,22 @@ function createController() {
 
   return {
     prepareEntrance,
+    prepareCards,
     updateBlur(scope: GlassScope, radius: number) {
       for (const pair of filters.values()) {
         if (pair.scope !== scope) continue;
         for (const node of pair.nodes) updateGlassBlur(node, radius);
       }
     },
-    watch(element: HTMLElement, radius: number, scope: GlassScope) {
+    watch(element: HTMLElement, radius: number, scope: GlassScope, immediate: boolean) {
       const card: Card = { element, radius, scope, width: 0, height: 0, visible: false };
       cards.set(element, card);
+      if (immediate) {
+        card.width = element.offsetWidth;
+        card.height = element.offsetHeight;
+        card.visible = true;
+        refresh(card);
+      }
       resize.observe(element, { box: 'border-box' });
       intersection.observe(element);
 

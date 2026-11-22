@@ -158,7 +158,7 @@ export function FlowGrid<T>({
       data-glass-scroll-container
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}
-      style={{ position: 'relative', width: '100%', height: '100%', overflow: 'auto', touchAction: 'none' }}
+      style={{ position: 'relative', width: '100%', height: '100%', overflow: 'auto', scrollbarGutter: 'stable', touchAction: 'none' }}
     >
       <div ref={glassGridRef} style={{ position: 'relative', minHeight: totalHeight }}>
         {positions.map((pos, idx) => {
