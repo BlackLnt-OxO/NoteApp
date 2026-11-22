@@ -1,6 +1,6 @@
 const SVG_NAMESPACE = 'http://www.w3.org/2000/svg';
 const MAX_MAP_SIDE = 384;
-const EDGE_WIDTH = 12;
+const EDGE_WIDTH = 18;
 const REFRACTION = 28;
 const DISPERSION = 2.3;
 
@@ -12,13 +12,15 @@ export interface GlassShape {
 
 export interface GlassFilter {
   element: SVGFilterElement;
-  centerBlur: SVGFEGaussianBlurElement;
-  rimBlur: SVGFEGaussianBlurElement;
+  blur: SVGFEGaussianBlurElement;
 }
 
-export function updateGlassBlur({ centerBlur, rimBlur }: GlassFilter, radius: number) {
-  centerBlur.setAttribute('stdDeviation', String(radius));
-  rimBlur.setAttribute('stdDeviation', String(radius / 8));
+export function updateGlassBlur(filter: GlassFilter, radius: number) {
+  filter.blur.setAttribute('stdDeviation', String(radius));
+}
+
+function smoothstep(value: number) {
+  return value * value * (3 - 2 * value);
 }
 
 export function glassSvg<K extends keyof SVGElementTagNameMap>(
@@ -68,11 +70,12 @@ export function createGlassMap({ width, height, radius }: GlassShape): string | 
       const normalX = diagonal > 0 ? outsideX / diagonal : Number(curvedX > curvedY);
       const normalY = diagonal > 0 ? outsideY / diagonal : Number(curvedY >= curvedX);
       const distanceToCenter = 1 - depth / bevel;
-      const bend = 116 * distanceToCenter ** 1.7;
-      const blend = Math.min(1, distanceToCenter * 2);
+      // Both the bend and its slope reach zero at the inner end of the bevel.
+      const bend = 116 * smoothstep(distanceToCenter);
+      const blend = smoothstep(Math.min(1, distanceToCenter * 3));
       pixels.data[index] = 128 - Math.sign(offsetX) * normalX * bend;
       pixels.data[index + 1] = 128 - Math.sign(offsetY) * normalY * bend;
-      pixels.data[index + 2] = 255 * blend * blend * (3 - 2 * blend);
+      pixels.data[index + 2] = 255 * blend;
     }
   }
 
@@ -88,42 +91,39 @@ export function createGlassFilter(id: string, shape: GlassShape, mapUrl: string,
     href: mapUrl, x: 0, y: 0, width: shape.width, height: shape.height,
     preserveAspectRatio: 'none', result: 'map',
   }));
-  const centerBlur = glassSvg('feGaussianBlur', { in: 'SourceGraphic', edgeMode: 'duplicate', result: 'frostedCenter' });
-  const rimBlur = glassSvg('feGaussianBlur', { in: 'SourceGraphic', edgeMode: 'duplicate', result: 'frostedRim' });
-  filter.append(centerBlur, rimBlur);
-  const glassFilter = { element: filter, centerBlur, rimBlur };
+  const frost = glassSvg('feGaussianBlur', { in: 'SourceGraphic', edgeMode: 'duplicate', result: 'frostedBackdrop' });
+  filter.append(frost);
+  const glassFilter = { element: filter, blur: frost };
   updateGlassBlur(glassFilter, blur);
 
   function displace(scale: number, result: string) {
     return glassSvg('feDisplacementMap', {
-      in: 'frostedRim', in2: 'map', scale, xChannelSelector: 'R', yChannelSelector: 'G', result,
+      in: 'frostedBackdrop', in2: 'map', scale, xChannelSelector: 'R', yChannelSelector: 'G', result,
     });
   }
 
-  if (rgb) {
-    const channels = ['red', 'green', 'blue'];
-    channels.forEach((channel, i) => {
-      const matrix = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0];
-      matrix[i * 6] = 1;
-      filter.append(
-        displace(REFRACTION + (i - 1) * DISPERSION, channel + 'Shift'),
-        glassSvg('feColorMatrix', { in: channel + 'Shift', type: 'matrix', values: matrix.join(' '), result: channel }),
-      );
-    });
-    filter.append(
-      glassSvg('feBlend', { in: 'red', in2: 'green', mode: 'screen', result: 'redGreen' }),
-      glassSvg('feBlend', { in: 'redGreen', in2: 'blue', mode: 'screen', result: 'rim' }),
-    );
-  } else {
+  if (!rgb) {
     filter.append(displace(REFRACTION, 'rim'));
+    return glassFilter;
   }
 
+  const channels = ['red', 'green', 'blue'];
+  channels.forEach((channel, i) => {
+    const matrix = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0];
+    matrix[i * 6] = 1;
+    filter.append(
+      displace(REFRACTION + (i - 1) * DISPERSION, channel + 'Shift'),
+      glassSvg('feColorMatrix', { in: channel + 'Shift', type: 'matrix', values: matrix.join(' '), result: channel }),
+    );
+  });
   filter.append(
+    glassSvg('feBlend', { in: 'red', in2: 'green', mode: 'screen', result: 'redGreen' }),
+    glassSvg('feBlend', { in: 'redGreen', in2: 'blue', mode: 'screen', result: 'rim' }),
     glassSvg('feColorMatrix', {
       in: 'map', type: 'matrix', values: '0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 1 0 0', result: 'rimMask',
     }),
     glassSvg('feComposite', { in: 'rim', in2: 'rimMask', operator: 'in', result: 'maskedRim' }),
-    glassSvg('feComposite', { in: 'maskedRim', in2: 'frostedCenter', operator: 'over' }),
+    glassSvg('feComposite', { in: 'maskedRim', in2: 'frostedBackdrop', operator: 'over' }),
   );
   return glassFilter;
 }
