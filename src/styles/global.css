@@ -179,6 +179,24 @@ body {
 
 .glass-btn:active { transform: scale(0.97); }
 
+.workspace-mode-switch {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  flex-shrink: 0;
+  gap: 5px;
+}
+
+.workspace-mode-switch > button {
+  justify-content: center;
+  padding-inline: 0;
+  white-space: nowrap;
+}
+
+.workspace-mode-switch [aria-current="page"] {
+  background: var(--accent);
+  color: white;
+}
+
 .btn-accent {
   background: var(--accent);
   color: #fff;

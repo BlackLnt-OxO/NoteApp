@@ -339,7 +339,7 @@ const App: React.FC = () => {
         }}>
           {viewMode === 'notes'
             ? <Sidebar onCreateNote={() => setShowCreateDialog(true)} />
-            : <AssetSidebar view={viewMode} onView={setViewMode} />}
+            : <AssetSidebar />}
         </div>
         <div style={{ flex: 1, position: 'relative', overflow: 'hidden', borderRadius: '0 0 12px 0', display: 'flex', flexDirection: 'column' }}>
           {/* When the left sidebar is collapsed, a slim top bar keeps the view

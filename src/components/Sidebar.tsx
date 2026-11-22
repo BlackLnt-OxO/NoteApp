@@ -2,13 +2,14 @@ import React, { useState } from 'react';
 import { useNoteStore } from '../store';
 import { DEFAULT_COLORS } from '../types';
 import { askConfirm } from './ConfirmDialog';
+import WorkspaceModeSwitch from './WorkspaceModeSwitch';
 
 interface SidebarProps {
   onCreateNote: () => void;
 }
 
 const Sidebar: React.FC<SidebarProps> = ({ onCreateNote }) => {
-  const { notes, tags, activeTag, setActiveTag, addTag, deleteTag, updateTag, settings, viewMode, setViewMode, setSidebarCollapsed } = useNoteStore();
+  const { notes, tags, activeTag, setActiveTag, addTag, deleteTag, updateTag, settings } = useNoteStore();
   const fs = settings.fontSize;
   const [editingTag, setEditingTag] = useState<string | null>(null);
   const [hoverTag, setHoverTag] = useState<string | null>(null);
@@ -63,7 +64,8 @@ const Sidebar: React.FC<SidebarProps> = ({ onCreateNote }) => {
       overflow: 'hidden',
       background: 'rgba(var(--sidebar-tint), var(--workspace-sidebar-opacity, var(--sidebar-base-opacity)))',
     }}>
-      {/* Create note button */}
+      <WorkspaceModeSwitch />
+
       <button
         onClick={onCreateNote}
         className="btn-accent"
@@ -79,41 +81,13 @@ const Sidebar: React.FC<SidebarProps> = ({ onCreateNote }) => {
           justifyContent: 'center',
           gap: '6px',
           fontFamily: 'inherit',
+          marginTop: '8px',
           marginBottom: '8px',
           letterSpacing: '0.3px',
         }}
       >
         + 新建便笺
       </button>
-
-      {/* View mode toggle */}
-      <div style={{ display: 'flex', gap: '3px', marginBottom: '8px' }}>
-        {([
-          { id: 'notes' as const, label: '便笺' },
-          { id: 'inkcanvas' as const, label: '画布' },
-          { id: 'pdf' as const, label: '文件' },
-        ]).map((m) => (
-          <button
-            key={m.id}
-            onClick={() => { setViewMode(m.id); setSidebarCollapsed(false); }}
-            className={viewMode === m.id ? 'hover-ring-dark' : 'hover-ring-light'}
-            style={{
-              flex: 1,
-              padding: '5px 6px',
-              background: viewMode === m.id ? 'var(--accent)' : 'var(--glass-bg-light)',
-              border: viewMode === m.id ? 'none' : '1px solid var(--glass-border)',
-              borderRadius: '6px',
-              color: viewMode === m.id ? '#fff' : 'var(--text-secondary)',
-              cursor: 'pointer',
-              fontSize: Math.max(9, fs - 3) + 'px',
-              fontFamily: 'inherit',
-              fontWeight: viewMode === m.id ? 600 : 400,
-            }}
-          >
-            {m.label}
-          </button>
-        ))}
-      </div>
 
       {/* Tag list */}
       <div style={{

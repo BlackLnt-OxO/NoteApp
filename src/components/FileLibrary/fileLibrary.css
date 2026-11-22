@@ -10,21 +10,11 @@
   background: rgba(var(--sidebar-tint), var(--workspace-sidebar-opacity, var(--sidebar-base-opacity)));
 }
 
-.asset-view-switch,
 .asset-sidebar-heading,
 .asset-row-actions {
   display: flex;
   align-items: center;
   gap: 5px;
-}
-
-.asset-view-switch button {
-  flex: 1;
-}
-
-.asset-view-switch [aria-current="page"] {
-  background: var(--accent);
-  color: white;
 }
 
 .asset-sidebar-heading {

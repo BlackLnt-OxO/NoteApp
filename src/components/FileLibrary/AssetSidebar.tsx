@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import type { ViewMode } from '../../types';
+import WorkspaceModeSwitch from '../WorkspaceModeSwitch';
 import { rebindAsset, useAssetLibrary } from './assetLibrary';
 import { dispatchAssetDrop } from './assetDrop';
 import { fileKind, fileName, fileTypeLabel } from './fileTypes';
@@ -8,7 +8,7 @@ import './fileLibrary.css';
 
 interface Drag { id: string; path: string; pointer: number; x: number; y: number }
 
-export default function AssetSidebar({ view, onView }: { view: ViewMode; onView: (view: ViewMode) => void }) {
+export default function AssetSidebar() {
   const assets = useAssetLibrary(state => state.assets);
   const available = useAssetLibrary(state => state.available);
   const pending = useRef<Drag | null>(null);
@@ -56,10 +56,7 @@ export default function AssetSidebar({ view, onView }: { view: ViewMode; onView:
   }, []);
 
   return <aside className="asset-sidebar">
-    <nav aria-label="工作区" className="asset-view-switch">
-      {([['notes', '便笺'], ['inkcanvas', '画布'], ['pdf', '文件']] as const).map(([key, label]) =>
-        <button key={key} className="glass-btn" aria-current={view === key ? 'page' : undefined} onClick={() => onView(key)}>{label}</button>)}
-    </nav>
+    <WorkspaceModeSwitch />
     <div className="asset-sidebar-heading">
       <strong>资料库</strong>
       <button className="glass-btn" disabled={picking || !window.electronAPI?.pickLibraryFiles} onClick={() => void add()}>添加资料</button>
