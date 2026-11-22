@@ -173,6 +173,7 @@ const LibraryHome: React.FC<Props> = ({ onImport, onOpen, onReplace, importing }
       {sorted.length > 0 && (
         <FlowGrid
           items={sorted}
+          category={selectedCategory}
           itemWidth={220}
           itemHeight={110}
           gap={14}

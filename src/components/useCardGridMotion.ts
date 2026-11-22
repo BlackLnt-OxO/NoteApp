@@ -1,28 +1,32 @@
 import { useLayoutEffect, useRef, type RefObject } from 'react';
 import { prepareGlassCards } from './liquidGlassSurface';
+import type { GridDrop } from './useCardDrag';
 
 type Point = { x: number; y: number };
-export type NoteDrop = Point & { id: string };
 type Move = { element: HTMLElement; from: Point };
 type PendingMoves = { arrivals: HTMLElement[]; moves: Move[]; cancel?: () => void };
 
 const MOVE_DURATION = 200;
 
-export function useNoteGridMotion(
+export function useCardGridMotion(
   scrollRef: RefObject<HTMLDivElement>, gridRef: RefObject<HTMLDivElement>,
-  tag: string, positions: ReadonlyMap<string, Point>, draggingId: string | null,
-  dropRef: { current: NoteDrop | null },
+  tag: string | undefined, positions: ReadonlyMap<string, Point>, draggingId: string | null,
+  dropRef: { current: GridDrop | null },
 ) {
-  const previous = useRef<{ tag: string; positions: ReadonlyMap<string, Point> }>();
+  const previous = useRef<{ tag: string | undefined; positions: ReadonlyMap<string, Point> }>();
   const animations = useRef(new Map<HTMLElement, Animation>());
   const pending = useRef<PendingMoves>();
 
-  useLayoutEffect(() => () => {
-    pending.current?.cancel?.();
-    pending.current = undefined;
-    for (const animation of animations.current.values()) animation.cancel();
-    animations.current.clear();
-  }, []);
+  useLayoutEffect(() => {
+    const grid = gridRef.current;
+    return () => {
+      pending.current?.cancel?.();
+      pending.current = undefined;
+      for (const animation of animations.current.values()) animation.cancel();
+      animations.current.clear();
+      if (grid) delete grid.dataset.gridSettling;
+    };
+  }, [gridRef]);
 
   useLayoutEffect(() => {
     const last = previous.current;
@@ -48,7 +52,7 @@ export function useNoteGridMotion(
     const moves: Move[] = [];
     const arrivals: HTMLElement[] = [];
     const surfaces: Element[] = [];
-    const elements = Array.from(grid.querySelectorAll<HTMLElement>('.note-card-wrapper'));
+    const elements = Array.from(grid.querySelectorAll<HTMLElement>('[data-grid-card-id]'));
     const minY = scroll.scrollTop;
     const maxY = minY + scroll.clientHeight;
     const minX = scroll.scrollLeft;
@@ -56,13 +60,13 @@ export function useNoteGridMotion(
 
     // Read positions and current animation offsets before writing any transforms.
     for (const element of elements) {
-      const id = element.dataset.noteId!;
+      const id = element.dataset.gridCardId!;
       const next = positions.get(id)!;
       const old = last.positions.get(id);
       const comesFromDrop = drop?.id === id;
       const from = comesFromDrop ? drop : old;
-      const width = element.offsetWidth;
-      const height = element.offsetHeight;
+      const width = parseFloat(element.style.width);
+      const height = parseFloat(element.style.height);
       const visible = (point: Point) => point.x < maxX && point.x + width > minX
         && point.y < maxY && point.y + height > minY;
       const isVisible = visible(next);
@@ -84,7 +88,7 @@ export function useNoteGridMotion(
 
     for (const [element, animation] of animations.current) {
       animation.cancel();
-      delete element.dataset.noteLayoutMoving;
+      delete element.dataset.gridLayoutMoving;
     }
     animations.current.clear();
     for (const { element } of waiting?.moves ?? []) element.style.removeProperty('transform');
@@ -100,18 +104,21 @@ export function useNoteGridMotion(
       if (pending.current !== batch) return;
       pending.current = undefined;
       for (const element of arrivals) element.style.removeProperty('visibility');
+      if (moves.length) grid.dataset.gridSettling = '';
+      else delete grid.dataset.gridSettling;
       for (const { element, from } of moves) {
         element.style.removeProperty('transform');
         const animation = element.animate(
           [{ transform: `translate(${from.x}px, ${from.y}px)` }, { transform: 'none' }],
           { duration: MOVE_DURATION, easing: 'cubic-bezier(.2,.7,.25,1)' },
         );
-        element.dataset.noteLayoutMoving = '';
+        element.dataset.gridLayoutMoving = '';
         animations.current.set(element, animation);
         animation.onfinish = () => {
           if (animations.current.get(element) !== animation) return;
           animations.current.delete(element);
-          delete element.dataset.noteLayoutMoving;
+          delete element.dataset.gridLayoutMoving;
+          if (!animations.current.size) delete grid.dataset.gridSettling;
         };
       }
     };

@@ -29,13 +29,14 @@ export function useButtonPointerResponse(uiScale: number) {
     let x = 0;
     let y = 0;
     let box: DOMRect | undefined;
+    let needsHit = false;
     let lastX: string | undefined;
     let lastY: string | undefined;
     const movingElements = new WeakSet<Element>();
     const observer = typeof ResizeObserver === 'undefined' ? undefined : new ResizeObserver(invalidate);
 
     function isMoving(element: HTMLElement) {
-      if (element.closest('[data-note-layout-moving]')) return true;
+      if (element.closest('[data-grid-layout-moving]')) return true;
       for (let ancestor: HTMLElement | null = element; ancestor; ancestor = ancestor.parentElement) {
         if (movingElements.has(ancestor)) return true;
       }

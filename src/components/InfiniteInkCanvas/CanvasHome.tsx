@@ -194,11 +194,15 @@ const CanvasHome: React.FC<{ onOpen: (id: string) => void; onNew: () => void }> 
       {filtered.length > 0 && (
         <FlowGrid
           items={filtered}
+          category={selectedCategory}
           itemWidth={CARD_W}
           itemHeight={CARD_H}
           gap={14}
           getId={(c) => c.id}
-          onReorder={reorderCanvases}
+          onReorder={(from, to) => reorderCanvases(
+            canvases.findIndex(canvas => canvas.id === filtered[from].id),
+            canvases.findIndex(canvas => canvas.id === filtered[to].id),
+          )}
           onCardClick={(c) => onOpen(c.id)}
           renderCard={(c, _idx, hovered, dragState) => (
             <LiquidGlassCard radius={12} dragState={dragState}

@@ -264,10 +264,18 @@ body {
   backdrop-filter: var(--glass-filter);
 }
 
-.liquid-glass-card--note[data-drag-preview="true"][data-glass-optics="true"],
-.note-card-wrapper[data-note-layout-moving] .liquid-glass-card[data-glass-optics="true"],
+.liquid-glass-card[data-drag-preview="true"][data-glass-optics="true"],
+[data-grid-layout-moving] .liquid-glass-card[data-glass-optics="true"],
 :root[data-glass-scrolling="true"] .liquid-glass-card[data-glass-optics="true"]:not(:hover, :focus-within, [data-selected="true"], [data-drag-preview="true"]) {
   --glass-filter: var(--glass-mono-filter);
+}
+
+/* The moving foreground still refracts the scene. A stationary card does not
+   need a second displacement pass while a gesture or modal covers it. */
+[data-grid-dragging] [data-grid-card-id] > .liquid-glass-card[data-glass-optics="true"],
+[data-grid-settling] [data-grid-card-id]:not([data-grid-layout-moving]) > .liquid-glass-card[data-glass-optics="true"],
+[data-settings-open] [data-grid-card-id] > .liquid-glass-card[data-glass-optics="true"] {
+  backdrop-filter: var(--card-frost-filter, none);
 }
 
 @supports not (mask-composite: exclude) {
