@@ -34,7 +34,7 @@ describe('ColorPicker', () => {
 
   it('has an eyedropper button that calls electronAPI.startEyedropper', () => {
     render(<ColorPicker {...defaultProps} />);
-    const eyedropperBtn = document.querySelector('button[title="吸管取色"]');
+    const eyedropperBtn = screen.getByRole('button', { name: '吸管取色' });
     expect(eyedropperBtn).toBeInTheDocument();
     fireEvent.click(eyedropperBtn!);
     expect(window.electronAPI?.startEyedropper).toHaveBeenCalled();

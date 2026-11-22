@@ -48,7 +48,7 @@ export default function AssetObject({ object, camera, interactive, selected, onD
 
   return <div className="linked-asset-object" data-ink-object-id={object.id}
     data-ink-selected={selected || undefined} data-offline={offline} data-image={isImage && !offline}
-    title={offline ? '文件离线' : fileName(path)}
+    data-tooltip={offline ? '文件离线' : fileName(path)}
     onDoubleClick={event => {
       if (isImage && !offline) return;
       event.stopPropagation();
@@ -70,7 +70,7 @@ export default function AssetObject({ object, camera, interactive, selected, onD
       <button className="glass-btn" onClick={onDelete}>删除对象</button>
       <button className="glass-btn" onClick={() => setMenu(false)}>关闭</button>
     </div>}
-    {interactive && selected && <button className="linked-asset-resize" title="调整大小" aria-label="调整大小"
+    {interactive && selected && <button className="linked-asset-resize" data-tooltip="调整大小" aria-label="调整大小"
       onPointerDown={event => {
         if (event.button !== 0) return;
         event.stopPropagation();

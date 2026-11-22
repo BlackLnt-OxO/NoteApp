@@ -3,7 +3,7 @@ import type { PdfStroke, PdfCamera } from './PdfAnnotation/PdfTypes';
 import { SHAPE_NAMES, shapeBounds, shapePathPoints, withShape, type ShapePoint } from './InkShapeGeometry';
 import { dragShapeHandle, setShapeDimension, shapeDimensions, shapeHandles } from './InkShapeEditing';
 import { setPointerHold } from './inkInputActivity';
-import { useCanvasToolbarStore, usePdfToolbarStore } from './InfiniteInkCanvas/useToolbarStore';
+import { INK_TOOLBAR_LAYOUT } from './InfiniteInkCanvas/inkToolbarLayout';
 
 const fieldStyle: React.CSSProperties = { width: 68, minWidth: 0, padding: '4px 5px', borderRadius: 5, border: '1px solid var(--glass-border)', background: 'var(--glass-bg-light)', color: 'var(--text-primary)', font: 'inherit' };
 function NumberField({ label, value, onCommit, min, max }: { label: string; value: number; onCommit: (v: number) => boolean; min?: number; max?: number }) {
@@ -37,15 +37,14 @@ interface Props {
 export default function InkShapeEditor({ stroke, camera, uiScale, container, original, onPreview, onFinish, onDismiss }: Props) {
   const [preview, setPreview] = useState<PdfStroke | null>(null);
   const panelRef = useRef<HTMLDivElement>(null);
-  const canvasDock = useCanvasToolbarStore(s => `${s.expanded}/${s.width}/${s.top}/${s.offset}/${s.side}`);
-  const pdfDock = usePdfToolbarStore(s => `${s.expanded}/${s.width}/${s.top}/${s.offset}/${s.side}`);
   const [layout, setLayout] = useState({ width: window.innerWidth / uiScale, height: window.innerHeight / uiScale,
     panelWidth: 198, panelHeight: 300, obstacles: [] as { x: number; y: number; width: number; height: number }[] });
   useLayoutEffect(() => {
     const measure = () => {
       const r = container.current?.getBoundingClientRect(), panel = panelRef.current?.getBoundingClientRect();
       if (!r || !r.width || !r.height) return;
-      const obstacles = [...document.querySelectorAll('.canvas-toolbar-shell.is-expanded')].map(el => el.getBoundingClientRect())
+      const obstacles = [...document.querySelectorAll('[data-ink-toolbar][data-expanded="true"] .ink-toolbar-row, [data-ink-tool-popover][data-open="true"]')]
+        .map(el => el.getBoundingClientRect())
         .filter(b => b.width && b.height && b.right > r.left && b.left < r.right && b.bottom > r.top && b.top < r.bottom)
         .map(b => ({ x: (b.left - r.left) / uiScale, y: (b.top - r.top) / uiScale, width: b.width / uiScale, height: b.height / uiScale }));
       const next = { width: r.width / uiScale, height: r.height / uiScale, panelWidth: panel?.width ? panel.width / uiScale : 198,
@@ -56,8 +55,12 @@ export default function InkShapeEditor({ stroke, camera, uiScale, container, ori
     const observer = new ResizeObserver(measure);
     if (container.current) observer.observe(container.current);
     if (panelRef.current) observer.observe(panelRef.current);
-    return () => observer.disconnect();
-  }, [container, uiScale, canvasDock, pdfDock]);
+    window.addEventListener(INK_TOOLBAR_LAYOUT, measure);
+    return () => {
+      observer.disconnect();
+      window.removeEventListener(INK_TOOLBAR_LAYOUT, measure);
+    };
+  }, [container, uiScale]);
   const colorDraft = useRef<string | null>(null);
   const toHex = (color: string) => {
     if (/^#[0-9a-f]{6}$/i.test(color)) return color;
@@ -137,8 +140,9 @@ export default function InkShapeEditor({ stroke, camera, uiScale, container, ori
       <rect x={topLeft.x} y={topLeft.y} width={Math.max(0, bottomRight.x - topLeft.x)} height={Math.max(0, bottomRight.y - topLeft.y)} fill="none" stroke="var(--accent, #6b5ce7)" strokeWidth={1 / uiScale} strokeDasharray="4 3" />
       {shapeHandles(geometry, camera.zoom).map(h => {
         const p = screen(h);
-        return <g key={h.key} style={{ pointerEvents: 'all', cursor: h.key === 'rotate' ? 'grab' : 'crosshair' }} {...handlers(h.key)}>
-          <title>{h.label}</title><circle cx={p.x} cy={p.y} r={12 / uiScale} fill="transparent" />
+        return <g key={h.key} aria-label={h.label} data-tooltip={h.label}
+          style={{ pointerEvents: 'all', cursor: h.key === 'rotate' ? 'grab' : 'crosshair' }} {...handlers(h.key)}>
+          <circle cx={p.x} cy={p.y} r={12 / uiScale} fill="transparent" />
           <circle cx={p.x} cy={p.y} r={(h.key === 'rotate' ? 5 : 4) / uiScale} fill="var(--dropdown-bg, #fff)" stroke="var(--accent, #6b5ce7)" strokeWidth={1.5 / uiScale} />
         </g>;
       })}

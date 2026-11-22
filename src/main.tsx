@@ -1,7 +1,11 @@
 import React from 'react';
 import ReactDOM from 'react-dom/client';
 import App from './App';
+import { installTooltips } from './tooltips';
 import './styles/global.css';
+
+const disposeTooltips = installTooltips();
+if (import.meta.hot) import.meta.hot.dispose(disposeTooltips);
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>

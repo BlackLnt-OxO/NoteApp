@@ -386,7 +386,7 @@ const DiagnosticPanel: React.FC<DiagnosticPanelProps> = ({ onClose, visible }) =
             <div style={{ display: 'flex', alignItems: 'center', gap: fsn(8, gfs) }}>
               <span style={{ color: '#8ff' }}>墨迹性能（{inkLive?.surface === 'pdf' ? 'PDF' : '无限画布'}）</span>
               {import.meta.env.DEV && <button className="glass-btn" onClick={downloadInkDiagnostics}
-                title="导出最近 512 条瓦片更新记录；不含笔迹正文或图片"
+                data-tooltip="导出最近 512 条瓦片更新记录；不含笔迹正文或图片"
                 style={{ marginLeft: 'auto', fontSize: fs(10, gfs), padding: `${fs(2, gfs)} ${fs(8, gfs)}` }}>
                 一键导出现场
               </button>}

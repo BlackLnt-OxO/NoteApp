@@ -70,7 +70,7 @@ export default function AssetSidebar({ view, onView }: { view: ViewMode; onView:
       {assets.map(asset => {
         const offline = available[asset.id] === false;
         return <div key={asset.id}>
-          <button className="asset-row" data-offline={offline} title={asset.path}
+          <button className="asset-row" data-offline={offline} data-tooltip={asset.path}
             onContextMenu={event => { event.preventDefault(); setMenu(asset.id); }}
             onPointerDown={event => {
               if (event.button !== 0 || offline) return;

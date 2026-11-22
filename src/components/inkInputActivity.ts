@@ -9,8 +9,18 @@ let lastInputEnd = -Infinity;
  *  reaches the canvas) — persistence must defer for them all the same. */
 let holdCount = 0;
 
+export const INK_STROKE_START = 'ink:stroke-start';
+
+export function notifyInkStrokeStart(pointerId: number): void {
+  window.dispatchEvent(new CustomEvent(INK_STROKE_START, { detail: pointerId }));
+}
+
+export function isInkPointerActive(): boolean {
+  return activeInputs.size > 0 || holdCount > 0;
+}
+
 export function isInkInputBusy(): boolean {
-  return activeInputs.size > 0 || holdCount > 0 || performance.now() - lastInputEnd < 200;
+  return isInkPointerActive() || performance.now() - lastInputEnd < 200;
 }
 
 /** Claim/release a pointer hold for gestures the canvas's input listeners miss. */

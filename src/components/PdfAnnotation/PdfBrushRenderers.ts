@@ -4,7 +4,7 @@ import { drawVariableRibbonWork } from './InkRibbonRenderer';
 import { finishInkWork } from '../InkCooperativeWork';
 import { drawInkShape } from '../InkShapeGeometry';
 /** Shared deterministic ink rendering for infinite canvas and PDF.
- * New marker/fountain/pencil strokes use version 2 incremental coverage masks.
+ * New ink uses incremental coverage masks. Each stroke keeps its brush version.
  * Legacy strokes keep the single-fill, resampled ribbon renderer below;
  * free-eraser rendering also retains its existing path.
  * The version is persisted so reopening ink cannot silently change its shape.
@@ -12,7 +12,7 @@ import { drawInkShape } from '../InkShapeGeometry';
 
 import { drawStrokePath, applyOneEuro, smoothingToMinCutoff } from './PdfEngine';
 import type { PdfStroke } from './PdfTypes';
-import { getStreamingInk } from './StreamingInkStroke';
+import { getStreamingInk, usesStreamingInk } from './StreamingInkStroke';
 
 import { clamp01, sanitizePoints, averagePressure, markerStrokeAlpha, computeMarkerWidths, computeFountainWidths, computePencilCoreWidths, resampleSpacing, resampleForRibbon, smoothWidths, resolveFeatherWorld } from './InkMath';
 import type { ResamplePoint, ResampleOut } from './InkMath';
@@ -32,10 +32,11 @@ export function drawAnnotatedStroke(
   stroke: PdfStroke,
   dx = 0,
   dy = 0,
+  alignLiveCells = false,
 ): void {
   if (stroke.geometry) { drawInkShape(ctx, stroke, dx, dy); return; }
-  if (stroke.renderVersion === 2 && stroke.compositeOperation !== 'destination-out') {
-    getStreamingInk(stroke).draw(ctx, dx, dy);
+  if (usesStreamingInk(stroke) && stroke.compositeOperation !== 'destination-out') {
+    getStreamingInk(stroke).draw(ctx, dx, dy, undefined, alignLiveCells);
     return;
   }
   if (stroke.compositeOperation === 'destination-out') {
@@ -52,6 +53,10 @@ export function drawAnnotatedStroke(
       // (the DEFAULT brush is always ribbon-drawn).
       return drawMarker(ctx, stroke, dx, dy);
   }
+}
+
+export function drawLiveAnnotatedStroke(ctx: CanvasRenderingContext2D, stroke: PdfStroke): void {
+  drawAnnotatedStroke(ctx, stroke, 0, 0, true);
 }
 
 // ---- Shared prepare pipeline ----------------------------------------------------
@@ -129,7 +134,7 @@ export function prepareInkRibbon(stroke: PdfStroke): InkRibbon | null { return f
 
 export function* prepareInkRibbonWork(stroke: PdfStroke): Generator<void, InkRibbon | null, unknown> {
     if (stroke.geometry) return null;
-    if (stroke.renderVersion === 2 || stroke.style === 'pencil')
+    if (usesStreamingInk(stroke) || stroke.style === 'pencil')
         return null;
     const pts = (yield* preparePointsWork(stroke));
     if (pts.length === 0)

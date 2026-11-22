@@ -20,6 +20,7 @@ import PdfView from './components/PdfAnnotation/PdfView';
 import { usePdfStore } from './components/PdfAnnotation/PdfStore';
 import { themeCanvasColors, isDefaultBrushColor } from './themeColors';
 import { fs, fsn } from './utils';
+import { backgroundShade } from './workspaceBackground';
 
 // Round glass affordance shared by the collapsed-state screenshot buttons
 // (bottom-left cluster) — same look as the settings / fullscreen circles.
@@ -36,6 +37,10 @@ const App: React.FC = () => {
   const { settings, loadData, saveData, setNoteFloating, viewMode, setViewMode, sidebarCollapsed, setSidebarCollapsed, toggleSidebar, setUiScale } = useNoteStore();
   // Subscribe via selector so the title-bar zoom readout re-renders on change.
   const uiScale = useNoteStore((s) => s.uiScale);
+  const canvasOpen = useCanvasLibrary(s => s.canvases.some(canvas => canvas.id === s.currentCanvasId));
+  const fileOpen = usePdfStore(s => !!s.fileName);
+  const shade = backgroundShade(settings.backgroundOpacity);
+  const showBackground = viewMode === 'notes' || (viewMode === 'inkcanvas' ? !canvasOpen : !fileOpen);
   const gfs = settings.fontSize;
   const titleBarH = gfs >= 18 ? fsn(38, gfs) : 38;
   const [showCreateDialog, setShowCreateDialog] = useState(false);
@@ -258,6 +263,7 @@ const App: React.FC = () => {
 
   return (
     <div style={{
+      '--workspace-sidebar-opacity': Math.min(1, shade * 1.2),
       // Viewport zoom: compensate the layout size by 1/uiScale so that after
       // transform: scale the content exactly fills the fixed window.
       width: `${100 / uiScale}vw`,
@@ -268,29 +274,30 @@ const App: React.FC = () => {
       position: 'relative',
       backgroundColor: 'var(--page-bg)',
       borderRadius: '12px', overflow: 'hidden',
-    }}>
+    } as React.CSSProperties}>
       {storageBarrier && <div role="status" style={{ position: 'fixed', inset: 0, zIndex: 10000, display: 'grid', placeItems: 'center', background: 'rgba(0,0,0,.3)' }}>正在保存…</div>}
 
       {/* Background image via <img>, NOT CSS url(data:) — Chromium drops very large
           base64 data URLs in CSS, which is why the background never painted even
           though the renderer held the data. <img> renders any size reliably. */}
-      {settings.backgroundImage && (
+      {settings.backgroundImage && showBackground && (
         <img
           src={settings.backgroundImage}
           alt=""
+          data-workspace-background
           style={{
             position: 'absolute', inset: 0, zIndex: 0,
             width: '100%', height: '100%',
             objectFit: 'cover', objectPosition: 'center',
-            background: 'var(--page-bg)',
+            background: 'var(--page-bg)', pointerEvents: 'none',
           }}
         />
       )}
       {/* Dimming overlay on top of the image, driven by background opacity. */}
-      {settings.backgroundImage && (
-        <div style={{
+      {settings.backgroundImage && showBackground && (
+        <div data-workspace-background-shade style={{
           position: 'absolute', inset: 0, zIndex: 1, pointerEvents: 'none',
-          background: `rgba(var(--app-overlay), ${(1 - settings.backgroundOpacity).toFixed(2)})`,
+          background: `rgba(var(--app-overlay), ${shade})`,
         }} />
       )}
 
@@ -306,20 +313,20 @@ const App: React.FC = () => {
         </div>
         <div className="title-bar-right">
           <span
-            title="界面缩放：Ctrl+Shift 加/减 (60%–150%)"
+            data-tooltip="界面缩放：Ctrl+Shift 加/减 (60%–150%)"
             style={{ fontSize: fs(11, gfs), color: 'var(--text-muted)', marginRight: fs(8, gfs), userSelect: 'none', minWidth: fsn(38, gfs), textAlign: 'right' }}
           >
             {Math.round((uiScale - 0.1) * 100)}%
           </span>
-          <button className="title-btn" onClick={handleMinimize} title="最小化" style={{ fontSize: fs(13, gfs), width: fsn(32, gfs), height: fsn(28, gfs) }}>_</button>
-          <button className="title-btn" onClick={handleMaximize} title={isMaximized ? '还原' : '最大化'} style={{ fontSize: fs(13, gfs), width: fsn(32, gfs), height: fsn(28, gfs) }}>
+          <button className="title-btn" onClick={handleMinimize} aria-label="最小化" style={{ fontSize: fs(13, gfs), width: fsn(32, gfs), height: fsn(28, gfs) }}>_</button>
+          <button className="title-btn" onClick={handleMaximize} aria-label={isMaximized ? '还原' : '最大化'} style={{ fontSize: fs(13, gfs), width: fsn(32, gfs), height: fsn(28, gfs) }}>
             {isMaximized ? '[]' : 'o'}
           </button>
-          <button className="title-btn close" onClick={handleClose} title="关闭" style={{ fontSize: fs(13, gfs), width: fsn(32, gfs), height: fsn(28, gfs) }}>x</button>
+          <button className="title-btn close" onClick={handleClose} aria-label="关闭" style={{ fontSize: fs(13, gfs), width: fsn(32, gfs), height: fsn(28, gfs) }}>x</button>
         </div>
       </div>
 
-      <div style={{ position: 'relative', zIndex: 2, flex: 1, display: 'flex', overflow: 'hidden' }}>
+      <div data-ink-workspace style={{ position: 'relative', zIndex: 2, flex: 1, display: 'flex', overflow: 'hidden' }}>
         {/* Sidebar lives in a width-clamping container so collapse/expand gets a
             smooth height-free width transition (the content area re-flows each
             frame, and NoteGrid/FlowGrid's left/top transitions animate the cards). */}
@@ -372,13 +379,13 @@ const App: React.FC = () => {
             display: 'flex', flexDirection: 'column', gap: '8px', alignItems: 'center',
           }}>
             {(viewMode === 'inkcanvas' || (sidebarCollapsed && viewMode === 'notes')) && (<>
-              <button onClick={() => window.electronAPI?.startScreenshot()} title="截图" className="hover-ring-light" style={shotBtnStyle}>
+              <button onClick={() => window.electronAPI?.startScreenshot()} aria-label="截图" className="hover-ring-light" style={shotBtnStyle}>
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                   <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z" />
                   <circle cx="12" cy="13" r="4" />
                 </svg>
               </button>
-              <button onClick={() => window.electronAPI?.startLongScreenshot()} title="长截图" className="hover-ring-light" style={shotBtnStyle}>
+              <button onClick={() => window.electronAPI?.startLongScreenshot()} aria-label="长截图" className="hover-ring-light" style={shotBtnStyle}>
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                   <rect x="4" y="3" width="16" height="10" rx="2" />
                   <path d="M12 15v4" />
@@ -390,7 +397,7 @@ const App: React.FC = () => {
                 points left → collapse, right → expand). */}
             <button
               onClick={toggleSidebar}
-              title={sidebarCollapsed ? '展开边栏' : '收起边栏'}
+              aria-label={sidebarCollapsed ? '展开边栏' : '收起边栏'}
               className="hover-ring-light"
               style={{
                 width: '36px', height: '36px', borderRadius: '12px',
@@ -409,7 +416,7 @@ const App: React.FC = () => {
           </div>
 
           {/* Global settings entry — bottom-right on all three views. */}
-          <button onClick={() => setShowSettings(true)} title="设置" className="hover-ring-light" style={{
+          <button onClick={() => setShowSettings(true)} aria-label="设置" className="hover-ring-light" style={{
             position: 'absolute', bottom: '16px', right: '16px',
             width: '36px', height: '36px', borderRadius: '50%',
             background: 'var(--glass-bg)', backdropFilter: 'blur(20px)',

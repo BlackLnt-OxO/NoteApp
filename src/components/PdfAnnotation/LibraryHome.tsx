@@ -95,7 +95,7 @@ const LibraryHome: React.FC<Props> = ({ onImport, onOpen, onReplace, importing }
   return (
     <div style={{
       position: 'absolute', inset: 0, overflowY: 'auto', padding: '28px 32px',
-      background: 'var(--page-bg)', color: 'var(--text-primary)',
+      color: 'var(--text-primary)',
     }}>
       {/* Header */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 20 }}>
@@ -150,7 +150,7 @@ const LibraryHome: React.FC<Props> = ({ onImport, onOpen, onReplace, importing }
             <button onClick={createCategory} className="btn-accent" style={{ padding: '5px 10px', borderRadius: '6px', color: '#fff', cursor: 'pointer', fontSize: fs(12, gfs), fontFamily: 'inherit' }}>添加</button>
           </div>
         ) : (
-          <button onClick={() => setCreatingCategory(true)} title="新建分类" className="hover-ring-light"
+          <button onClick={() => setCreatingCategory(true)} aria-label="新建分类" className="hover-ring-light"
             style={{
               width: 26, height: 26, borderRadius: '50%', cursor: 'pointer', fontSize: fs(14, gfs),
               border: '1px dashed var(--glass-border)', background: 'transparent', color: 'var(--text-muted)',
@@ -200,7 +200,7 @@ const LibraryHome: React.FC<Props> = ({ onImport, onOpen, onReplace, importing }
               <span className="file-type-corner">{fileTypeLabel(item.kind ?? 'pdf')}</span>
               {hovered && (
                 <button
-                  title="删除"
+                  aria-label="删除"
                   onClick={(e) => {
                     e.stopPropagation();
                     askConfirm({

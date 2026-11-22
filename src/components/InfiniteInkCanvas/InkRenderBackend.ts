@@ -1,10 +1,11 @@
 import type { PdfStroke } from '../PdfAnnotation/PdfTypes';
 import { postInkTask } from '../InkCooperativeWork';
 import { getCommittedStrokeBounds, getInkStrokeIndex } from '../PdfAnnotation/InkStrokeIndex';
-import { drawAnnotatedStroke } from '../PdfAnnotation/PdfBrushRenderers';
+import { drawLiveAnnotatedStroke } from '../PdfAnnotation/PdfBrushRenderers';
+import { drawDragPreview, type DragPreview } from '../PdfAnnotation/InkDragPreview';
 import { registerTileScale, tileScaleOf, inkRasterCacheStats, trimInkRasters, cancelPendingInkRasters } from '../PdfAnnotation/InkRasterCache';
 import { streamingInkStats, releaseStreamingInk, scratchInkBytes } from '../PdfAnnotation/StreamingInkStroke';
-import { createInkCanvas, INK_MEMORY_BUDGET, INK_WORKER_MEMORY_RESERVE, reusableInkBytes } from '../InkCanvasSurface';
+import { createInkCanvas, inkPixelTransform, INK_MEMORY_BUDGET, INK_WORKER_MEMORY_RESERVE, reusableInkBytes } from '../InkCanvasSurface';
 import { reportInkFrame } from '../InkFrameStats';
 import { inkTraceId, inkTraceList, inkStrokeCoverage, recordInkTrace, registerInkTrace, unregisterInkTrace, type InkTraceDetails } from '../InkDiagnostics';
 import { materializeTiles, invalidateTileBuilds, setTargetBakeScale, inkTileBytes, inkTileBuildBytes } from './InkTiles';
@@ -29,6 +30,7 @@ export function protectInkSegment(keys: Set<string>, x: number, y: number, previ
 
 interface ReadyTile { version: number; scale: number; canvas: HTMLCanvasElement; quality: TileJob['quality'] }
 interface PendingStroke { stroke: PdfStroke; versions: Map<string, number> }
+interface PendingDrag { preview: DragPreview; dx: number; dy: number; ids: Set<string> }
 interface TileTransition { previous: HTMLCanvasElement; current: HTMLCanvasElement; started: number }
 const traceJob = (job: TileJob) => ({ key: job.key, epoch: job.epoch, version: job.version, scale: job.scale, quality: job.quality, priority: job.priority });
 const TRANSITION_MS = 120;
@@ -53,6 +55,7 @@ export class InkRenderBackend {
   private versions = new Map<string, number>();
   private ready = new Map<string, ReadyTile>();
   private pending = new Map<string, PendingStroke>();
+  private pendingDrag: PendingDrag | null = null;
   private transitions = new Map<string, TileTransition>();
   private jobs: TileJob[] = [];
   private epoch = 1;
@@ -133,7 +136,12 @@ export class InkRenderBackend {
     const affected = new Set<string>();
     for (const stroke of added) {
       const old = this.previous.get(stroke.id);
-      if (old) for (const key of strokeTileKeys(old)) affected.add(key);
+      if (old) {
+        // An undo can replace a stroke without removing its id. Its previous
+        // destination may now be empty and will never acknowledge the old ink.
+        this.suppress([stroke.id]);
+        for (const key of strokeTileKeys(old)) affected.add(key);
+      }
       for (const key of strokeTileKeys(stroke)) affected.add(key);
     }
     for (const id of removed) {
@@ -200,14 +208,33 @@ export class InkRenderBackend {
   }
 
   retain(stroke: PdfStroke, strokes: PdfStroke[]): void {
-    this.sync(strokes);
-    this.pending.set(stroke.id, { stroke, versions: new Map(strokeTileKeys(stroke).map(key => [key, this.versions.get(key) ?? 0])) });
-    if (import.meta.env.DEV) this.trace('stroke-commit', { ...inkStrokeCoverage(this.options.tiles(), stroke),
-      versions: inkTraceList(this.pending.get(stroke.id)!.versions, ([key, version]) => ({ key, version })) });
+    this.retainMany([stroke], strokes);
   }
 
-  suppress(ids: Iterable<string>): void {
+  retainMany(moved: PdfStroke[], strokes: PdfStroke[], drag?: Omit<PendingDrag, 'ids'>): void {
+    this.sync(strokes);
+    if (drag) {
+      this.releasePendingDrag();
+      this.pendingDrag = { ...drag, ids: new Set(moved.map(stroke => stroke.id)) };
+    }
+    for (const stroke of moved) {
+      const versions = new Map(strokeTileKeys(stroke).map(key => [key, this.versions.get(key) ?? 0]));
+      this.pending.set(stroke.id, { stroke, versions });
+      if (import.meta.env.DEV && moved.length === 1) this.trace('stroke-commit', { ...inkStrokeCoverage(this.options.tiles(), stroke),
+        versions: inkTraceList(versions, ([key, version]) => ({ key, version })) });
+    }
+  }
+
+  private releasePendingDrag(): void {
+    if (this.pendingDrag) this.pendingDrag.preview.canvas.width = 0;
+    this.pendingDrag = null;
+  }
+
+  suppress(ids: Iterable<string>, repairedTiles?: Iterable<string>): void {
+    // The old side of a LOD blend still has the pixels removed by a local repair.
+    if (repairedTiles) for (const key of repairedTiles) this.dropTransition(key);
     for (const id of ids) {
+      if (this.pendingDrag?.ids.has(id)) this.releasePendingDrag();
       const pending = this.pending.get(id);
       if (pending) releaseStreamingInk(pending.stroke);
       this.pending.delete(id);
@@ -344,6 +371,7 @@ export class InkRenderBackend {
 
   /** Clip each hand-off stroke to tiles that have not yet acknowledged its revision. */
   drawPending(ctx: CanvasRenderingContext2D): void {
+    const drag = this.pendingDrag, dragKeys = new Set<string>();
     for (const [id, pending] of this.pending) {
       const missing = [...pending.versions].filter(([key, version]) => {
         const ready = this.ready.get(key);
@@ -353,6 +381,10 @@ export class InkRenderBackend {
         this.trace('handoff-complete', { id });
         this.pending.delete(id); this.tracedPending.delete(id); releaseStreamingInk(pending.stroke); continue;
       }
+      if (drag?.ids.has(id)) {
+        for (const [key] of missing) dragKeys.add(key);
+        continue;
+      }
       if (import.meta.env.DEV) {
         const signature = missing.map(([key, version]) => key + '/' + version).join('|');
         if (signature !== this.tracedPending.get(id)) {
@@ -360,12 +392,38 @@ export class InkRenderBackend {
           this.trace('pending-draw', { id, missing: inkTraceList(missing, ([key, version]) => ({ key, version })) });
         }
       }
-      ctx.save(); ctx.beginPath();
-      for (const [key] of missing) {
-        const [tx, ty] = key.split(':').map(Number); ctx.rect(tx * 512, ty * 512, 512, 512);
-      }
-      ctx.clip(); drawAnnotatedStroke(ctx, pending.stroke); ctx.restore();
+      this.drawInPendingTiles(ctx, missing.map(([key]) => key), () => drawLiveAnnotatedStroke(ctx, pending.stroke));
     }
+    if (drag) {
+      if (dragKeys.size) this.drawInPendingTiles(ctx, dragKeys, () => drawDragPreview(ctx, drag.preview, drag.dx, drag.dy));
+      else this.releasePendingDrag();
+    }
+  }
+
+  private drawInPendingTiles(ctx: CanvasRenderingContext2D, keys: Iterable<string>, paint: () => void): void {
+    ctx.save(); ctx.beginPath();
+    const transform = inkPixelTransform(ctx);
+    if (transform) ctx.setTransform(1, 0, 0, 1, 0, 0);
+    let visible = false;
+    for (const key of keys) {
+      const [tx, ty] = key.split(':').map(Number);
+      if (transform) {
+        // Match the committed tile edge while a neighbor has already landed.
+        const left = Math.round(tx * 512 * transform.a + transform.e);
+        const top = Math.round(ty * 512 * transform.d + transform.f);
+        const right = Math.round((tx + 1) * 512 * transform.a + transform.e);
+        const bottom = Math.round((ty + 1) * 512 * transform.d + transform.f);
+        if (right <= 0 || bottom <= 0 || left >= ctx.canvas.width || top >= ctx.canvas.height) continue;
+        ctx.rect(left, top, right - left, bottom - top);
+      } else ctx.rect(tx * 512, ty * 512, 512, 512);
+      visible = true;
+    }
+    if (visible) {
+      ctx.clip();
+      if (transform) ctx.setTransform(transform.a, transform.b, transform.c, transform.d, transform.e, transform.f);
+      paint();
+    }
+    ctx.restore();
   }
 
   /** Draw onto an already-cleared, snapped tile rectangle. Additive premultiplied
@@ -399,8 +457,10 @@ export class InkRenderBackend {
     };
     // Reserve headroom for in-flight worker surfaces and transferred bitmaps, before arrival.
     const workerReservation = this.worker ? Math.max(this.workerBytes, this.jobs.length || this.transferPending ? INK_WORKER_MEMORY_RESERVE : 0) : 0;
+    const dragCanvas = this.pendingDrag?.preview.canvas;
     const other = streamingInkStats().bytes + scratchInkBytes() + reusableInkBytes() + this.transitionBytes() + inkTileBuildBytes(tiles)
-      + inkRasterCacheStats().buildingBytes + (this.options.displayBytes?.() ?? 0) + 32 * 1048576;
+      + inkRasterCacheStats().buildingBytes + (this.options.displayBytes?.() ?? 0)
+      + (dragCanvas ? dragCanvas.width * dragCanvas.height * 4 : 0) + 32 * 1048576;
     let visibleBytes = 0;
     for (const [key, canvas] of tiles) if (visible(key) || protectedKeys.has(key)) visibleBytes += canvas.width * canvas.height * 4;
     trimInkRasters(Math.max(0, INK_MEMORY_BUDGET - workerReservation - other - visibleBytes));
@@ -427,6 +487,7 @@ export class InkRenderBackend {
     unregisterInkTrace(this);
     this.disposed = true; this.sending++; this.worker?.terminate(); this.worker = null;
     this.resumeTransfer = null;
+    this.releasePendingDrag();
     for (const pending of this.pending.values()) releaseStreamingInk(pending.stroke);
     for (const key of this.transitions.keys()) this.dropTransition(key);
     this.pending.clear(); this.tracedPending.clear(); this.ready.clear(); this.previous.clear(); this.jobs = [];

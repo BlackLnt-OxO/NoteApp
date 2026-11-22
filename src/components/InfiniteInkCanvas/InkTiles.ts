@@ -623,6 +623,7 @@ export function removeStrokesFromTiles(
   skipIds: Set<string>,
   removed: Stroke[],
   cachedBounds?: Map<string, Bounds>,
+  dragPreview = false,
 ): void {
-  eraseStrokeRegions(tiles, grid, skipIds, removed, TILE, targetBakeScale(tiles), cachedBounds);
+  eraseStrokeRegions(tiles, grid, skipIds, removed, TILE, targetBakeScale(tiles), cachedBounds, dragPreview);
 }

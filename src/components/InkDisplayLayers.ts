@@ -3,11 +3,13 @@ import { drawVisibleTiles, inkTileBytes } from './InfiniteInkCanvas/InkTiles';
 import { drawDotGrid } from './PdfAnnotation/PdfEngine';
 import { reportInkFrame } from './InkFrameStats';
 import { INK_TRACE_DETAIL_LIMIT, inkTraceId, inkTraceList, recordInkTrace, registerInkTrace, unregisterInkTrace, type InkTraceDetails } from './InkDiagnostics';
+import type { InkViewportSize } from './InkViewport';
 
 export interface InkLayerPaint {
   background: HTMLCanvasElement; ink: HTMLCanvasElement;
   tiles: Map<string, HTMLCanvasElement>; camera: Camera;
   width: number; height: number; dpr: number;
+  capacity?: InkViewportSize;
   uiScale?: number;
   drawTile?: Parameters<typeof drawVisibleTiles>[6];
   backgroundColor: string; dotColor: string; showDotGrid: boolean;
@@ -25,9 +27,22 @@ export function panBufferMargin(width: number, height: number, dpr: number): num
   return margin;
 }
 
+/** Assigning either canvas dimension clears it, even when the value is equal. */
+export function sizeInkSurface(canvas: HTMLCanvasElement, width: number, height: number, dpr: number, uiScale: number): boolean {
+  const w = Math.max(1, Math.ceil(width * dpr)), h = Math.max(1, Math.ceil(height * dpr));
+  const resized = canvas.width !== w || canvas.height !== h;
+  if (canvas.width !== w) canvas.width = w;
+  if (canvas.height !== h) canvas.height = h;
+  const cssWidth = w / (uiScale * dpr) + 'px', cssHeight = h / (uiScale * dpr) + 'px';
+  if (canvas.style.width !== cssWidth) canvas.style.width = cssWidth;
+  if (canvas.style.height !== cssHeight) canvas.style.height = cssHeight;
+  return resized;
+}
+
 /** Retained static surfaces. Input frames do not redraw the historical document. */
 export class InkDisplayLayers {
   private signature = '';
+  private backgroundSignature = '';
   private page: HTMLCanvasElement | undefined;
   private tiles: Map<string, HTMLCanvasElement> | undefined;
   private fullInk = true;
@@ -44,14 +59,10 @@ export class InkDisplayLayers {
     if (!keys) this.fullInk = true;
     else for (const key of keys) this.dirtyKeys.add(key);
   }
-  resize(): void {
-    if (import.meta.env.DEV) recordInkTrace(this, 'display-resize', {
-      width: this.traceSurface?.width ?? 0, height: this.traceSurface?.height ?? 0 });
-    this.signature = ''; this.anchor = undefined; this.invalidate();
-  }
   dispose(): void {
     if (import.meta.env.DEV) recordInkTrace(this, 'display-dispose', { layer: this.tiles ? inkTraceId(this.tiles) : null });
     unregisterInkTrace(this); this.traceRegistered = false; this.traceSurface = undefined;
+    this.anchor = undefined; this.fullInk = true; this.dirtyKeys.clear();
   }
 
   paint(p: InkLayerPaint): void {
@@ -67,40 +78,49 @@ export class InkDisplayLayers {
         this.traceRegistered = true;
       }
     }
-    const signature = [cam.zoom, dpr, vw, vh, uiScale, p.backgroundColor, p.dotColor, p.showDotGrid].join(':');
+    const capacity = p.capacity ?? p;
+    const signature = [cam.zoom, dpr, capacity.width, capacity.height, uiScale].join(':');
+    const backgroundSignature = [p.backgroundColor, p.dotColor, p.showDotGrid, p.page?.width, p.page?.height].join(':');
     const changed = signature !== this.signature || !this.anchor
       || Math.abs(cam.x - this.anchor.x) > this.margin || Math.abs(cam.y - this.anchor.y) > this.margin;
-    if (changed) { this.anchor = { ...cam }; this.margin = panBufferMargin(vw, vh, dpr); }
+    if (changed) {
+      this.anchor = { ...cam };
+      // The retained margin and the live canvas use the same device-pixel phase.
+      this.margin = Math.floor(panBufferMargin(capacity.width, capacity.height, dpr) * dpr) / dpr;
+    }
     const anchor = this.anchor!;
-    const width = vw + 2 * this.margin, height = vh + 2 * this.margin;
+    const width = capacity.width + 2 * this.margin, height = capacity.height + 2 * this.margin;
     const paintCamera = { ...anchor, x: anchor.x + this.margin, y: anchor.y + this.margin };
+    const backgroundResized = sizeInkSurface(p.background, width, height, dpr, uiScale);
+    const inkResized = sizeInkSurface(p.ink, width, height, dpr, uiScale);
+    if (import.meta.env.DEV && (backgroundResized || inkResized)) recordInkTrace(this, 'display-resize', {
+      width: p.ink.width, height: p.ink.height, background: backgroundResized, ink: inkResized,
+    });
     for (const canvas of [p.background, p.ink]) {
-      const w = Math.max(1, Math.ceil(width * dpr)), h = Math.max(1, Math.ceil(height * dpr));
-      if (canvas.width !== w) canvas.width = w;
-      if (canvas.height !== h) canvas.height = h;
-      canvas.style.width = width / uiScale + 'px'; canvas.style.height = height / uiScale + 'px';
       canvas.style.left = -this.margin / uiScale + 'px'; canvas.style.top = -this.margin / uiScale + 'px';
       canvas.style.right = canvas.style.bottom = 'auto'; canvas.style.willChange = 'transform';
       // Panning within the fixed border moves the existing compositor texture;
       // it does not repaint every historical tile at each pointer sample.
       canvas.style.transform = `translate(${(cam.x - anchor.x) / uiScale}px, ${(cam.y - anchor.y) / uiScale}px)`;
     }
-    if (changed || this.page !== p.page?.canvas) {
+    if (changed || backgroundResized || backgroundSignature !== this.backgroundSignature || this.page !== p.page?.canvas) {
       const start = performance.now(), ctx = p.background.getContext('2d')!;
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-      ctx.clearRect(0, 0, width, height); ctx.fillStyle = p.backgroundColor; ctx.fillRect(0, 0, width, height);
+      ctx.clearRect(0, 0, p.background.width / dpr, p.background.height / dpr);
+      ctx.fillStyle = p.backgroundColor; ctx.fillRect(0, 0, p.background.width / dpr, p.background.height / dpr);
       if (p.showDotGrid) drawDotGrid(ctx, paintCamera, width, height, p.dotColor);
       if (p.page) {
         ctx.save(); ctx.translate(paintCamera.x, paintCamera.y); ctx.scale(cam.zoom, cam.zoom);
         ctx.drawImage(p.page.canvas, 0, 0, p.page.width, p.page.height); ctx.restore();
       }
       this.page = p.page?.canvas;
+      this.backgroundSignature = backgroundSignature;
       reportInkFrame({ paintMs: performance.now() - start });
     }
-    if (changed || this.tiles !== p.tiles || this.fullInk || this.dirtyKeys.size) {
+    if (changed || inkResized || this.tiles !== p.tiles || this.fullInk || this.dirtyKeys.size) {
       const ctx = p.ink.getContext('2d')!, start = performance.now();
       ctx.save(); ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-      const dirty = !changed && this.tiles === p.tiles && !this.fullInk ? this.dirtyKeys : undefined;
+      const dirty = !changed && !inkResized && this.tiles === p.tiles && !this.fullInk ? this.dirtyKeys : undefined;
       if (dirty) {
         ctx.beginPath();
         for (const key of this.dirtyKeys) {
@@ -113,7 +133,7 @@ export class InkDisplayLayers {
         }
         ctx.clip();
       }
-      ctx.clearRect(0, 0, width, height);
+      ctx.clearRect(0, 0, p.ink.width / dpr, p.ink.height / dpr);
       const drawn: { key: string; canvas: number }[] = [];
       const count = drawVisibleTiles(ctx, p.tiles, paintCamera, width, height, dpr, import.meta.env.DEV
         ? (context, key, canvas, x, y, w, h) => {

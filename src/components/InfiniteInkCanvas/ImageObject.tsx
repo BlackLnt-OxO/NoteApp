@@ -5,11 +5,12 @@
  * Interactivity mirrors NoteCard's note-image handling but in world space.
  */
 
-import React, { useRef, useState, useCallback } from 'react';
+import React, { useRef, useState, useCallback, useEffect } from 'react';
 import type { ImageObject as ImageObj, Camera } from './types';
 import { worldToScreen } from './constants';
 import { useCanvasStore } from './useCanvasStore';
 import { useNoteStore } from '../../store';
+import { setPointerHold } from '../inkInputActivity';
 
 interface Props {
   obj: ImageObj;
@@ -34,30 +35,43 @@ const ImageObject: React.FC<Props> = ({ obj, camera }) => {
   const screenW = (obj.width * camera.zoom) / uiScale;
   const screenH = (obj.height * camera.zoom) / uiScale;
 
-  // ---- drag to move (world delta = screen delta / zoom) ----------------------
-  const dragRef = useRef<{ startX: number; startY: number; ox: number; oy: number } | null>(null);
-  const onDragDown = useCallback((e: React.PointerEvent) => {
+  // Preview on the image's own layer. Publish one world-space edit on release.
+  const dragRef = useRef<{ pointer: number; element: HTMLDivElement; x: number; y: number; translate: string } | null>(null);
+  const clearDrag = useCallback(() => {
+    const drag = dragRef.current;
+    if (!drag) return;
+    dragRef.current = null;
+    drag.element.style.translate = drag.translate;
+    setPointerHold(false);
+    if (drag.element.hasPointerCapture?.(drag.pointer)) drag.element.releasePointerCapture(drag.pointer);
+  }, []);
+  useEffect(() => clearDrag, [clearDrag]);
+  const onDragDown = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
     // Middle button belongs to canvas panning (the container's capture-phase
     // listener owns it and never lets it reach here) — only the left button
     // moves the image.
-    if (e.button !== 0) return;
+    if (e.button !== 0 || dragRef.current) return;
     e.preventDefault(); e.stopPropagation();
-    (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
-    dragRef.current = { startX: e.clientX, startY: e.clientY, ox: obj.x, oy: obj.y };
-    pushHistory();
-  }, [obj.x, obj.y, pushHistory]);
+    const element = e.currentTarget;
+    element.setPointerCapture(e.pointerId);
+    dragRef.current = { pointer: e.pointerId, element, x: e.clientX, y: e.clientY, translate: element.style.translate };
+    setPointerHold(true);
+  }, []);
 
   const onDragMove = useCallback((e: React.PointerEvent) => {
     const d = dragRef.current;
-    if (!d) return;
-    const dx = (e.clientX - d.startX) / camera.zoom;
-    const dy = (e.clientY - d.startY) / camera.zoom;
-    updateImageObject(obj.id, { x: d.ox + dx, y: d.oy + dy });
-  }, [camera.zoom, obj.id, updateImageObject]);
+    if (d?.pointer !== e.pointerId) return;
+    d.element.style.translate = `${(e.clientX - d.x) / uiScale}px ${(e.clientY - d.y) / uiScale}px`;
+  }, [uiScale]);
 
   const onDragUp = useCallback((e: React.PointerEvent) => {
-    if (dragRef.current) { dragRef.current = null; try { (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId); } catch {} }
-  }, []);
+    const d = dragRef.current;
+    if (d?.pointer !== e.pointerId) return;
+    clearDrag();
+    if (e.type === 'pointerup') {
+      useCanvasStore.getState().commitSelectionMove([obj.id], (e.clientX - d.x) / camera.zoom, (e.clientY - d.y) / camera.zoom);
+    }
+  }, [camera.zoom, clearDrag, obj.id]);
 
   // ---- corner resize (bottom-right) ------------------------------------------
   const resizeRef = useRef<{ startX: number; startY: number; ow: number; oh: number } | null>(null);
@@ -88,6 +102,8 @@ const ImageObject: React.FC<Props> = ({ obj, camera }) => {
         onPointerDown={onDragDown}
         onPointerMove={onDragMove}
         onPointerUp={onDragUp}
+        onPointerCancel={onDragUp}
+        onLostPointerCapture={onDragUp}
         onMouseEnter={() => setHover(true)}
         onMouseLeave={() => setHover(false)}
         style={{
@@ -99,6 +115,7 @@ const ImageObject: React.FC<Props> = ({ obj, camera }) => {
           cursor: 'grabbing',
           zIndex: 1, // below the canvas (ink draws on top)
           userSelect: 'none',
+          touchAction: 'none',
           outline: selected ? '1.5px dashed #6b5ce7' : undefined,
           outlineOffset: 3,
         }}
@@ -113,7 +130,7 @@ const ImageObject: React.FC<Props> = ({ obj, camera }) => {
         {hover && (
           <>
             <button
-              title="删除"
+              aria-label="删除"
               onPointerDown={(e) => e.stopPropagation()}
               onClick={(e) => { e.stopPropagation(); deleteObject(obj.id); }}
               style={{
@@ -126,7 +143,7 @@ const ImageObject: React.FC<Props> = ({ obj, camera }) => {
               ×
             </button>
             <div
-              title="缩放"
+              data-tooltip="缩放"
               data-ink-object-control=""
               onPointerDown={onResizeDown}
               onPointerMove={onResizeMove}

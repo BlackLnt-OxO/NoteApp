@@ -15,6 +15,7 @@ import { fs } from "../../utils";
 import { useCanvasLibrary } from './useCanvasLibrary';
 import { useCanvasStore } from './useCanvasStore';
 import InfiniteInkCanvas from './InfiniteInkCanvas';
+import { INK_EDITOR_NAV_HEIGHT } from '../InkViewport';
 import CanvasHome from './CanvasHome';
 
 const btnStyle = (gfs: number): React.CSSProperties => ({
@@ -38,12 +39,12 @@ const NavBar: React.FC<{
 
   return (
     <div style={{
-      position: 'absolute', top: 0, left: 0, right: 0, height: 44, zIndex: 95,
+      position: 'absolute', top: 0, left: 0, right: 0, height: INK_EDITOR_NAV_HEIGHT, zIndex: 95,
       display: 'flex', alignItems: 'center', gap: '8px', padding: '0 12px',
       background: 'var(--chrome-bg)', borderBottom: '1px solid var(--glass-border)',
       backdropFilter: 'blur(10px)', WebkitBackdropFilter: 'blur(10px)',
     }}>
-      <button className="glass-btn" onClick={onHome} style={btnStyle(gfs)} title="返回画布列表">‹ 返回列表</button>
+      <button className="glass-btn" onClick={onHome} style={btnStyle(gfs)} data-tooltip="返回画布列表">‹ 返回列表</button>
       {editing ? (
         <input
           autoFocus
@@ -61,7 +62,7 @@ const NavBar: React.FC<{
           }}
         />
       ) : (
-        <button className="glass-btn" onClick={() => setEditing(true)} title="点击重命名" style={{ ...btnStyle(gfs), fontWeight: 600, color: 'var(--text-primary)' }}>
+        <button className="glass-btn" onClick={() => setEditing(true)} data-tooltip="点击重命名" style={{ ...btnStyle(gfs), fontWeight: 600, color: 'var(--text-primary)' }}>
           {name}
         </button>
       )}
@@ -87,7 +88,7 @@ const FullscreenButton: React.FC = () => {
   return (
     <button
       onClick={toggle}
-      title={fullscreen ? '退出全屏 (Esc)' : '全屏'}
+      data-tooltip={fullscreen ? '退出全屏 (Esc)' : '全屏'}
       className="hover-ring-light"
       style={{
         position: 'absolute', bottom: '60px', right: '16px',
@@ -172,7 +173,7 @@ const CanvasView: React.FC = () => {
   const current = canvases.find((c) => c.id === currentCanvasId);
 
   return (
-    <div style={{ position: 'absolute', inset: 0, overflow: 'hidden', background: 'var(--page-bg)' }}>
+    <div style={{ position: 'absolute', inset: 0, overflow: 'hidden', background: current ? 'var(--page-bg)' : undefined }}>
       {navigationLoading && <div role="status" aria-live="polite" style={{ position: 'absolute', inset: 0, zIndex: 150,
         display: 'grid', placeItems: 'center', background: 'var(--glass-bg)', cursor: 'wait' }}>正在保存并打开画布…</div>}
       {(navigationError || saveStatus === 'error' || storageWarning) && <div role="alert" style={{ position: 'absolute', top: 48, right: 12, zIndex: 130, background: 'var(--chrome-bg)', padding: 12 }}>
@@ -185,7 +186,7 @@ const CanvasView: React.FC = () => {
         ) : (
           <>
             <NavBar name={current.name} onHome={goHome} onRename={(name) => renameCanvas(current.id, name)} />
-            <div style={{ position: 'absolute', top: 44, left: 0, right: 0, bottom: 0 }}>
+            <div style={{ position: 'absolute', top: INK_EDITOR_NAV_HEIGHT, left: 0, right: 0, bottom: 0 }}>
               <InfiniteInkCanvas />
             </div>
             <FullscreenButton />

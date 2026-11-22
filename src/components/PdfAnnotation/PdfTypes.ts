@@ -25,8 +25,8 @@ export interface PdfStroke {
   smoothing: number;
   /** 'destination-out' marks an eraser stroke (must be applied to inkLayer only). */
   compositeOperation: 'source-over' | 'destination-out';
-  /** 2 = streaming marker/fountain/pencil coverage; absent = legacy ribbon. */
-  renderVersion?: 2;
+  /** 5 = textured pencil or speed-sensitive fountain. Earlier versions keep their original raster. */
+  renderVersion?: 2 | 3 | 4 | 5;
   /**
    * Optional brush style. Legacy strokes (without this field) render as marker.
    * 'laser' is excluded here because it is transient and never committed.
@@ -34,6 +34,8 @@ export interface PdfStroke {
   style?: PdfCommittedStrokeStyle;
   /** Fountain only: ink-speed sensitivity captured at draw time. */
   inkSpeed?: number;
+  /** Fountain v5: camera zoom at pen-down, to recover viewport speed from world points. */
+  inputZoom?: number;
   /** Marker only: pressure→opacity flag captured at draw time. */
   pressureOpacity?: boolean;
   /** Soft edge feather flag captured at draw time (defaults to ON). */

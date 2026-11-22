@@ -15,6 +15,8 @@ import { createInkCanvas } from '../InkCanvasSurface';
 
 import { drawAnnotatedStroke } from './PdfBrushRenderers';
 import { getCommittedStrokeBounds } from './InkStrokeIndex';
+import { resolveFeatherWorld } from './InkMath';
+import { drawStreamingPreview, usesOnePassInk } from './StreamingInkStroke';
 import type { PdfStroke } from './PdfTypes';
 
 export interface DragPreview {
@@ -22,42 +24,38 @@ export interface DragPreview {
   /** World position of the raster's top-left corner. */
   x: number;
   y: number;
-  /** Bake scale it was rendered at, in pixels per world unit. A caller that has
-   *  re-baked the tile layer at another density must stop using this raster. */
+  /** Bake scale in pixels per world unit. Independent of the committed tiles. */
   scale: number;
 }
 
-/** Refuse to bake a preview bigger than this. A selection spanning half the
- *  document would otherwise allocate hundreds of megabytes in one gesture. */
 export const PREVIEW_MAX_PIXELS = 4 * 1024 * 1024;
+const MAX_DIMENSION = 4096;
 
-/** Margin around the selection's bounds, in world units. The bounds already
- *  include each stroke's half width, and the feather fringe is capped at 0.6
- *  world px, so this cannot clip the ink. */
-const PREVIEW_PAD = 2;
-
-/** Rasterize `strokes` once at `scale`, or return null when that would be too
- *  large or there is nothing to draw — the caller then falls back to drawing the
- *  strokes directly, which is slower but always correct. */
+/** Rasterize once, reducing preview density for wide selections to bound the bitmap. */
 export function bakeDragPreview(strokes: PdfStroke[], scale: number): DragPreview | null {
   let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
   for (const s of strokes) {
+    if (!s.points.length) continue;
     const b = getCommittedStrokeBounds(s);
-    if (b.minX < minX) minX = b.minX;
-    if (b.minY < minY) minY = b.minY;
-    if (b.maxX > maxX) maxX = b.maxX;
-    if (b.maxY > maxY) maxY = b.maxY;
+    const pad = 2 + 3 * resolveFeatherWorld(s, [s.size]);
+    minX = Math.min(minX, b.minX - pad); minY = Math.min(minY, b.minY - pad);
+    maxX = Math.max(maxX, b.maxX + pad); maxY = Math.max(maxY, b.maxY + pad);
   }
-  if (!Number.isFinite(minX)) return null;
-  minX -= PREVIEW_PAD; minY -= PREVIEW_PAD; maxX += PREVIEW_PAD; maxY += PREVIEW_PAD;
-  const w = Math.ceil((maxX - minX) * scale), h = Math.ceil((maxY - minY) * scale);
-  if (w <= 0 || h <= 0 || w * h > PREVIEW_MAX_PIXELS) return null;
+  const width = maxX - minX, height = maxY - minY;
+  if (!Number.isFinite(width + height) || width <= 0 || height <= 0 || scale <= 0) return null;
+  // Reserve room for the pixel rounding on each axis.
+  scale = Math.min(scale, (MAX_DIMENSION - 1) / width, (MAX_DIMENSION - 1) / height,
+    Math.sqrt((PREVIEW_MAX_PIXELS - 2 * MAX_DIMENSION) / width / height));
 
   const canvas = createInkCanvas();
-  canvas.width = w; canvas.height = h;
+  canvas.width = Math.ceil(width * scale); canvas.height = Math.ceil(height * scale);
   const ctx = canvas.getContext('2d')!;
   ctx.setTransform(scale, 0, 0, scale, -minX * scale, -minY * scale);
-  for (const s of strokes) drawAnnotatedStroke(ctx, s);
+  for (const stroke of strokes) {
+    if (stroke.geometry || stroke.compositeOperation === 'destination-out' || !usesOnePassInk(stroke)) {
+      drawAnnotatedStroke(ctx, stroke);
+    } else drawStreamingPreview(ctx, stroke, scale);
+  }
   return { canvas, x: minX, y: minY, scale };
 }
 

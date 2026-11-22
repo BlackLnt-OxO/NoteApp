@@ -173,7 +173,7 @@ export const ColorPicker: React.FC<Props> = ({ color, onChange, gfs }) => {
                 background:hex,border:'1px solid rgba(255,255,255,0.08)' }} />
             </div>
           </div>
-          <button onClick={startEyedropper} title="吸管取色" style={{
+          <button onClick={startEyedropper} aria-label="吸管取色" style={{
             background:'rgba(255,255,255,0.08)',border:'1px solid rgba(255,255,255,0.15)',
             borderRadius:fsn(4,gfs),cursor:'pointer',color:'rgba(255,255,255,0.8)',
             display:'flex',alignItems:'center',justifyContent:'center',

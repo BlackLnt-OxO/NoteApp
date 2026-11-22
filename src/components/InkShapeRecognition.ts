@@ -31,18 +31,86 @@ function polygonVertices(points: ShapePoint[], tolerance: number): ShapePoint[] 
   // otherwise depends strongly on whether the user began at a corner or edge.
   let split = 1;
   for (let i = 2; i < points.length; i++) if (distance(points[0], points[i]) > distance(points[0], points[split])) split = i;
-  let vertices = [...simplify(points.slice(0, split + 1), tolerance).slice(0, -1), ...simplify([...points.slice(split), points[0]], tolerance).slice(0, -1)];
-  let changed = true;
-  while (changed && vertices.length > 3) {
-    changed = false;
-    for (let i = 0; i < vertices.length; i++) {
-      if (pointSegmentDistance(vertices[i], vertices[(i + vertices.length - 1) % vertices.length], vertices[(i + 1) % vertices.length]) < tolerance) {
-        vertices.splice(i, 1); changed = true; break;
-      }
+  return [...simplify(points.slice(0, split + 1), tolerance).slice(0, -1),
+    ...simplify([...points.slice(split), points[0]], tolerance).slice(0, -1)];
+}
+
+function removeWeakestCorner(vertices: ShapePoint[], tolerance: number): boolean {
+  let weakest = -1;
+  let error = tolerance;
+  for (let i = 0; i < vertices.length; i++) {
+    const before = vertices[(i + vertices.length - 1) % vertices.length];
+    const after = vertices[(i + 1) % vertices.length];
+    const deviation = pointSegmentDistance(vertices[i], before, after);
+    if (deviation < error) {
+      weakest = i;
+      error = deviation;
     }
   }
-  return vertices;
+  if (weakest < 0) return false;
+  vertices.splice(weakest, 1);
+  return true;
 }
+
+function fitPolygon(vertices: ShapePoint[], points: ShapePoint[], span: number, zoom: number): InkShapeGeometry | null {
+  if (vertices.length === 3) {
+    const [a, b, c] = vertices;
+    const area2 = Math.abs((b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x));
+    if (area2 < span * span * 0.065 || area2 / span * zoom < 5) return null;
+    return { kind: 'triangle', vertices: [a, b, c] };
+  }
+  let c4 = 0;
+  let s4 = 0;
+  let turn = 0;
+  const edges = vertices.map((p, i) => {
+    const q = vertices[(i + 1) % 4];
+    return { x: q.x - p.x, y: q.y - p.y };
+  });
+  for (let i = 0; i < 4; i++) {
+    const a = edges[i];
+    const b = edges[(i + 1) % 4];
+    const length = Math.hypot(a.x, a.y);
+    const cross = a.x * b.y - a.y * b.x;
+    if (cross === 0 || (turn && Math.sign(cross) !== turn)
+      || Math.abs(a.x * b.x + a.y * b.y) > 0.5 * length * Math.hypot(b.x, b.y)) return null;
+    turn = Math.sign(cross);
+    const angle = Math.atan2(a.y, a.x);
+    c4 += Math.cos(angle * 4) * length;
+    s4 += Math.sin(angle * 4) * length;
+  }
+  const rotation = Math.atan2(s4, c4) / 4;
+  const local = points.map(p => rotatePoint(p, -rotation));
+  // A stray sample at the seam should not move the fitted sides outwards.
+  const xs = local.map(p => p.x).sort((a, b) => a - b);
+  const ys = local.map(p => p.y).sort((a, b) => a - b);
+  const trim = Math.floor(points.length * 0.025);
+  const hi = points.length - 1 - trim;
+  const width = xs[hi] - xs[trim];
+  const height = ys[hi] - ys[trim];
+  if (Math.min(width, height) * zoom < 5) return null;
+  const center = rotatePoint({ x: (xs[trim] + xs[hi]) / 2, y: (ys[trim] + ys[hi]) / 2 }, rotation);
+  return { kind: 'rectangle', center, width, height, rotation };
+}
+
+function hasDrawnSides(points: ShapePoint[], path: ShapePoint[], span: number): boolean {
+  // Check the original polyline without connecting the seam. The endpoint gap
+  // may be small on a tall rectangle that is missing an entire short side.
+  return path.slice(1).every((end, index) => {
+    const start = path[index];
+    const length = distance(start, end);
+    const limit = Math.min(span * 0.065, length * 0.22);
+    return [0.25, 0.75].some(t => {
+      const probe = { x: start.x + (end.x - start.x) * t, y: start.y + (end.y - start.y) * t };
+      return points.some((p, i) => {
+        if (i === 0 || pointSegmentDistance(probe, points[i - 1], p) > limit) return false;
+        const prev = points[i - 1];
+        const along = (p.x - prev.x) * (end.x - start.x) + (p.y - prev.y) * (end.y - start.y);
+        return Math.abs(along) >= 0.75 * length * distance(p, prev);
+      });
+    });
+  });
+}
+
 function fitError(points: ShapePoint[], g: InkShapeGeometry): number {
   const path = shapePathPoints(g);
   let sum = 0;
@@ -68,29 +136,17 @@ export function recognizeInkShape(input: readonly ShapePoint[], zoom = 1): InkSh
   if (distance(a, b) / length >= 0.92 && lineError / span < 0.025) return { kind: 'line', a, b };
   if (distance(a, b) > span * 0.18 || length > span * 4.5) return null;
   const center = { x: (minX + maxX) / 2, y: (minY + maxY) / 2 };
-  const candidates: { geometry: InkShapeGeometry; error: number }[] = [];
-  const vertices = polygonVertices(pts, span * 0.035);
-  if (vertices.length === 3) {
-    const area = Math.abs((vertices[1].x - vertices[0].x) * (vertices[2].y - vertices[0].y) - (vertices[1].y - vertices[0].y) * (vertices[2].x - vertices[0].x));
-    if (area > span * span * 0.1) {
-      const geometry: InkShapeGeometry = { kind: 'triangle', vertices: vertices as [ShapePoint, ShapePoint, ShapePoint] };
-      candidates.push({ geometry, error: fitError(pts, geometry) / span });
-    }
-  }
-  if (vertices.length === 4) {
-    let c4 = 0, s4 = 0;
-    for (let i = 0; i < 4; i++) {
-      const p = vertices[i], q = vertices[(i + 1) % 4], angle = Math.atan2(q.y - p.y, q.x - p.x), weight = distance(p, q);
-      c4 += Math.cos(angle * 4) * weight; s4 += Math.sin(angle * 4) * weight;
-    }
-    const rotation = Math.atan2(s4, c4) / 4;
-    const local = pts.map(p => rotatePoint({ x: p.x - center.x, y: p.y - center.y }, -rotation));
-    const loX = Math.min(...local.map(p => p.x)), hiX = Math.max(...local.map(p => p.x));
-    const loY = Math.min(...local.map(p => p.y)), hiY = Math.max(...local.map(p => p.y));
-    const offset = rotatePoint({ x: (loX + hiX) / 2, y: (loY + hiY) / 2 }, rotation);
-    const geometry: InkShapeGeometry = { kind: 'rectangle', center: { x: center.x + offset.x, y: center.y + offset.y }, width: hiX - loX, height: hiY - loY, rotation };
-    candidates.push({ geometry, error: fitError(pts, geometry) / span });
-  }
+  const candidates: { geometry: InkShapeGeometry; error: number; complete: boolean }[] = [];
+  const vertices = polygonVertices(pts, span * 0.025);
+  // Rounding and pen lifts at the seam often leave a small extra corner.
+  // Test both vertex counts as minor deviations are removed.
+  do {
+    if (vertices.length !== 3 && vertices.length !== 4) continue;
+    const geometry = fitPolygon(vertices, pts, span, zoom);
+    if (!geometry) continue;
+    const error = fitError(pts, geometry) / span;
+    if (error <= 0.046) candidates.push({ geometry, error, complete: hasDrawnSides(pts, shapePathPoints(geometry), span) });
+  } while (vertices.length > 3 && removeWeakestCorner(vertices, span * 0.095));
   // Covariance orientation + rotated extents fits rotated ellipses without
   // turning rectangles into ovals. All models compete on boundary distance.
   const mean = { x: pts.reduce((s, p) => s + p.x, 0) / pts.length, y: pts.reduce((s, p) => s + p.y, 0) / pts.length };
@@ -115,11 +171,12 @@ export function recognizeInkShape(input: readonly ShapePoint[], zoom = 1): InkSh
       while (delta < -Math.PI) delta += 2 * Math.PI;
       winding += delta;
     }
-    if (Math.abs(winding) > 5.3 && Math.abs(winding) < 7) candidates.push({ geometry, error: fitError(pts, geometry) / span });
+    const error = fitError(pts, geometry) / span;
+    if (Math.abs(winding) > 5.3 && Math.abs(winding) < 7 && error <= 0.035) candidates.push({ geometry, error, complete: true });
   }
   candidates.sort((x, y) => x.error - y.error);
   const best = candidates[0];
-  if (!best || best.error > 0.035) return null;
+  if (!best?.complete) return null;
   if (candidates[1] && candidates[1].error - best.error < 0.004) return null;
   // Reject paths that visit the same fitted perimeter more than once.
   const path = shapePathPoints(best.geometry);

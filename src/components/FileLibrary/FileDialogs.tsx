@@ -165,9 +165,9 @@ export function ImageSequenceDialog({ initial, onFinish }: { initial: string[]; 
         if (dragging.current !== null) move(dragging.current, index);
         dragging.current = null;
       }}>
-        {index + 1}. <SequenceThumbnail path={path} /><span title={path}>{fileName(path)}</span>
-        <button className="glass-btn" title="上移" disabled={index === 0} onClick={() => move(index, index - 1)}>↑</button>
-        <button className="glass-btn" title="下移" disabled={index === paths.length - 1} onClick={() => move(index, index + 1)}>↓</button>
+        {index + 1}. <SequenceThumbnail path={path} /><span data-tooltip={path}>{fileName(path)}</span>
+        <button className="glass-btn" aria-label="上移" disabled={index === 0} onClick={() => move(index, index - 1)}>↑</button>
+        <button className="glass-btn" aria-label="下移" disabled={index === paths.length - 1} onClick={() => move(index, index + 1)}>↓</button>
       </li>)}</ol>
     <div className="file-dialog-actions"><button className="btn-accent" onClick={() => onFinish(paths)}>确认页序</button></div>
   </FileDialog>;

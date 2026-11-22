@@ -202,7 +202,7 @@ const PdfSidebar: React.FC = () => {
   return (
     <>
       {!sidebarOpen && (
-        <button onClick={toggleSidebar} title="展开页面预览"
+        <button onClick={toggleSidebar} aria-label="展开页面预览"
           className="hover-ring-light" style={railBtn}>
           ▷
         </button>
@@ -210,14 +210,15 @@ const PdfSidebar: React.FC = () => {
 
       {/* Rail stays mounted (so scroll position survives) with a width transition,
           mirroring the left sidebar's collapse animation. */}
-      <div style={{
+      <div data-pdf-page-sidebar style={{
         position: 'absolute', top: 0, left: 0, bottom: 0, zIndex: 93,
         width: sidebarOpen ? RAIL_W : 0,
         overflow: 'hidden',
         transition: 'width var(--transition-slow)',
         display: 'flex', flexDirection: 'column',
-        background: 'var(--chrome-bg)', borderRight: sidebarOpen ? '1px solid var(--glass-border)' : 'none',
-        backdropFilter: 'blur(10px)', WebkitBackdropFilter: 'blur(10px)',
+        background: 'rgba(var(--pdf-rail-tint), var(--workspace-sidebar-opacity, .92))',
+        borderRight: sidebarOpen ? '1px solid var(--glass-border)' : 'none',
+        backdropFilter: 'blur(calc(10px * var(--workspace-sidebar-opacity, .92)))',
       }}>
         <div style={{
           display: 'flex', alignItems: 'center', justifyContent: 'space-between',
@@ -227,7 +228,7 @@ const PdfSidebar: React.FC = () => {
           transition: 'opacity var(--transition-slow)',
         }}>
           <span>页面</span>
-          <button onClick={toggleSidebar} title="收起" className="hover-ring-light"
+          <button onClick={toggleSidebar} aria-label="收起" className="hover-ring-light"
             style={{ width: 26, height: 26, borderRadius: '50%', border: 0, background: 'transparent', color: 'var(--text-muted)', cursor: 'pointer', fontSize: fs(12, gfs), display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
             ◁
           </button>

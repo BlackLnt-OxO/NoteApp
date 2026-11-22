@@ -398,7 +398,7 @@ function generateFloatingNoteHTML(noteData) {
 </head>
 <body>
 <div class="float-note">
-  <button class="float-close" onclick="window.electronAPI.closeFloatingNote('${noteDataId}')" title="关闭">x</button>
+  <button class="float-close" onclick="window.electronAPI.closeFloatingNote('${noteDataId}')" aria-label="关闭">x</button>
   <div class="float-content" contenteditable="true">${escapedContent}</div>
   ${imagesHTML ? `<div class="float-images">${imagesHTML}</div>` : ''}
 </div>

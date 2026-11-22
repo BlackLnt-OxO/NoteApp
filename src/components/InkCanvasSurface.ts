@@ -13,6 +13,11 @@ export function createInkCanvas(): HTMLCanvasElement {
   return canvas as unknown as HTMLCanvasElement;
 }
 
+export function inkPixelTransform(ctx: CanvasRenderingContext2D): DOMMatrix | null {
+  const transform = ctx.getTransform();
+  return transform.b === 0 && transform.c === 0 && transform.a > 0 && transform.d > 0 ? transform : null;
+}
+
 export const INK_MEMORY_BUDGET = 256 * 1024 * 1024;
 export const INK_WORKER_MEMORY_RESERVE = 64 * 1024 * 1024;
 export const TILE_CACHE_BUDGET = 512 * 1024 * 1024;

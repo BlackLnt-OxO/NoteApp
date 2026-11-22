@@ -76,6 +76,12 @@ export function smoothingToMinCutoff(smoothing: number): number {
   return 5 * Math.pow(0.01, smoothing);
 }
 
+/** Position weight used by the incremental brush and laser, for a valid time step. */
+export function inkPositionWeight(minCutoff: number, dx: number, dy: number, dt: number): number {
+  const cutoff = minCutoff + BETA * Math.hypot(dx, dy) / dt;
+  return 1 / (1 + 1 / (2 * Math.PI * cutoff * dt));
+}
+
 export function applyOneEuro(
   pts: { x: number; y: number; pressure: number; t: number }[],
   minCutoff: number,

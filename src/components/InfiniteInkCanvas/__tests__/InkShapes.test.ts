@@ -57,6 +57,20 @@ describe('local shape recognition', () => {
     const shifted = [...pts.slice(cut, -1), ...pts.slice(0, cut + 1)];
     expect(recognizeInkShape(shifted)?.kind).toBe('rectangle');
   });
+  it('fits a rounded triangle with a short gap at the seam', () => {
+    const points = [[100, 96], [112, 102], [125, 124], [156, 175], [204, 247], [227, 286], [222, 292],
+      [182, 295], [129, 294], [74, 283], [16, 278], [8, 271], [26, 228], [47, 191], [70, 140], [86, 113], [91, 105]];
+    expect(recognizeInkShape(points.map(([x, y]) => ({ x, y })))?.kind).toBe('triangle');
+  });
+  it('fits a rough rectangle started mid-side even when its edges bow', () => {
+    const points = [[100, 100], [160, 90], [210, 88], [266, 99], [278, 111], [283, 155], [278, 206], [267, 226],
+      [218, 239], [158, 236], [111, 232], [90, 218], [82, 170], [88, 132], [97, 109]];
+    expect(recognizeInkShape(points.map(([x, y]) => ({ x, y })))?.kind).toBe('rectangle');
+  });
+  it('keeps a narrow three-sided outline open even with nearby endpoints', () => {
+    const points = [{ x: 0, y: 0 }, { x: 0, y: 200 }, { x: 25, y: 200 }, { x: 25, y: 0 }];
+    expect(recognizeInkShape(points)).toBeNull();
+  });
 });
 
 describe('geometry editing', () => {

@@ -95,7 +95,7 @@ const CanvasHome: React.FC<{ onOpen: (id: string) => void; onNew: () => void }> 
       <div style={{
         position: 'absolute', inset: 0,
         display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
-        gap: 16, background: 'var(--page-bg)', color: 'var(--text-secondary)',
+        gap: 16, color: 'var(--text-secondary)',
       }}>
         <div style={{ color: 'var(--accent)' }}>
           <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" opacity="0.8">
@@ -122,7 +122,7 @@ const CanvasHome: React.FC<{ onOpen: (id: string) => void; onNew: () => void }> 
   return (
     <div style={{
       position: 'absolute', inset: 0, overflowY: 'auto', padding: '28px 32px',
-      background: 'var(--page-bg)', color: 'var(--text-primary)',
+      color: 'var(--text-primary)',
     }}>
       {deleteError && <div role="alert">删除失败：{deleteError}<button onClick={() => setDeleteError(null)}>关闭</button></div>}
       {/* Header */}
@@ -171,7 +171,7 @@ const CanvasHome: React.FC<{ onOpen: (id: string) => void; onNew: () => void }> 
             <button onClick={createCategory} className="btn-accent" style={{ padding: '5px 10px', borderRadius: '6px', color: '#fff', cursor: 'pointer', fontSize: fs(12, gfs), fontFamily: 'inherit' }}>添加</button>
           </div>
         ) : (
-          <button onClick={() => setCreatingCat(true)} title="新建分类" className="hover-ring-light"
+          <button onClick={() => setCreatingCat(true)} aria-label="新建分类" className="hover-ring-light"
             style={{
               width: 26, height: 26, borderRadius: '50%', cursor: 'pointer', fontSize: fs(14, gfs),
               border: '1px dashed var(--glass-border)', background: 'transparent', color: 'var(--text-muted)',
@@ -218,7 +218,7 @@ const CanvasHome: React.FC<{ onOpen: (id: string) => void; onNew: () => void }> 
               {hovered && renamingId !== c.id && (
                 <div style={{ position: 'absolute', top: 8, right: 8, display: 'flex', gap: 6 }}>
                   <button
-                    title="重命名"
+                    aria-label="重命名"
                     onClick={(e) => { e.stopPropagation(); setDraft(c.name); setRenamingId(c.id); }}
                     style={{
                       width: 22, height: 22, borderRadius: '50%', border: 'none', cursor: 'pointer',
@@ -231,7 +231,7 @@ const CanvasHome: React.FC<{ onOpen: (id: string) => void; onNew: () => void }> 
                     </svg>
                   </button>
                   <button
-                    title="删除"
+                    aria-label="删除"
                     onClick={(e) => {
                       e.stopPropagation();
                       askConfirm({

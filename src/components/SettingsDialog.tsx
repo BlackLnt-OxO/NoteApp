@@ -2,6 +2,7 @@ import React, { useState, useRef, useEffect } from 'react';
 import { useNoteStore } from '../store';
 import { fs, fsn } from '../utils';
 import { DEFAULT_COLORS } from '../types';
+import { backgroundShade } from '../workspaceBackground';
 import ColorPicker from './ColorPicker';
 import { askConfirm } from './ConfirmDialog';
 
@@ -197,6 +198,16 @@ const SettingsDialog: React.FC<SettingsDialogProps> = ({ onClose }) => {
         </div>
 
         <div style={sectionStyle}>
+          <label htmlFor="ink-toolbar-dock" style={labelStyle(gfs)}>手写工具栏位置</label>
+          <select id="ink-toolbar-dock" className="glass-btn" value={localSettings.inkToolbarDock}
+            onChange={event => handleChange('inkToolbarDock', event.target.value)}
+            style={{ fontSize: fs(13, gfs), colorScheme: localSettings.theme }}>
+            <option value="bottom">底部</option>
+            <option value="top">顶部</option>
+          </select>
+        </div>
+
+        <div style={sectionStyle}>
           <label style={labelStyle(gfs)}>数据目录</label>
           <div style={{ fontSize: fs(11, gfs), color: 'var(--text-muted)', marginBottom: fs(8, gfs), wordBreak: 'break-all' }}>{dataDirPath || '…'}</div>
           <div style={{ display: 'flex', gap: fs(6, gfs), alignItems: 'center', flexWrap: 'wrap' }}>
@@ -276,9 +287,13 @@ const SettingsDialog: React.FC<SettingsDialogProps> = ({ onClose }) => {
         </div>
 
         <div style={sectionStyle}>
-          <label style={labelStyle(gfs)}>背景不透明度: <strong>{Math.round(localSettings.backgroundOpacity * 100)}%</strong></label>
-          <input type="range" min="0" max="100" value={Math.round(localSettings.backgroundOpacity * 100)}
-            onChange={(e) => { const v = parseInt(e.target.value) / 100; handleChange('backgroundOpacity', v); updateSettings({ backgroundOpacity: v }); }} style={rangeStyle} />
+          <label htmlFor="background-shade" style={labelStyle(gfs)}>背景不透明度 <strong>{Math.round(backgroundShade(localSettings.backgroundOpacity) * 100)}%</strong></label>
+          <input id="background-shade" type="range" min="0" max="100" value={Math.round(backgroundShade(localSettings.backgroundOpacity) * 100)}
+            onChange={event => {
+              const opacity = (100 - Number(event.target.value)) / 100;
+              handleChange('backgroundOpacity', opacity);
+              updateSettings({ backgroundOpacity: opacity });
+            }} style={rangeStyle} />
         </div>
 
         <div style={sectionStyle}>

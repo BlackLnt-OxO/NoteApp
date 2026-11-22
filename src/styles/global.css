@@ -14,10 +14,15 @@
   --danger-hover: #f55a4e;
   --surface: rgba(20, 20, 35, 0.8);
   --surface-hover: rgba(30, 30, 50, 0.8);
-  --sidebar-bg: rgba(20, 20, 40, 0.5);
+  --sidebar-tint: 20, 20, 40;
+  --sidebar-base-opacity: 0.5;
+  --pdf-rail-tint: 30, 30, 48;
   --tag-active-bg: rgba(255, 255, 255, 0.1);
   --dropdown-bg: rgba(30, 30, 50, 0.95);
   --dialog-bg: rgba(30, 30, 50, 0.98);
+  --tooltip-bg: #32324b;
+  --tooltip-text: #f5f3ff;
+  --tooltip-border: #575672;
   /* PDF chrome (nav bar / thumbnail rail) and page-level backgrounds */
   --chrome-bg: rgba(30, 30, 48, 0.92);
   --page-bg: #1a1a2e;
@@ -51,10 +56,15 @@
   --text-muted: rgba(35, 30, 25, 0.35);
   --surface: rgba(240, 237, 232, 0.85);
   --surface-hover: rgba(228, 224, 218, 0.9);
-  --sidebar-bg: rgba(232, 228, 222, 0.7);
+  --sidebar-tint: 232, 228, 222;
+  --sidebar-base-opacity: 0.7;
+  --pdf-rail-tint: 238, 235, 230;
   --tag-active-bg: rgba(0, 0, 0, 0.04);
   --dropdown-bg: rgba(240, 237, 232, 0.98);
   --dialog-bg: rgba(240, 237, 232, 0.98);
+  --tooltip-bg: #faf7f2;
+  --tooltip-text: #282433;
+  --tooltip-border: #cbc5d0;
   --chrome-bg: rgba(238, 235, 230, 0.92);
   --page-bg: #e7e4df;
   --app-overlay: 231,228,223;
@@ -64,6 +74,25 @@
   --ring-on-dark: rgba(0, 0, 0, 0.32);
   --glow-soft: 0 3px 12px rgba(0, 0, 0, 0.28);
   --glow-on-color: 0 3px 12px rgba(0, 0, 0, 0.28);
+}
+
+.app-tooltip {
+  position: fixed;
+  z-index: 2147483647;
+  max-width: min(320px, calc(100vw - 16px));
+  max-height: calc(100vh - 16px);
+  overflow: hidden;
+  padding: 5px 9px;
+  border: 1px solid var(--tooltip-border);
+  border-radius: 6px;
+  background: var(--tooltip-bg);
+  color: var(--tooltip-text);
+  box-shadow: 0 3px 12px rgba(0, 0, 0, 0.18);
+  font: 12px/1.45 "Segoe UI", "Microsoft YaHei", sans-serif;
+  white-space: pre-line;
+  overflow-wrap: anywhere;
+  pointer-events: none;
+  user-select: none;
 }
 
 /* Light-theme adjustments for widgets that were tuned for a dark app. */

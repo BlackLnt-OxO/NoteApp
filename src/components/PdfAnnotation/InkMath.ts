@@ -360,13 +360,17 @@ export function autoFeatherWorld(widths: readonly number[]): number {
  * `stroke.featherSize` (the 羽化大小 control) wins when present; 0 means off.
  */
 export function resolveFeatherWorld(
-  stroke: { edgeFeather?: boolean; featherSize?: number },
+  stroke: { edgeFeather?: boolean; featherSize?: number; style?: string; renderVersion?: number },
   widths: readonly number[],
 ): number {
-  if (stroke.edgeFeather === false) return 0;
+  if (stroke.edgeFeather === false || isSingleLayerPencil(stroke)) return 0;
   const explicit = stroke.featherSize;
   if (typeof explicit === 'number' && Number.isFinite(explicit)) return Math.max(0, explicit);
   return autoFeatherWorld(widths);
+}
+
+export function isSingleLayerPencil(stroke: { style?: string; renderVersion?: number }): boolean {
+  return stroke.style === 'pencil' && (stroke.renderVersion === 4 || stroke.renderVersion === 5);
 }
 
 export function smoothWidths(widths: number[]): number[] { return finishInkWork(smoothWidthsWork(widths)); }

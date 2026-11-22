@@ -41,6 +41,7 @@ export interface Tag {
 
 export interface AppSettings {
   theme: 'light' | 'dark';
+  inkToolbarDock: 'top' | 'bottom';
   fontSize: number;
   fontFamily: string;
   backgroundImage: string | null;
@@ -127,6 +128,7 @@ export const DEFAULT_TAGS: Tag[] = [
 
 export const DEFAULT_SETTINGS: AppSettings = {
   theme: 'dark',
+  inkToolbarDock: 'bottom',
   fontSize: 15,
   fontFamily: 'Georgia, "Times New Roman", serif',
   backgroundImage: null,

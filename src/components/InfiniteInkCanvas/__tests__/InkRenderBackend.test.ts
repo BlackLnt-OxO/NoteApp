@@ -4,6 +4,8 @@ import { InkRenderBackend } from '../InkRenderBackend';
 import { indexInkStrokes, disposeTiles } from '../InkTiles';
 import { clearInkRasterCache, tileScaleOf } from '../../PdfAnnotation/InkRasterCache';
 import { clearStreamingInk } from '../../PdfAnnotation/StreamingInkStroke';
+import { bakeDragPreview, PREVIEW_MAX_PIXELS } from '../../PdfAnnotation/InkDragPreview';
+import { getInkStrokeIndex } from '../../PdfAnnotation/InkStrokeIndex';
 import type { Stroke } from '../types';
 import type { TileJob } from '../InkRenderProtocol';
 import { readInkFrame, resetInkFrame } from '../../InkFrameStats';
@@ -25,6 +27,42 @@ beforeEach(() => {
 });
 afterEach(() => { vi.restoreAllMocks(); clearInkRasterCache(); clearStreamingInk(); });
 describe('versioned background tiles', () => {
+  it('draws a wide move as one bounded preview and discards its old destination on undo', () => {
+    const a = stroke('a');
+    const b = { ...stroke('b'), points: [{ x: -3400, y: -2100, pressure: .7, t: 0 }] };
+    const original = [a, b], dx = 590;
+    const moved = original.map(s => ({ ...s, points: s.points.map(p => ({ ...p, x: p.x + dx })) }));
+    const tiles = new Map<string, HTMLCanvasElement>(), worker = fakeWorker();
+    const backend = new InkRenderBackend({ tiles: () => tiles, publish: vi.fn(), protectedKeys: () => new Set(), worker: worker.worker });
+    const preview = bakeDragPreview(original, 3)!;
+    expect(preview.scale).toBeLessThan(3);
+    expect(preview.canvas.width * preview.canvas.height).toBeLessThanOrEqual(PREVIEW_MAX_PIXELS);
+    const index = getInkStrokeIndex(tiles);
+    const updateIndex = (strokes: Stroke[]) => {
+      index.remove(new Set(original.map(s => s.id)));
+      for (const s of strokes) index.add(s);
+    };
+    try {
+      updateIndex(original); backend.sync(original);
+      updateIndex(moved); backend.retainMany(moved, moved, { preview, dx, dy: 0 });
+      backend.requestViewport(camera, 800, 180, 1, false);
+      const viewport = worker.messages.filter(message => message.type === 'viewport').slice(-1)[0];
+      const obsolete = viewport.jobs.find((job: TileJob) => job.key === '1:0');
+      const ctx = createCanvas(800, 180).getContext('2d');
+      const blit = vi.spyOn(ctx, 'drawImage');
+      backend.drawPending(ctx as unknown as CanvasRenderingContext2D);
+      expect(blit).toHaveBeenCalledTimes(1);
+      expect(ctx.getImageData(625, 30, 1, 1).data[3]).toBeGreaterThan(0);
+
+      updateIndex(original); backend.sync(original);
+      expect(worker.emit(obsolete).close).toHaveBeenCalled();
+      expect(tiles.has('1:0')).toBe(false);
+      ctx.clearRect(0, 0, 800, 180);
+      backend.drawPending(ctx as unknown as CanvasRenderingContext2D);
+      expect(ctx.getImageData(625, 30, 1, 1).data[3]).toBe(0);
+    } finally { backend.dispose(); disposeTiles(tiles); }
+  });
+
   it('pauses old source before a new-version viewport can overtake its deferred stroke data', async () => {
     const tiles = new Map<string, HTMLCanvasElement>(), a = stroke('a'), worker = fakeWorker();
     indexInkStrokes(tiles, [a]);

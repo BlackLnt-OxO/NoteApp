@@ -14,6 +14,7 @@ import { useInkShapePreferences } from '../../InkShapePreferences';
 import { withShape } from '../../InkShapeGeometry';
 import { useNoteStore } from '../../../store';
 import type { PdfItem } from '../PdfTypes';
+import { InkLaserTrail } from '../../InkLaserTrail';
 
 vi.mock('../PdfLoader', () => ({
   getPageSize: vi.fn().mockResolvedValue({ width: 600, height: 800 }),
@@ -61,6 +62,7 @@ beforeEach(() => {
   // Wiring test only: real raster/alpha assertions live in StreamingInk.test.ts.
   vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockImplementation(() => new Proxy({
     getTransform: () => ({ a: 1, b: 0, c: 0, d: 1, e: 0, f: 0 }),
+    createImageData: (width: number, height: number) => ({ data: new Uint8ClampedArray(width * height * 4), width, height }),
   } as unknown as CanvasRenderingContext2D, { get(target, key) { return Reflect.get(target, key) ?? (() => undefined); } }));
   vi.stubGlobal('requestAnimationFrame', (cb: FrameRequestCallback) => { frames.set(++frameId, cb); return frameId; });
   vi.stubGlobal('cancelAnimationFrame', (id: number) => frames.delete(id));
@@ -124,6 +126,48 @@ describe('editable shape input', () => {
     expect(s.root.queryByRole('group', { name: '图形参数' })).toBeNull();
     pointer(s.canvas, 'pointerup', 401, 300);
   });
+  it.each(['canvas', 'pdf'] as const)('%s snaps rough three- and four-sided outlines during a hold', async view => {
+    const s = await mountShapeView(view);
+    const outlines = [
+      { kind: 'triangle', points: [[150, 130], [164, 139], [200, 192], [242, 267], [236, 276],
+        [183, 274], [120, 270], [70, 260], [75, 249], [104, 204], [132, 153], [144, 135]] },
+      { kind: 'rectangle', points: [[340, 143], [389, 138], [439, 137], [480, 145], [497, 157],
+        [501, 194], [498, 238], [489, 249], [450, 256], [406, 252], [354, 247], [330, 236], [321, 197], [326, 166], [335, 150]] },
+    ];
+    for (const { points, kind } of outlines) {
+      const [[startX, startY], ...steps] = points;
+      pointer(s.canvas, 'pointerdown', startX, startY);
+      for (const [x, y] of steps) pointer(s.canvas, 'pointermove', x, y);
+      frame();
+      act(() => vi.advanceTimersByTime(1001));
+      const [endX, endY] = steps[steps.length - 1];
+      pointer(s.canvas, 'pointerup', endX, endY); frame();
+      expect((s.items()[s.items().length - 1] as PdfStroke).geometry?.kind).toBe(kind);
+    }
+  });
+  it.each(['canvas', 'pdf'] as const)('%s draws and fades laser trails without committing ink or history', async view => {
+    const s = await mountShapeView(view);
+    let now = 100;
+    vi.spyOn(performance, 'now').mockImplementation(() => now);
+    const paint = vi.spyOn(InkLaserTrail.prototype, 'draw');
+    const append = vi.spyOn(InkLaserTrail.prototype, 'append');
+    if (view === 'canvas') act(() => useCanvasStore.setState({ brush: 'laser' }));
+    else act(() => usePdfStore.setState({ brushType: 'laser' }));
+    vi.spyOn(s.canvas.parentElement!, 'getBoundingClientRect').mockReturnValue(new DOMRect(10, 20, 1000, 600));
+    pointer(s.canvas, 'pointerdown', 100, 150);
+    expect(append).toHaveBeenLastCalledWith(90, 130, expect.any(Number));
+    pointer(s.canvas, 'pointermove', 135, 170); frame();
+    expect(paint).toHaveBeenLastCalledWith(expect.anything(), 1);
+    pointer(s.canvas, 'pointerup', 160, 150);
+    now += 900; frame();
+    expect(paint).toHaveBeenLastCalledWith(expect.anything(), 0.5);
+    paint.mockClear();
+    now += 1000; frame();
+    expect(paint).not.toHaveBeenCalled();
+    expect(s.items()).toHaveLength(0);
+    const length = view === 'canvas' ? useCanvasStore.getState().history.length : (usePdfStore.getState().history[1] ?? []).length;
+    expect(length).toBe(0);
+  });
   it.each(['canvas', 'pdf'] as const)('%s keeps geometry in sync when an existing selection is moved', async view => {
     const s = await mountShapeView(view);
     const circle = withShape({ id: 'saved-circle', type: 'stroke', points: [], color: '#1267cb', size: 4,
@@ -157,7 +201,7 @@ describe('editable shape input', () => {
       if (view === 'canvas') useCanvasStore.setState({ objects: [circle], activeTool: 'select', selectedIds: [circle.id], renderEpoch: 4 });
       else usePdfStore.setState({ items: { 1: [circle] }, activeTool: 'select', selectedIds: [circle.id], renderEpoch: 4 });
     }); frame();
-    const control = [...s.root.container.querySelectorAll('svg title')].find(el => el.textContent === '调整半径')!.parentElement!;
+    const control = s.root.container.querySelector('svg g[aria-label="调整半径"]')!;
     pointer(control, 'pointerdown', 200, 140); pointer(control, 'pointerup', 200, 140); frame();
     expect(view === 'canvas' ? useCanvasStore.getState().history.length : (usePdfStore.getState().history[1] ?? []).length).toBe(0);
     const starting = s.items()[0];
@@ -344,6 +388,29 @@ describe('wheel input', () => {
 });
 
 describe('canvas input integration', () => {
+  it('moves an image outside the select tool with one history entry on release', async () => {
+    const image = { id: 'photo', type: 'image' as const, x: 100, y: 100, width: 90, height: 60, dataUrl: 'data:image/gif;base64,', createdAt: 0 };
+    useCanvasStore.setState({ objects: [image], loaded: true });
+    let root!: ReturnType<typeof render>;
+    await act(async () => { root = render(<InfiniteInkCanvas />); });
+    const element = root.container.querySelector<HTMLElement>('[data-ink-object-id="photo"]')!;
+    element.setPointerCapture = vi.fn();
+    pointer(element, 'pointerdown', 105, 110);
+    pointer(element, 'pointermove', 215, 140);
+    expect(useCanvasStore.getState().objects[0]).toBe(image);
+    expect(useCanvasStore.getState().history).toHaveLength(0);
+    const [x, y] = element.style.translate.split(' ').map(Number.parseFloat);
+    const scale = useNoteStore.getState().uiScale;
+    expect(x).toBeCloseTo(110 / scale);
+    expect(y).toBeCloseTo(30 / scale);
+    pointer(element, 'pointerup', 225, 144);
+    expect(useCanvasStore.getState().objects[0]).toMatchObject({ x: 220, y: 134 });
+    expect(useCanvasStore.getState().history).toHaveLength(1);
+    expect(element.style.translate).toBe('');
+    act(() => useCanvasStore.getState().undo());
+    expect(useCanvasStore.getState().objects[0]).toBe(image);
+  });
+
   it.each(['canvas', 'pdf'] as const)('%s records old and new tile coverage for a cross-tile drag', async view => {
     const s: PdfStroke = { id: 'trace-drag', type: 'stroke', color: '#000', size: 8, opacity: 1, smoothing: 0,
       createdAt: 0, compositeOperation: 'source-over', points: [{ x: 450, y: 100, pressure: .5, t: 0 }, { x: 600, y: 100, pressure: .5, t: 17 }] };
@@ -471,7 +538,10 @@ describe('canvas input integration', () => {
     expect((usePdfStore.getState().items[1][0] as PdfStroke).points.map(point => point.x)).toEqual([100, 110]);
     expect(usePdfStore.getState().items[2] ?? []).toHaveLength(0);
   });
-  it.each([['canvas', 'marker'], ['pdf', 'marker'], ['canvas', 'pencil'], ['pdf', 'pencil']] as const)('%s %s commits versioned ink, erases the topmost stroke, and rebuilds its index on undo', async (view, style) => {
+  it.each([
+    ['canvas', 'marker'], ['pdf', 'marker'], ['canvas', 'fountain'],
+    ['pdf', 'fountain'], ['canvas', 'pencil'], ['pdf', 'pencil'],
+  ] as const)('%s %s commits versioned ink, erases the topmost stroke, and rebuilds its index on undo', async (view, style) => {
     useCanvasStore.setState({ brush: style });
     usePdfStore.setState({ brushType: style });
     if (view === 'pdf') usePdfStore.setState({ pdfDoc: {} as never, currentPage: 1, pageSizes: { 1: { width: 600, height: 800 } } });
@@ -486,8 +556,9 @@ describe('canvas input integration', () => {
     const strokes = () => (view === 'canvas' ? useCanvasStore.getState().objects : usePdfStore.getState().items[1] ?? []) as PdfStroke[];
     draw(canvas); draw(canvas);
     expect(strokes()).toHaveLength(2);
-    expect(strokes().every(s => s.renderVersion === 2 && s.points.length === 13)).toBe(true);
-    if (style === 'pencil') expect(strokes().every(s => s.style === 'pencil')).toBe(true);
+    const version = style === 'marker' ? 2 : 5;
+    expect(strokes().every(s => s.renderVersion === version && s.points.length === 13)).toBe(true);
+    if (style !== 'marker') expect(strokes().every(s => s.style === style)).toBe(true);
     const firstId = strokes()[0].id;
     act(() => {
       if (view === 'canvas') useCanvasStore.setState({ activeTool: 'eraser', eraserMode: 'stroke' });

@@ -1,11 +1,12 @@
 import { finishInkWork } from '../InkCooperativeWork';
 import { previewGeometry } from './InkPreviewGeometry';
-import { createInkCanvas } from '../InkCanvasSurface';
+import { createInkCanvas, inkPixelTransform } from '../InkCanvasSurface';
 import type { PdfPoint, PdfStroke } from './PdfTypes';
-import { smoothingToMinCutoff, type Bounds } from './PdfEngine';
-import { clamp01, markerStrokeAlpha, pressureToWidth, resolveFeatherWorld } from './InkMath';
+import { inkPositionWeight, smoothingToMinCutoff, type Bounds } from './PdfEngine';
+import { clamp01, isSingleLayerPencil, markerStrokeAlpha, pressureToWidth, resolveFeatherWorld } from './InkMath';
 import { drawVariableRibbon } from './InkRibbonRenderer';
 import { StreamingPencilGrain, type PencilGrainMark } from './StreamingPencilGrain';
+import { applyPencilTexture, clearGraphitePaper, graphitePaper, graphitePaperBytes, pencilPaperPattern, type GraphitePaper } from './GraphitePaper';
 
 const CELL = 128;
 const SCALE = 3;
@@ -13,7 +14,34 @@ const GUTTER = 3;
 const PIXELS = (CELL + 2 * GUTTER) * SCALE;
 /** Bytes per tile canvas — the unit the live cache below is budgeted in. */
 const BYTES_PER_CANVAS = PIXELS * PIXELS * 4;
-interface Sample { x: number; y: number; p: number; t: number; width: number; ema: number }
+interface Sample {
+  x: number; y: number; p: number; t: number; width: number; ema: number;
+  rawX?: number; rawY?: number; speed?: number; coreWidth?: number;
+}
+
+export function usesStreamingInk(stroke: PdfStroke): boolean {
+  return stroke.renderVersion === 2 || stroke.renderVersion === 3 || stroke.renderVersion === 5 || isSingleLayerPencil(stroke);
+}
+
+export function usesOnePassInk(stroke: PdfStroke): boolean {
+  return stroke.style === 'pencil' ? isSingleLayerPencil(stroke) : usesStreamingInk(stroke);
+}
+
+function colorCoverage(ctx: CanvasRenderingContext2D, stroke: PdfStroke, x: number, y: number, scale: number): void {
+  if (stroke.style === 'pencil' && stroke.renderVersion === 5 && applyPencilTexture(ctx, stroke.color, x, y, scale)) return;
+  ctx.globalCompositeOperation = 'source-in';
+  ctx.fillStyle = stroke.color;
+  ctx.fillRect(0, 0, ctx.canvas.width, ctx.canvas.height);
+  ctx.globalCompositeOperation = 'source-over';
+}
+
+/** Viewport CSS pixels per millisecond, independent of the document zoom. */
+function fountainPace(stroke: PdfStroke, travel: number, elapsedMs: number, fallback: number): number {
+  if (!(elapsedMs > 0 && elapsedMs <= 1000) || !Number.isFinite(travel)) return fallback;
+  const zoom = stroke.inputZoom ?? 1;
+  const distance = travel * (Number.isFinite(zoom) && zoom > 0 ? zoom : 1);
+  return Math.min(4, distance / Math.max(1, elapsedMs));
+}
 
 /**
  * One sample of the stroke's own width/smoothing chain — the single source of
@@ -22,18 +50,59 @@ interface Sample { x: number; y: number; p: number; t: number; width: number; em
  * happened to draw it. `prev` is the previous FILTERED sample; `tip` marks the
  * replaceable live pen tip, which is never filtered.
  */
-function samplePoint(stroke: PdfStroke, raw: PdfPoint, prev: Sample | null, tip: boolean, grainy: boolean): Sample {
+function samplePoint(stroke: PdfStroke, raw: PdfPoint, prev: Sample | null, tip: boolean, grainy: boolean, next?: PdfPoint): Sample {
   let x = Number.isFinite(raw.x) ? raw.x : prev?.x ?? 0;
   let y = Number.isFinite(raw.y) ? raw.y : prev?.y ?? 0;
+  const rawX = x, rawY = y;
   let p = Number.isFinite(raw.pressure) ? clamp01(raw.pressure) : 0.5;
   const t = Number.isFinite(raw.t) ? raw.t : prev?.t ?? 0;
   const dt = prev ? (t - prev.t) / 1000 : 0;
   if (prev && !tip && dt > 0 && dt <= 1) {
-    const cutoff = smoothingToMinCutoff(stroke.smoothing) + 0.007 * Math.hypot(x - prev.x, y - prev.y) / dt;
-    const a = 1 / (1 + 1 / (2 * Math.PI * cutoff * dt));
+    const a = inkPositionWeight(smoothingToMinCutoff(stroke.smoothing), x - prev.x, y - prev.y, dt);
     x = prev.x + (x - prev.x) * a;
     y = prev.y + (y - prev.y) * a;
     p = prev.p + (p - prev.p) * a;
+  }
+  const fountain = stroke.style === 'fountain' && (stroke.renderVersion === 3 || stroke.renderVersion === 5);
+  if (fountain || isSingleLayerPencil(stroke) || (stroke.style === 'pencil' && stroke.renderVersion === 3)) {
+    const travel = prev ? Math.hypot(rawX - (prev.rawX ?? prev.x), rawY - (prev.rawY ?? prev.y)) : 0;
+    const blend = travel / (travel + Math.max(0.9, stroke.size * 0.21));
+    const ema = prev ? prev.ema + (p - prev.ema) * blend : p;
+    if (stroke.style === 'pencil' && stroke.renderVersion === 3) {
+      const width = Math.max(0.2, stroke.size * (0.14 + Math.pow(ema, 0.85) * 0.69));
+      const contact = clamp01((ema - 0.16) / 0.84);
+      const coreWidth = width * 0.84 * contact * contact * (3 - 2 * contact);
+      return { x, y, p, t, width, ema, rawX, rawY, coreWidth };
+    }
+    let speed: number | undefined;
+    let width = pressureToWidth(ema, stroke.size);
+    if (fountain && stroke.renderVersion === 5) {
+      const lastPace = prev?.speed ?? 0.45;
+      // Seed the first cap from the first leg once that leg arrives. A fast
+      // stroke doesn't start with a thick dot left by the pen-down preview.
+      speed = prev
+        ? lastPace + (fountainPace(stroke, travel, dt * 1000, lastPace) - lastPace) * Math.min(0.65, blend)
+        : next ? fountainPace(stroke, Math.hypot(next.x - rawX, next.y - rawY), next.t - t, lastPace) : lastPace;
+      const flow = clamp01(stroke.inkSpeed ?? 0.5);
+      const relativePace = speed / (0.33 + 0.60 * flow);
+      // A finite ink supply narrows fast strokes while retaining a solid line.
+      const deposit = 0.27 + 0.73 / (1 + relativePace * relativePace);
+      width *= (0.66 + 0.34 * flow) * deposit;
+    } else if (fountain) {
+      const previousSpeed = prev?.speed ?? 0.45;
+      const targetSpeed = dt > 0 && dt <= 1 ? clamp01(travel / (dt * 1000)) : previousSpeed;
+      speed = prev ? previousSpeed + (targetSpeed - previousSpeed) * blend : previousSpeed;
+      const flow = 0.5 + 0.5 * clamp01(stroke.inkSpeed ?? 0.5);
+      width = width * flow * (1 - 0.28 * speed);
+    }
+    width = Math.max(0.15, width);
+    if (prev) {
+      // Limit width change per distance, so a cluster of samples near a pause
+      // or pen-up cannot swell into a cap wider than the neighboring line.
+      const advance = Math.min(travel, Math.hypot(x - prev.x, y - prev.y));
+      width = Math.max(prev.width - advance * 0.22, Math.min(prev.width + advance * 0.15, width));
+    }
+    return { x, y, p, t, width, ema, rawX, rawY, speed };
   }
   const ema = prev ? prev.ema + (p - prev.ema) * 0.42 : p;
   let width = pressureToWidth(ema, stroke.size);
@@ -69,9 +138,7 @@ function samplePoint(stroke: PdfStroke, raw: PdfPoint, prev: Sample | null, tip:
  * lengths are scaled by the current transform in some engines and not others, so
  * only an identity transform makes the radius mean one thing everywhere.
  *
- * Pencil is deliberately excluded — its grain comes from `StreamingPencilGrain`,
- * whose mark sequence is only defined incrementally, so pencil keeps the
- * incremental raster above.
+ * Earlier layered pencils keep the incremental raster for their grain.
  */
 // Pooled scratch canvases for the one-pass renderer's INTERMEDIATES. A dense
 // tile renders hundreds of strokes and each call used to allocate 2–3 canvases
@@ -102,7 +169,9 @@ function scratchCheckout(width: number, height: number): HTMLCanvasElement {
   return c;
 }
 export function scratchInkBytes(): number {
-  let bytes = 0; for (const canvas of scratchPool.values()) bytes += canvas.width * canvas.height * 4; return bytes;
+  let bytes = graphitePaperBytes();
+  for (const canvas of scratchPool.values()) bytes += canvas.width * canvas.height * 4;
+  return bytes;
 }
 export function clearInkScratch(): void { for (const canvas of scratchPool.values()) canvas.width = 0; scratchPool.clear(); }
 function scratchReturn(c: HTMLCanvasElement): void {
@@ -148,6 +217,21 @@ interface StrokeSamples { samples: Sample[]; pressureSum: number; widthSum: numb
 const sampleCache = new WeakMap<PdfStroke, StrokeSamples>();
 function strokeSamples(stroke: PdfStroke): StrokeSamples { return finishInkWork(strokeSamplesWork(stroke)); }
 
+/** The selection already has a raster surface, so draw each preview as one
+ * fill on it instead of allocating a separate raster for every stroke. */
+export function drawStreamingPreview(ctx: CanvasRenderingContext2D, stroke: PdfStroke, scale: number): void {
+  const { samples, pressureSum, widthSum } = strokeSamples(stroke);
+  const tip = samples[samples.length - 1];
+  if (!tip) return;
+  const { points, widths } = previewGeometry(samples, samples.map(s => s.width), scale);
+  const alpha = markerStrokeAlpha(stroke.opacity, (pressureSum + tip.p) / samples.length,
+    stroke.pressureOpacity === true && !isSingleLayerPencil(stroke));
+  const feather = resolveFeatherWorld(stroke, [(widthSum + tip.width) / samples.length]);
+  const color = stroke.style === 'pencil' && stroke.renderVersion === 5
+    ? pencilPaperPattern(ctx, stroke.color, 0, 0, 1) ?? stroke.color : stroke.color;
+  drawVariableRibbon(ctx, points, widths, color, alpha, stroke.compositeOperation, 0, 0, feather);
+}
+
 function* strokeSamplesWork(stroke: PdfStroke): Generator<void, StrokeSamples, unknown> {
     const cached = sampleCache.get(stroke);
     if (cached)
@@ -159,7 +243,7 @@ function* strokeSamplesWork(stroke: PdfStroke): Generator<void, StrokeSamples, u
     let pressureSum = 0, widthSum = 0, maxWidth = 0;
     for (let i = 0; i < n; i++) {
         yield;
-        const s = samplePoint(stroke, pts[i], prev, i === n - 1, false);
+        const s = samplePoint(stroke, pts[i], prev, i === n - 1, false, i === 0 ? pts[1] : undefined);
         samples[i] = s;
         if (i < n - 1) {
             pressureSum += s.p;
@@ -181,6 +265,7 @@ export interface StrokeOnceBuild {
   minX: number; minY: number; maxX: number; maxY: number;
   width: number;
   height: number;
+  scale: number;
   coverage: HTMLCanvasElement;
   cctx: CanvasRenderingContext2D;
   pts: { x: number; y: number }[];
@@ -278,8 +363,9 @@ export function* startStrokeOnceBuildWork(
     cctx.setTransform(scale, 0, 0, scale, -minX * scale, -minY * scale);
     const avgWidth = (widthSum + samples[n - 1].width) / n;
     const blurPx = Math.round(resolveFeatherWorld(stroke, [avgWidth]) * scale * 16) / 16;
-    const alpha = markerStrokeAlpha(stroke.opacity, (pressureSum + samples[n - 1].p) / n, stroke.pressureOpacity === true);
-    return { stroke, minX, minY, maxX, maxY, width, height, coverage, cctx, pts, widths, next: 0, count, blurPx, alpha };
+    const alpha = markerStrokeAlpha(stroke.opacity, (pressureSum + samples[n - 1].p) / n,
+      stroke.pressureOpacity === true && !isSingleLayerPencil(stroke));
+    return { stroke, minX, minY, maxX, maxY, width, height, scale, coverage, cctx, pts, widths, next: 0, count, blurPx, alpha };
 }
 
 /** Draw a build's next segments — at most `maxPoints` points' worth, seed disc
@@ -310,9 +396,7 @@ export function pumpStrokeOnceBuild(b: StrokeOnceBuild, maxPoints: number): { do
 export function finishStrokeOnceBuild(b: StrokeOnceBuild): HTMLCanvasElement {
   const cctx = b.cctx;
   cctx.setTransform(1, 0, 0, 1, 0, 0);
-  cctx.globalCompositeOperation = 'source-in';
-  cctx.fillStyle = b.stroke.color;
-  cctx.fillRect(0, 0, b.width, b.height);
+  colorCoverage(cctx, b.stroke, b.minX, b.minY, b.scale);
 
   const blurred = b.alpha >= 1 ? freshCanvas(b.width, b.height) : scratchCheckout(b.width, b.height);
   const bctx = blurred.getContext('2d')!;
@@ -371,12 +455,13 @@ const canvas = () => {
   return c;
 };
 
-/** Version 2 marker/fountain/pencil raster. Work per update depends on NEW samples and
+/** Streaming marker/fountain/pencil raster. Work per update depends on NEW samples and
  * touched pixels, never on the length/number of retraces in the stroke prefix.
  * Opaque coverage is accumulated before opacity/feather are applied, so a 50%
  * marker stays 50% in its own intersections, however often the pen returns. */
 export class StreamingInkStroke {
   private readonly grain: StreamingPencilGrain | null;
+  private readonly graphite: boolean;
   private grainPreview = new Map<string, PencilGrainMark[]>();
   private tiles = new Map<string, Tile>();
   private scratch = canvas();
@@ -402,11 +487,12 @@ export class StreamingInkStroke {
   }
 
   constructor(private readonly stroke: PdfStroke, private readonly clipBounds?: Bounds) {
-    this.grain = stroke.style === 'pencil' ? new StreamingPencilGrain(stroke) : null;
+    this.graphite = stroke.renderVersion === 3 && stroke.style === 'pencil';
+    this.grain = stroke.style === 'pencil' && !this.graphite && !isSingleLayerPencil(stroke) ? new StreamingPencilGrain(stroke) : null;
   }
 
   private sample(raw: PdfPoint, tip: boolean): Sample {
-    return samplePoint(this.stroke, raw, this.last, tip, this.grain !== null);
+    return samplePoint(this.stroke, raw, this.last, tip, this.grain !== null, this.last ? undefined : this.stroke.points[1]);
   }
 
   private tile(tx: number, ty: number): Tile {
@@ -423,6 +509,8 @@ export class StreamingInkStroke {
 
   private visit(a: Sample, b: Sample, write: boolean): Set<string> {
     const pad = Math.max(a.width, b.width) / 2 + GUTTER;
+    const coreA = a.coreWidth ?? 0, coreB = b.coreWidth ?? 0;
+    const hasCore = this.graphite && Math.max(coreA, coreB) >= 0.15;
     const keys = new Set<string>();
     for (let ty = Math.floor((Math.min(a.y, b.y) - pad) / CELL); ty <= Math.floor((Math.max(a.y, b.y) + pad) / CELL); ty++) {
       for (let tx = Math.floor((Math.min(a.x, b.x) - pad) / CELL); tx <= Math.floor((Math.max(a.x, b.x) + pad) / CELL); tx++) {
@@ -431,17 +519,20 @@ export class StreamingInkStroke {
         const tile = this.tile(tx, ty);
         tile.dirty = true;
         keys.add(key);
-        if (write) this.segment(tile.mask.getContext('2d')!, tile, a, b);
+        if (write) {
+          this.segment(tile.mask.getContext('2d')!, tile, a, b);
+          if (hasCore) this.segment(this.grainMask(tile), tile, a, b, coreA, coreB);
+        }
       }
     }
     return keys;
   }
 
-  private segment(ctx: CanvasRenderingContext2D, tile: Tile, a: Sample, b: Sample): void {
+  private segment(ctx: CanvasRenderingContext2D, tile: Tile, a: Sample, b: Sample, widthA = a.width, widthB = b.width): void {
     ctx.setTransform(SCALE, 0, 0, SCALE, (GUTTER - tile.x) * SCALE, (GUTTER - tile.y) * SCALE);
     // Each raw segment has bounded geometry (one quad + two caps). Inserting
     // hundreds of 1px discs along an already straight segment adds no detail.
-    drawVariableRibbon(ctx, [a, b], [a.width, b.width], '#000000', 1, 'source-over', 0, 0, false);
+    drawVariableRibbon(ctx, [a, b], [widthA, widthB], '#000000', 1, 'source-over', 0, 0, false);
   }
   private cellNeeded(tx: number, ty: number): boolean {
     const bounds = this.clipBounds;
@@ -458,6 +549,15 @@ export class StreamingInkStroke {
     ctx.beginPath();
     for (const mark of marks) { ctx.moveTo(mark.a.x, mark.a.y); ctx.lineTo(mark.b.x, mark.b.y); }
     ctx.stroke();
+  }
+
+  private grainMask(tile: Tile): CanvasRenderingContext2D {
+    if (!tile.grain) {
+      tile.grain = canvas();
+      this.bytes += BYTES_PER_CANVAS;
+      this.grew();
+    }
+    return tile.grain.getContext('2d')!;
   }
 
   private visitGrain(marks: PencilGrainMark[], write: boolean): void {
@@ -477,8 +577,40 @@ export class StreamingInkStroke {
     }
     if (write) for (const [key, list] of buckets) {
       const tile = this.tiles.get(key)!;
-      if (!tile.grain) { tile.grain = canvas(); this.bytes += BYTES_PER_CANVAS; this.grew(); }
-      this.drawGrain(tile.grain.getContext('2d')!, tile, list);
+      this.drawGrain(this.grainMask(tile), tile, list);
+    }
+  }
+
+  private refreshGraphite(tile: Tile, tmp: CanvasRenderingContext2D, tip: Sample | null, blur: number, paper: GraphitePaper): void {
+    const out = tile.image.getContext('2d')!;
+    tmp.setTransform(1, 0, 0, 1, 0, 0);
+    tmp.clearRect(0, 0, PIXELS, PIXELS);
+    tmp.drawImage(tile.mask, 0, 0);
+    if (tip) this.segment(tmp, tile, this.last ?? tip, tip);
+
+    out.clearRect(0, 0, PIXELS, PIXELS);
+    out.save();
+    // Feather the silhouette before adding the paper texture.
+    if (blur >= 1 / 64) out.filter = `blur(${blur}px)`;
+    out.drawImage(this.scratch, 0, 0);
+    out.restore();
+    out.globalCompositeOperation = 'source-in';
+    out.drawImage(paper.light, 0, 0);
+    out.globalCompositeOperation = 'source-over';
+
+    const coreA = this.last?.coreWidth ?? tip?.coreWidth ?? 0;
+    const coreB = tip?.coreWidth ?? 0;
+    const liveCore = tip && Math.max(coreA, coreB) >= 0.15;
+    if (tile.grain || liveCore) {
+      tmp.setTransform(1, 0, 0, 1, 0, 0);
+      tmp.clearRect(0, 0, PIXELS, PIXELS);
+      if (tile.grain) tmp.drawImage(tile.grain, 0, 0);
+      if (liveCore) this.segment(tmp, tile, this.last ?? tip, tip, coreA, coreB);
+      tmp.setTransform(1, 0, 0, 1, 0, 0);
+      tmp.globalCompositeOperation = 'source-in';
+      tmp.drawImage(paper.dense, 0, 0);
+      tmp.globalCompositeOperation = 'source-over';
+      out.drawImage(this.scratch, 0, 0);
     }
   }
 
@@ -515,21 +647,26 @@ export class StreamingInkStroke {
     const blur = Math.round(resolveFeatherWorld(this.stroke, [avgWidth]) * SCALE * 16) / 16;
     if (blur !== this.blur) for (const tile of this.tiles.values()) tile.dirty = true;
     this.blur = blur;
-    this.alpha = this.grain ? 1 : markerStrokeAlpha(this.stroke.opacity,
-      (this.pressureSum + (this.tip?.p ?? 0.5)) / Math.max(1, points.length), this.stroke.pressureOpacity === true);
+    this.alpha = this.graphite ? clamp01(this.stroke.opacity) : this.grain ? 1 : markerStrokeAlpha(this.stroke.opacity,
+      (this.pressureSum + (this.tip?.p ?? 0.5)) / Math.max(1, points.length),
+      this.stroke.pressureOpacity === true && !isSingleLayerPencil(this.stroke));
     const tmp = this.scratch.getContext('2d')!;
+    const paper = this.graphite && this.tiles.size ? graphitePaper(this.stroke.color, PIXELS, GUTTER * SCALE) : null;
     for (const [key, tile] of this.tiles) {
       if (!tile.dirty) continue;
+      if (paper) {
+        this.refreshGraphite(tile, tmp, this.oldTipTiles.has(key) ? this.tip : null, blur, paper);
+        tile.dirty = false;
+        this.stats.refreshedTiles++;
+        continue;
+      }
       tmp.setTransform(1, 0, 0, 1, 0, 0);
       tmp.globalCompositeOperation = 'source-over';
       tmp.clearRect(0, 0, PIXELS, PIXELS);
       tmp.drawImage(tile.mask, 0, 0);
       if (this.tip && this.oldTipTiles.has(key)) this.segment(tmp, tile, this.last ?? this.tip, this.tip);
       tmp.setTransform(1, 0, 0, 1, 0, 0);
-      tmp.globalCompositeOperation = 'source-in';
-      tmp.fillStyle = this.stroke.color;
-      tmp.fillRect(0, 0, PIXELS, PIXELS);
-      tmp.globalCompositeOperation = 'source-over';
+      colorCoverage(tmp, this.stroke, tile.x - GUTTER, tile.y - GUTTER, SCALE);
       const out = tile.image.getContext('2d')!;
       out.clearRect(0, 0, PIXELS, PIXELS);
       out.save();
@@ -558,15 +695,30 @@ export class StreamingInkStroke {
 
   get prepared(): boolean { return this.count === this.stroke.points.length; }
 
-  draw(ctx: CanvasRenderingContext2D, dx = 0, dy = 0, bounds?: Bounds): void {
+  draw(ctx: CanvasRenderingContext2D, dx = 0, dy = 0, bounds?: Bounds, alignLiveCells = false): void {
     this.update();
     ctx.save();
     ctx.globalCompositeOperation = this.stroke.compositeOperation;
     ctx.globalAlpha = this.alpha;
+    const transform = alignLiveCells ? inkPixelTransform(ctx) : null;
+    const inverseX = transform ? 1 / transform.a : 1;
+    const inverseY = transform ? 1 / transform.d : 1;
     for (const tile of this.tiles.values()) {
       if (bounds && (tile.x + CELL < bounds.minX || tile.x > bounds.maxX || tile.y + CELL < bounds.minY || tile.y > bounds.maxY)) continue;
-      ctx.drawImage(tile.image, GUTTER * SCALE, GUTTER * SCALE, CELL * SCALE, CELL * SCALE,
-        tile.x + dx, tile.y + dy, CELL, CELL);
+      let x = tile.x + dx, y = tile.y + dy, width = CELL, height = CELL;
+      if (transform) {
+        // Round the shared edge, not each cell's width, so translucent
+        // neighbors meet without a gap or compositing twice.
+        const right = Math.round((tile.x + CELL + dx) * transform.a + transform.e);
+        const bottom = Math.round((tile.y + CELL + dy) * transform.d + transform.f);
+        const left = Math.round(x * transform.a + transform.e);
+        const top = Math.round(y * transform.d + transform.f);
+        x = (left - transform.e) * inverseX;
+        y = (top - transform.f) * inverseY;
+        width = (right - left) * inverseX;
+        height = (bottom - top) * inverseY;
+      }
+      if (width && height) ctx.drawImage(tile.image, GUTTER * SCALE, GUTTER * SCALE, CELL * SCALE, CELL * SCALE, x, y, width, height);
     }
     ctx.restore();
   }
@@ -641,6 +793,7 @@ export function releaseStreamingInk(stroke: PdfStroke): void {
 /** Drop every retained entry (tests, or closing a document). */
 export function clearStreamingInk(): void {
   clearInkScratch();
+  clearGraphitePaper();
   for (const entry of live.values()) entry.value.dispose();
   live.clear();
   liveBytes = 0;

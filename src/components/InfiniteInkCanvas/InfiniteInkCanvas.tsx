@@ -1,6 +1,7 @@
 import { inkStrokesOnly, inkObjectVisible } from '../InkViewportObjects';
 import { InkRenderBackend, strokeTileKeys, protectInkSegment } from './InkRenderBackend';
-import { InkDisplayLayers } from '../InkDisplayLayers';
+import { InkDisplayLayers, sizeInkSurface } from '../InkDisplayLayers';
+import { useInkViewport, type InkViewportSize } from '../InkViewport';
 import { inkTraceId, recordInkTrace, traceInkStrokes } from '../InkDiagnostics';
 import { inkPointerSamples, InkPointerQueue } from '../InkPointerSamples';
 import { releaseStreamingInk } from '../PdfAnnotation/StreamingInkStroke';
@@ -14,7 +15,7 @@ import { beginSelectionCapture, endSelectionCapture, cancelSelectionCapture, ink
 import { getInkStrokeIndex, type InkStrokeIndex } from '../PdfAnnotation/InkStrokeIndex';
 import { bakeDragPreview, drawDragPreview, type DragPreview } from '../PdfAnnotation/InkDragPreview';
 import { useBrushCursor } from '../useBrushCursor';
-import { useInkInputActivity, setPointerHold } from '../inkInputActivity';
+import { useInkInputActivity, setPointerHold, notifyInkStrokeStart } from '../inkInputActivity';
 import { drawSelectionHighlight, drawSelectionRect } from './CanvasRenderer';
 import {
   drawDotGrid, getPressure, addRawPoint,
@@ -26,7 +27,7 @@ import {
   createEraserPerf, addEraserScan, addEraserRestamp, logEraserPerf,
   type EraserPerf,
 } from '../PdfAnnotation/eraserPerf';
-import { drawAnnotatedStroke } from '../PdfAnnotation/PdfBrushRenderers';
+import { drawAnnotatedStroke, drawLiveAnnotatedStroke } from '../PdfAnnotation/PdfBrushRenderers';
 import { screenToWorld, clampZoom, zoomAt, ERASER_RADIUS } from './constants';
 import {
   stampStroke, eraseSegTiles, eraseDotTiles, drawVisibleTiles, removeStrokesFromTiles,
@@ -44,52 +45,10 @@ import AssetObject from '../FileLibrary/AssetObject';
 import { assetDropTarget, makeAssetPlacement, useAssetDrop } from '../FileLibrary/assetDrop';
 import TextObject from './TextObject';
 import Toolbar from './Toolbar';
-import ToolbarShell from './ToolbarShell';
-import { useCanvasToolbarStore } from './useToolbarStore';
 import { useNoteStore } from '../../store';
 import { themeCanvasColors } from '../../themeColors';
-import type { Stroke, StrokePoint, TextNodeData, CanvasObject, ImageObject as ImageObjectType } from './types';
-
-/** Transient laser-pointer stroke segment (never committed / persisted). */
-interface LaserSegment {
-  points: StrokePoint[];
-  color: string;
-  size: number;
-  /** Timestamp of stroke start (pen-down). */
-  start: number;
-  /** Timestamp of pen-up — the fade clock starts HERE, not at pen-down. */
-  end?: number;
-}
-const LASER_LIFETIME = 1800; // ms — how long a laser trail stays visible
-
-/** Draw a laser segment at the given alpha. The caller decides alpha (uniform
- *  while writing so every trail stays lit, then a group fade from the last pen
- *  activity). */
-function drawLaser(ctx: CanvasRenderingContext2D, seg: LaserSegment, alpha: number): void {
-  if (alpha <= 0 || seg.points.length === 0) return;
-
-  ctx.save();
-  ctx.lineCap = 'round';
-  ctx.lineJoin = 'round';
-  ctx.globalCompositeOperation = 'source-over';
-  ctx.strokeStyle = seg.color;
-  ctx.fillStyle = seg.color;
-  ctx.lineWidth = seg.size;
-  ctx.globalAlpha = alpha;
-  ctx.shadowColor = seg.color;
-  ctx.shadowBlur = 6;
-  if (seg.points.length === 1) {
-    ctx.beginPath();
-    ctx.arc(seg.points[0].x, seg.points[0].y, seg.size / 2, 0, Math.PI * 2);
-    ctx.fill();
-  } else {
-    ctx.beginPath();
-    ctx.moveTo(seg.points[0].x, seg.points[0].y);
-    for (let i = 1; i < seg.points.length; i++) ctx.lineTo(seg.points[i].x, seg.points[i].y);
-    ctx.stroke();
-  }
-  ctx.restore();
-}
+import { InkLaserTrail, LASER_LIFETIME } from '../InkLaserTrail';
+import type { Stroke, TextNodeData, CanvasObject, ImageObject as ImageObjectType } from './types';
 
 const InfiniteInkCanvas: React.FC = () => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -100,6 +59,7 @@ const InfiniteInkCanvas: React.FC = () => {
   const backgroundPausedRef = useRef(false);
   const backendRef = useRef<InkRenderBackend | null>(null);
   const boundsRef = useRef<DOMRect | null>(null);
+  const capacityRef = useRef<InkViewportSize | null>(null);
   const inputQueueRef = useRef(new InkPointerQueue());
   const pointerUpRef = useRef<((event: React.PointerEvent<HTMLCanvasElement>) => void) | null>(null);
   const pointerOwnerRef = useRef<number | null>(null);
@@ -151,7 +111,7 @@ const InfiniteInkCanvas: React.FC = () => {
   const dprRef = useRef(1);
   const spaceDownRef = useRef(false);
   const dirtyRef = useRef(false);
-  const laserRef = useRef<LaserSegment[]>([]);
+  const laserRef = useRef<InkLaserTrail[]>([]);
   const laserRafRef = useRef(0);
   /** Timestamp of the most recent laser pen-down / move / pen-up — when a stroke
    *  is being drawn, all trails stay lit; once idle they all fade together from
@@ -189,6 +149,7 @@ const InfiniteInkCanvas: React.FC = () => {
     const owner = pointerOwnerRef.current;
     if (owner !== null) pointerUpRef.current?.({ pointerId: owner, type: 'pointercancel' } as React.PointerEvent<HTMLCanvasElement>);
     clearObjectDragPreview(selectDragRef.current?.objects);
+    if (selectDragRef.current?.preview) selectDragRef.current.preview.canvas.width = 0;
     cancelSelectionCapture(selectionCaptureRef, pointerOwnerRef);
     backendRef.current?.dispose(); backendRef.current = null;
     displayLayersRef.current.dispose();
@@ -229,66 +190,14 @@ const InfiniteInkCanvas: React.FC = () => {
   const selectedIds = useCanvasStore((s) => s.selectedIds);
   const selectionMode = useCanvasStore((s) => s.selectionMode);
   const insertMode = useCanvasStore((s) => s.insertMode);
-  const isDraggingToolbar = useCanvasToolbarStore((s) => s.isDragging);
-  const tOffset = useCanvasToolbarStore((s) => s.offset);
-  const tWidth = useCanvasToolbarStore((s) => s.width);
-  const tSide = useCanvasToolbarStore((s) => s.side);
   const theme = useNoteStore((s) => s.settings.theme);
   const uiScale = useNoteStore((s) => s.uiScale);
   const { ringRef, moveCursor, hideCursor } = useBrushCursor(
-    uiScale, (activeTool === 'pen' || activeTool === 'eraser') && !isDraggingToolbar,
+    uiScale, activeTool === 'pen' || activeTool === 'eraser',
   );
   useInkInputActivity(canvasRef);
   const renderEpoch = useCanvasStore((s) => s.renderEpoch);
   const pendingImageInsert = useCanvasStore((s) => s.pendingImageInsert);
-
-  // ---- Canvas sizing ----------------------------------------------------------
-
-  const resizeCanvas = useCallback(() => {
-    const canvas = canvasRef.current;
-    const container = containerRef.current;
-    if (!canvas || !container) return;
-    const dpr = window.devicePixelRatio || 1;
-    dprRef.current = dpr;
-    // Layout (untransformed) size — unaffected by CSS scale, so the canvas fills
-    // its container at EVERY zoom. (getBoundingClientRect returns the scaled
-    // visual size; setting the element CSS size from it made the canvas spill
-    // past or empty at the right/bottom.)
-    const lw = container.offsetWidth;
-    const lh = container.offsetHeight;
-    // Backing store sized for the VISUAL size (layout × scale) × dpr → stays sharp.
-    canvas.width = Math.max(1, Math.round(lw * uiScale * dpr));
-    canvas.height = Math.max(1, Math.round(lh * uiScale * dpr));
-    // Element CSS size = layout px; the CSS scale renders it at the visual size.
-    canvas.style.width = lw + 'px';
-    canvas.style.height = lh + 'px';
-    boundsRef.current = container.getBoundingClientRect();
-    for (const layer of [backgroundLayerRef.current, committedLayerRef.current]) {
-      if (!layer) continue;
-      layer.width = canvas.width; layer.height = canvas.height;
-      layer.style.width = canvas.style.width; layer.style.height = canvas.style.height;
-    }
-    displayLayersRef.current.resize();
-    dirtyRef.current = true;
-    scheduleRender();
-  }, [uiScale]);
-
-  useEffect(() => {
-    resizeCanvas();
-    window.addEventListener('resize', resizeCanvas);
-    const refreshBounds = () => { if (containerRef.current) boundsRef.current = containerRef.current.getBoundingClientRect(); };
-    window.addEventListener('scroll', refreshBounds, true);
-    const ro = new ResizeObserver(() => resizeCanvas());
-    if (containerRef.current) ro.observe(containerRef.current);
-    return () => { ro.disconnect(); window.removeEventListener('resize', resizeCanvas); window.removeEventListener('scroll', refreshBounds, true); };
-  }, [resizeCanvas]);
-
-  // `transform: scale` changes the canvas's VISUAL size without changing its
-  // layout box, so ResizeObserver won't fire — on a zoom change we must re-size
-  // the backing store manually or ink is drawn/hit at the wrong spot.
-  useEffect(() => {
-    resizeCanvas();
-  }, [uiScale, resizeCanvas]);
 
   useEffect(() => { if (!useCanvasStore.getState().loaded) void useCanvasStore.getState().loadCanvasData().catch(console.error); }, []);
 
@@ -334,17 +243,20 @@ const InfiniteInkCanvas: React.FC = () => {
     const vw = rect.width, vh = rect.height;
     const dpr = dprRef.current;
     const cam = state.camera;
+    const { uiScale } = useNoteStore.getState();
+    const capacity = capacityRef.current ?? rect;
+    sizeInkSurface(canvas, capacity.width, capacity.height, dpr, uiScale);
 
     const colors = themeCanvasColors(useNoteStore.getState().settings.theme);
     const bgLayer = backgroundLayerRef.current, inkLayer = committedLayerRef.current;
     if (bgLayer && inkLayer) {
       displayLayersRef.current.paint({ background: bgLayer, ink: inkLayer, tiles: inkTilesRef.current,
-        camera: cam, width: vw, height: vh, dpr, uiScale: useNoteStore.getState().uiScale,
+        camera: cam, width: vw, height: vh, capacity, dpr, uiScale,
         drawTile: (context, key, tile, x, y, w, h) => { const backend = backendRef.current; if (backend) backend.drawTile(context, key, tile, x, y, w, h); else context.drawImage(tile, x, y, w, h); }, backgroundColor: colors.background,
         dotColor: colors.dotColor, showDotGrid: state.showDotGrid });
     }
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    ctx.clearRect(0, 0, vw, vh);
+    ctx.clearRect(0, 0, canvas.width / dpr, canvas.height / dpr);
     ctx.save();
     ctx.translate(cam.x, cam.y);
     ctx.scale(cam.zoom, cam.zoom);
@@ -357,18 +269,12 @@ const InfiniteInkCanvas: React.FC = () => {
     // Text nodes are now always-interactive DOM cards rendered ABOVE the canvas
     // (TextObject) — they are intentionally NOT drawn into the vector canvas.
 
-    // Live drag-move of selected strokes: one blit of the raster baked at drag
-    // start. If a mid-drag zoom has moved the bake scale on, the preview is the
-    // wrong density — fall back to drawing the strokes, which is always right.
+    // The drag preview keeps its own density through zoom and tile upgrades.
     if (selectDragRef.current) {
       const d = selectDragRef.current;
       drawObjectDragPreview(d.objects, containerRef.current, d.dx, d.dy, cam.zoom, useNoteStore.getState().uiScale);
       const p = d.preview;
-      if (p && p.scale === targetBakeScale(inkTilesRef.current)) {
-        drawDragPreview(ctx, p, d.dx, d.dy);
-      } else {
-        for (const s of d.strokes) drawAnnotatedStroke(ctx, s, d.dx, d.dy);
-      }
+      if (p) drawDragPreview(ctx, p, d.dx, d.dy);
     } else if (state.selectedIds.length > 0) {
       drawSelectionHighlight(ctx, state.objects, state.selectedIds.filter(id => id !== shapeEditorIdRef.current));
     }
@@ -378,7 +284,7 @@ const InfiniteInkCanvas: React.FC = () => {
     if (currentStrokeRef.current
         && currentStrokeRef.current.compositeOperation !== 'destination-out'
         && currentStrokeRef.current.points.length > 0) {
-      drawAnnotatedStroke(ctx, currentStrokeRef.current);
+      drawLiveAnnotatedStroke(ctx, currentStrokeRef.current);
     }
     if (currentStrokeRef.current?.compositeOperation === 'destination-out') drawAnnotatedStroke(ctx, currentStrokeRef.current);
 
@@ -388,11 +294,11 @@ const InfiniteInkCanvas: React.FC = () => {
     const now = performance.now();
     const holding = laserRef.current.some((s) => s.end === undefined);
     if (holding) {
-      for (const seg of laserRef.current) drawLaser(ctx, seg, 1);
+      for (const seg of laserRef.current) seg.draw(ctx, 1);
     } else {
       const gAge = now - laserActiveRef.current;
       const gAlpha = gAge >= LASER_LIFETIME ? 0 : 1 - gAge / LASER_LIFETIME;
-      for (const seg of laserRef.current) drawLaser(ctx, seg, gAlpha);
+      for (const seg of laserRef.current) seg.draw(ctx, gAlpha);
     }
 
     ctx.restore();
@@ -601,7 +507,7 @@ const InfiniteInkCanvas: React.FC = () => {
   // needs more than one pass' budget (wide zoom-out, or a re-bake after zooming),
   // keep going frame by frame rather than blocking on the whole document at once.
   const runMaterialize = useCallback((): number => {
-    if (backgroundPausedRef.current) return 0;
+    if (backgroundPausedRef.current || selectDragRef.current) return 0;
     const container = containerRef.current;
     if (!container) return 0;
     const rect = boundsRef.current ?? container.getBoundingClientRect();
@@ -651,6 +557,12 @@ const InfiniteInkCanvas: React.FC = () => {
     materializeRafRef.current = requestAnimationFrame(step);
   }, [runMaterialize, inkGestureActive, doRender]);
 
+  const repaintViewport = useCallback(() => { dirtyRef.current = true; scheduleRender(); }, [scheduleRender]);
+  const extent = useInkViewport({
+    container: containerRef, bounds: boundsRef, capacity: capacityRef, dpr: dprRef,
+    uiScale, repaint: repaintViewport, requestTiles: scheduleMaterialize,
+  });
+
   useEffect(() => {
     // Tag camera frames for the frame stats — and hence the re-bake/eviction
     // gating that reads them — on CAMERA changes only. This used to ride on the
@@ -694,7 +606,7 @@ const InfiniteInkCanvas: React.FC = () => {
     const layer = inkTilesRef.current;
 
     let incremental = false;
-    if (prev) {
+    if (prev && !selectDragRef.current?.strokes.length) {
       const prevById = new Map<string, Stroke>();
       for (const o of prev) if (o.type === 'stroke') prevById.set(o.id, o);
       const nowById = new Map<string, Stroke>();
@@ -723,7 +635,6 @@ const InfiniteInkCanvas: React.FC = () => {
           // translucent stroke darkens at every self-overlap. stampStroke()
           // indexes the stroke itself.
           for (const s of added) if (!index.has(s.id)) index.add(s);
-          backendRef.current?.sync(strokes);
         }
       }
     }
@@ -737,6 +648,7 @@ const InfiniteInkCanvas: React.FC = () => {
         previousLayer: inkTraceId(layer), strokeCount: strokes.length, renderEpoch: state.renderEpoch });
       disposeTiles(layer);
     }
+    backendRef.current?.sync(strokes);
     // Any in-flight gesture captured the layer's index/grid/bounds. After a
     // rebuild its repairs would write into disposed canvases (`width = 0`),
     // silently turning the repair into a no-op — an erase that appears to do
@@ -744,6 +656,7 @@ const InfiniteInkCanvas: React.FC = () => {
     // empty branch and pointer-up cannot commit stale state.
     strokeEraseRef.current = null;
     clearObjectDragPreview(selectDragRef.current?.objects);
+    if (selectDragRef.current?.preview) selectDragRef.current.preview.canvas.width = 0;
     selectDragRef.current = null;
     cancelSelectionCapture(selectionCaptureRef, pointerOwnerRef);
     displayLayersRef.current.invalidate();
@@ -837,10 +750,13 @@ const InfiniteInkCanvas: React.FC = () => {
     const tiles = inkTilesRef.current;
     const index = getInkStrokeIndex(tiles);
     traceInkStrokes('drag-start', tiles, strokes, { surface: 'canvas' });
-    removeStrokesFromTiles(tiles, index.grid, idSet, strokes, index.bounds);
-    index.remove(idSet);
-    backendRef.current?.suppress(idSet);
-    displayLayersRef.current.invalidate();
+    if (strokes.length) {
+      const keys = new Set(strokes.flatMap(strokeTileKeys));
+      removeStrokesFromTiles(tiles, index.grid, idSet, strokes, index.bounds, true);
+      index.remove(idSet);
+      backendRef.current?.suppress(idSet, keys);
+      displayLayersRef.current.invalidate(keys);
+    }
     selectDragRef.current = {
       start: world, ids, strokes,
       objects: createObjectDragPreview(state.objects, ids, containerRef.current),
@@ -860,6 +776,8 @@ const InfiniteInkCanvas: React.FC = () => {
     const canvas = canvasRef.current;
     if (!canvas) return;
     const state = useCanvasStore.getState();
+    // Editor entrance animations can move the viewport without resizing it.
+    if (containerRef.current) boundsRef.current = containerRef.current.getBoundingClientRect();
     const { sx, sy } = getCanvasPos(e);
     moveCursor(sx, sy);
 
@@ -931,6 +849,7 @@ const InfiniteInkCanvas: React.FC = () => {
       return;
     }
 
+    notifyInkStrokeStart(e.pointerId);
     // Stroke eraser — click erases the whole topmost stroke; dragging keeps the
     // pointer captured and wipes every ink stroke the cursor disc touches
     // (coalesced to one animation-frame batch).
@@ -951,13 +870,9 @@ const InfiniteInkCanvas: React.FC = () => {
     if (state.brush === 'laser') {
       canvas.setPointerCapture(e.pointerId);
       isDrawingRef.current = true;
-      const seg: LaserSegment = {
-        points: [],
-        color: state.brushSettings.color,
-        size: Math.max(1.5, state.brushSettings.size * 0.4),
-        start: performance.now(),
-      };
-      addRawPoint(seg as any, world.x, world.y, getPressure(e), e.timeStamp);
+      const { color, size, smoothing } = state.brushSettings;
+      const seg = new InkLaserTrail(color, Math.max(1.5, size * 0.4), smoothing);
+      seg.append(world.x, world.y, e.timeStamp);
       laserRef.current.push(seg);
       laserActiveRef.current = performance.now();
       startLaser();
@@ -977,11 +892,12 @@ const InfiniteInkCanvas: React.FC = () => {
       color: isEraser ? '#000000' : state.brushSettings.color,
       size: isEraser ? (state.brushSettings.eraserSize ?? ERASER_RADIUS) : state.brushSettings.size,
       opacity: isEraser ? 1 : state.brushSettings.opacity,
-      renderVersion: !isEraser ? 2 : undefined,
+      renderVersion: isEraser ? undefined : state.brush === 'pencil' || state.brush === 'fountain' ? 5 : 2,
       smoothing: isEraser ? 0 : state.brushSettings.smoothing,
       compositeOperation: isEraser ? 'destination-out' : 'source-over',
       style: isEraser ? undefined : (state.brush === 'fountain' || state.brush === 'pencil' ? state.brush : undefined),
       inkSpeed: isEraser ? undefined : state.brushSettings.inkSpeed,
+      inputZoom: !isEraser && state.brush === 'fountain' ? state.camera.zoom : undefined,
       pressureOpacity: isEraser ? undefined : state.brushSettings.pressureOpacity,
       edgeFeather: isEraser ? undefined : state.brushSettings.edgeFeather,
       featherSize: isEraser ? undefined : state.brushSettings.featherSize,
@@ -1070,7 +986,7 @@ const InfiniteInkCanvas: React.FC = () => {
           const events: PointerEvent[] = inkPointerSamples(e.nativeEvent);
           for (const ce of events) {
             const w = screenToWorld(ce.clientX - rect.left, ce.clientY - rect.top, state.camera);
-            addRawPoint(seg as any, w.x, w.y, getPressure(ce), ce.timeStamp);
+            seg.append(w.x, w.y, ce.timeStamp);
           }
         }
       }
@@ -1187,28 +1103,43 @@ const InfiniteInkCanvas: React.FC = () => {
       const st = useCanvasStore.getState();
       if (!d.dx && !d.dy && d.strokes.length) st.commitStrokesPoints(d.strokes.map(s => ({ id: s.id, points: s.points })));
       else st.commitSelectionMove(d.ids, d.dx, d.dy);
+      const objects = useCanvasStore.getState().objects;
+      // The index is updated in this handler. Undo may arrive before effects
+      // run, so the diff baseline has to follow the same commit.
+      prevObjectsRef.current = objects;
       const tiles = inkTilesRef.current;
       const movedIds = new Set(d.strokes.map(s => s.id));
-      for (const o of useCanvasStore.getState().objects) {
-        if (o.type === 'stroke' && movedIds.has(o.id)) {
-          getInkStrokeIndex(tiles).add(o);
-          backendRef.current?.retain(o, useCanvasStore.getState().objects.filter((item): item is Stroke => item.type === 'stroke'));
-        }
+      if (movedIds.size) {
+        const strokes = inkStrokesOnly(objects);
+        const moved = strokes.filter(o => movedIds.has(o.id));
+        const index = getInkStrokeIndex(tiles);
+        for (const stroke of moved) index.add(stroke);
+        const backend = backendRef.current;
+        if (backend && moved.length) backend.retainMany(moved, strokes, d.preview ? { preview: d.preview, dx: d.dx, dy: d.dy } : undefined);
+        else if (d.preview) d.preview.canvas.width = 0;
+        traceInkStrokes('drag-end', tiles, moved, { surface: 'canvas', dx: d.dx, dy: d.dy });
       }
-      if (import.meta.env.DEV) traceInkStrokes('drag-end', tiles,
-        useCanvasStore.getState().objects.filter((o): o is Stroke => o.type === 'stroke' && movedIds.has(o.id)),
-        { surface: 'canvas', dx: d.dx, dy: d.dy });
       dirtyRef.current = true;
+      scheduleMaterialize();
       scheduleRender();
       return;
     }
 
     // Laser pointer — stop feeding points; the group fade clock starts from this
     // pen-up. Never addStroke/stampStroke.
-    if (isDrawingRef.current && useCanvasStore.getState().brush === 'laser') {
+    const state = useCanvasStore.getState();
+    if (isDrawingRef.current && state.brush === 'laser') {
       const seg = laserRef.current[laserRef.current.length - 1];
-      if (seg && seg.end === undefined) seg.end = performance.now();
-      laserActiveRef.current = performance.now();
+      const now = performance.now();
+      if (seg && seg.end === undefined) {
+        if (e.type === 'pointerup') {
+          const { sx, sy } = getCanvasPos(e);
+          const end = screenToWorld(sx, sy, state.camera);
+          seg.append(end.x, end.y, e.timeStamp);
+        }
+        seg.end = now;
+      }
+      laserActiveRef.current = now;
       isDrawingRef.current = false;
       dirtyRef.current = true;
       scheduleRender();
@@ -1240,7 +1171,7 @@ const InfiniteInkCanvas: React.FC = () => {
     }
     isDrawingRef.current = false;
     panAnchorRef.current = null;
-  }, [scheduleRender]);
+  }, [scheduleMaterialize, scheduleRender]);
 
   pointerUpRef.current = handlePointerUp;
 
@@ -1436,6 +1367,8 @@ const InfiniteInkCanvas: React.FC = () => {
   const selectionEvents = inkSelectionCaptureHandlers({ enabled: () => useCanvasStore.getState().activeTool === 'select',
     canvas: canvasRef, capture: selectionCaptureRef, owner: pointerOwnerRef, shapeId: shapeEditorIdRef,
     down: handlePointerDown, move: handlePointerMove, up: handlePointerUp });
+  const cullWidth = extent?.width ?? window.innerWidth;
+  const cullHeight = extent?.height ?? window.innerHeight;
 
   return (
     <div ref={containerRef}
@@ -1446,11 +1379,10 @@ const InfiniteInkCanvas: React.FC = () => {
       style={{ isolation: 'isolate', position: 'absolute', inset: 0, overflow: 'hidden', background: 'var(--page-bg)', borderRadius: '0 0 12px 0' }}>
       <input ref={fileInputRef} type="file" accept="image/*" multiple style={{ display: 'none' }} onChange={onPickImage} />
       {/* Image objects render BEFORE the canvas → they sit below the ink layer. */}
-      {objects.filter((o): o is ImageObjectType => o.type === 'image' && inkObjectVisible(o, camera, boundsRef.current?.width ?? window.innerWidth, boundsRef.current?.height ?? window.innerHeight, [...selectedIds, ...manipulatedIdsRef.current])).map((o) => (
+      {objects.filter((o): o is ImageObjectType => o.type === 'image' && inkObjectVisible(o, camera, cullWidth, cullHeight, [...selectedIds, ...manipulatedIdsRef.current])).map((o) => (
         <ImageObject key={o.id} obj={o} camera={camera} />
       ))}
-      {objects.map(object => object.type === 'asset' && inkObjectVisible(object, camera,
-        boundsRef.current?.width ?? window.innerWidth, boundsRef.current?.height ?? window.innerHeight,
+      {objects.map(object => object.type === 'asset' && inkObjectVisible(object, camera, cullWidth, cullHeight,
         [...selectedIds, ...manipulatedIdsRef.current]) ? <AssetObject key={object.id} object={object} camera={camera}
           interactive={activeTool === 'select'} selected={selectedIds.includes(object.id)}
           onDelete={() => useCanvasStore.getState().deleteObject(object.id)}
@@ -1470,7 +1402,7 @@ const InfiniteInkCanvas: React.FC = () => {
       {/* Committed text = always-visible DOM cards (above ink). Interactive in the
           select / insert-text tools; the one being edited is rendered by TextNode. */}
       {objects
-        .filter((o): o is TextNodeData => o.type === 'text' && o.id !== editingTextId && inkObjectVisible(o, camera, boundsRef.current?.width ?? window.innerWidth, boundsRef.current?.height ?? window.innerHeight, selectedIds))
+        .filter((o): o is TextNodeData => o.type === 'text' && o.id !== editingTextId && inkObjectVisible(o, camera, cullWidth, cullHeight, selectedIds))
         .map((o) => (
           <TextObject key={o.id} node={o} camera={camera} interactive={interactiveText} />
         ))}
@@ -1482,27 +1414,7 @@ const InfiniteInkCanvas: React.FC = () => {
 
       {editingNode && <TextNode node={editingNode} camera={camera} />}
 
-      {isDraggingToolbar && (() => {
-        const cw = containerRef.current?.clientWidth ?? window.innerWidth;
-        const mid = cw * 0.5;
-        const tl = tSide === 'left' ? tOffset : cw - tOffset - tWidth;
-        const tr = tSide === 'left' ? tOffset + tWidth : cw - tOffset;
-        // Highlight the half the toolbar CENTER is over — must match the
-        // snap-on-release logic in ToolbarShell (center < vpW/2 → left).
-        const snapLeft = (tl + tr) / 2 < mid;
-        return (
-          <div style={{ position: 'absolute', inset: 0, zIndex: 99, pointerEvents: 'none' }}>
-            <div style={{ position: 'absolute', top: 0, bottom: 0, left: 0, width: '50%',
-              background: snapLeft ? 'rgba(0,0,0,0.35)' : 'rgba(0,0,0,0.15)', transition: 'background 0.10s' }} />
-            <div style={{ position: 'absolute', top: 0, bottom: 0, left: '50%', width: '50%',
-              background: !snapLeft ? 'rgba(0,0,0,0.35)' : 'rgba(0,0,0,0.15)', transition: 'background 0.10s' }} />
-            <div style={{ position: 'absolute', top: 0, bottom: 0, left: '50%', width: 1,
-              background: 'rgba(255,255,255,0.12)' }} />
-          </div>
-        );
-      })()}
-
-      <ToolbarShell useStore={useCanvasToolbarStore}><Toolbar /></ToolbarShell>
+      <Toolbar />
     </div>
   );
 };

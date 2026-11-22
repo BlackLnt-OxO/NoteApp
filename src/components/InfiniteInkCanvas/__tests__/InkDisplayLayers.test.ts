@@ -35,6 +35,44 @@ describe('bounded retained display layers', () => {
     expect(ink).toHaveBeenCalledTimes(2); expect(background).toHaveBeenCalledTimes(2);
     expect(p.ink.style.transform).toBe('translate(0px, 0px)');
   });
+  it('reveals cached and newly published ink when the visible box grows within its capacity', () => {
+    const p = { ...fixture(), width: 445, height: 350, capacity: { width: 760, height: 460 } };
+    const layers = new InkDisplayLayers();
+    const ink = p.ink.getContext('2d')!;
+    const draw = vi.spyOn(ink, 'drawImage');
+    const background = vi.spyOn(p.background.getContext('2d')!, 'fillRect');
+    layers.paint(p);
+    const size = [p.ink.width, p.ink.height, p.background.width, p.background.height];
+    for (const width of [510, 592, 720, 760, 445]) layers.paint({ ...p, width, height: 460 });
+    expect(draw).toHaveBeenCalledTimes(1);
+    expect(background).toHaveBeenCalledTimes(1);
+    expect([p.ink.width, p.ink.height, p.background.width, p.background.height]).toEqual(size);
+
+    p.tiles.set('1:0', p.tiles.get('0:0')!);
+    layers.invalidate(new Set(['1:0']));
+    layers.paint({ ...p, width: 760 });
+    const margin = panBufferMargin(p.capacity.width, p.capacity.height, 1);
+    expect(draw).toHaveBeenCalledTimes(2);
+    expect(ink.getImageData(margin + 542, margin + 35, 1, 1).data[3]).toBeGreaterThan(120);
+    expect(ink.getImageData(margin + 30, margin + 35, 1, 1).data[3]).toBeGreaterThan(120);
+  });
+  it('refreshes the background independently and only redraws ink once at the new density', () => {
+    const p = fixture(), layers = new InkDisplayLayers();
+    const ink = vi.spyOn(p.ink.getContext('2d')!, 'drawImage');
+    const background = vi.spyOn(p.background.getContext('2d')!, 'clearRect');
+    layers.paint(p);
+    const dark = { ...p, backgroundColor: '#16162a', dotColor: '#282843' };
+    layers.paint(dark);
+    layers.paint({ ...dark, showDotGrid: true });
+    expect(background).toHaveBeenCalledTimes(3);
+    expect(ink).toHaveBeenCalledTimes(1);
+
+    const denser = { ...dark, showDotGrid: true, dpr: 1.25 };
+    layers.paint(denser);
+    layers.paint(denser);
+    expect(ink).toHaveBeenCalledTimes(2);
+    expect(background).toHaveBeenCalledTimes(4);
+  });
   it('repaints dirty tiles in retained coordinates without double-darkening transparent ink', () => {
     const p = fixture(), layers = new InkDisplayLayers(); layers.paint(p);
     const margin = panBufferMargin(p.width, p.height, 1), ctx = p.ink.getContext('2d')!;

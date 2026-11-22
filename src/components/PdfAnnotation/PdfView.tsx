@@ -11,12 +11,11 @@ import { useNoteStore } from '../../store';
 import { usePdfStore, MAX_ANCHOR_PAGES } from './PdfStore';
 import { usePdfLibrary } from './PdfLibrary';
 import { fs } from '../../utils';
-import { usePdfToolbarStore } from '../InfiniteInkCanvas/useToolbarStore';
 import { askConfirm } from '../ConfirmDialog';
 import PdfCanvas from './PdfCanvas';
+import { INK_EDITOR_NAV_HEIGHT } from '../InkViewport';
 import PdfToolbar from './PdfToolbar';
 import PdfSidebar from './PdfSidebar';
-import ToolbarShell from '../InfiniteInkCanvas/ToolbarShell';
 import LibraryHome from './LibraryHome';
 import { useFileWorkspace } from '../FileLibrary/useFileWorkspace';
 import { useAssetLibrary } from '../FileLibrary/assetLibrary';
@@ -34,7 +33,7 @@ const AnchorBadge: React.FC<{
   return (
     <div
       onClick={onJump}
-      title={current ? `当前就在标记的第 ${page} 页` : `回到标记的第 ${page} 页（渲染已缓存，秒回）`}
+      data-tooltip={current ? `当前就在标记的第 ${page} 页` : `回到标记的第 ${page} 页（渲染已缓存，秒回）`}
       onMouseEnter={() => setHover(true)}
       onMouseLeave={() => setHover(false)}
       style={{
@@ -51,7 +50,7 @@ const AnchorBadge: React.FC<{
       <span>{page}</span>
       <span
         onClick={(e) => { e.stopPropagation(); onRemove(); }}
-        title="删除标记"
+        data-tooltip="删除标记"
         style={{
           position: 'absolute', top: -6, right: -6,
           width: 15, height: 15, borderRadius: '50%',
@@ -110,7 +109,7 @@ const NavBar: React.FC<{
 
   return (
     <div style={{
-      position: 'absolute', top: 0, left: 0, right: 0, height: 44, zIndex: 95,
+      position: 'absolute', top: 0, left: 0, right: 0, height: INK_EDITOR_NAV_HEIGHT, zIndex: 95,
       display: 'flex', alignItems: 'center', gap: '8px', padding: '0 12px',
       background: 'var(--chrome-bg)', borderBottom: '1px solid var(--glass-border)',
       backdropFilter: 'blur(10px)', WebkitBackdropFilter: 'blur(10px)',
@@ -153,7 +152,7 @@ const NavBar: React.FC<{
           <button
             onClick={() => addAnchorPage(currentPage)}
             disabled={already || atCap}
-            title={already ? '当前页已在标记中' : atCap ? `已达标记上限（${MAX_ANCHOR_PAGES} 个）` : '把当前页添加为标记（回跳目标，保留渲染缓存）'}
+            data-tooltip={already ? '当前页已在标记中' : atCap ? `已达标记上限（${MAX_ANCHOR_PAGES} 个）` : '把当前页添加为标记（回跳目标，保留渲染缓存）'}
             style={{
               width: 28, padding: 0, lineHeight: '24px', textAlign: 'center',
               borderRadius: '6px', cursor: (already || atCap) ? 'default' : 'pointer',
@@ -176,16 +175,16 @@ const NavBar: React.FC<{
       </span>
 
       {unplacedCount > 0 && <button className="glass-btn" style={btnStyle} onClick={onPairPending}>待配对 {unplacedCount} 页</button>}
-      <button className="glass-btn" onClick={onImport} style={btnStyle} title="导入其它文件">
+      <button className="glass-btn" onClick={onImport} style={btnStyle} data-tooltip="导入其它文件">
         导入
       </button>
-      <button className="glass-btn" onClick={onSave} style={btnStyle} title="保存批注 (Ctrl+S)">
+      <button className="glass-btn" onClick={onSave} style={btnStyle} data-tooltip="保存批注 (Ctrl+S)">
         保存
       </button>
       {savedFlash && (
         <span style={{ fontSize: fs(11, gfs), color: '#51cf66', fontWeight: 600 }}>已保存</span>
       )}
-      <button className="glass-btn" onClick={onClose} style={{ ...btnStyle, color: dirty ? 'var(--danger, #e74c3c)' : 'var(--text-secondary)' }} title="返回文件库">
+      <button className="glass-btn" onClick={onClose} style={{ ...btnStyle, color: dirty ? 'var(--danger, #e74c3c)' : 'var(--text-secondary)' }} data-tooltip="返回文件库">
         关闭
       </button>
     </div>
@@ -285,13 +284,6 @@ const PdfView: React.FC = () => {
     return () => clearTimeout(t);
   }, [currentItemId, fileName, currentPage, camera, showDotGrid, sidebarOpen, anchorPages]);
 
-  // Toolbar drag overlay (same behavior as the infinite canvas)
-  const isDraggingToolbar = usePdfToolbarStore((s) => s.isDragging);
-  const tOffset = usePdfToolbarStore((s) => s.offset);
-  const tWidth = usePdfToolbarStore((s) => s.width);
-  const tSide = usePdfToolbarStore((s) => s.side);
-  const areaRef = useRef<HTMLDivElement>(null);
-
   // Keyboard: undo/redo/delete/page-flip
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
@@ -311,7 +303,7 @@ const PdfView: React.FC = () => {
   }, [doSave]);
 
   return (
-    <div style={{ position: 'absolute', inset: 0, overflow: 'hidden', background: 'var(--page-bg)' }}>
+    <div style={{ position: 'absolute', inset: 0, overflow: 'hidden', background: fileName ? 'var(--page-bg)' : undefined }}>
       <div key={documentKey.current.key} className="animate-fade-in" style={{ position: 'absolute', inset: 0 }}>
       {!fileName ? (
         <LibraryHome onImport={workspace.pickAndOpen} onOpen={workspace.open} onReplace={workspace.replace} importing={workspace.busy} />
@@ -319,29 +311,10 @@ const PdfView: React.FC = () => {
         <>
           <NavBar onSave={doSave} onClose={doClose} onImport={() => void workspace.pickAndOpen(null)}
             onPairPending={workspace.pairPending} savedFlash={savedFlash} dirty={dirty} />
-          <div ref={areaRef} style={{ position: 'absolute', top: 44, left: 0, right: 0, bottom: 0, overflow: 'hidden' }}>
+          <div style={{ position: 'absolute', top: INK_EDITOR_NAV_HEIGHT, left: 0, right: 0, bottom: 0, overflow: 'hidden' }}>
             <PdfCanvas />
             <PdfSidebar />
-
-            {isDraggingToolbar && (() => {
-              const cw = areaRef.current?.clientWidth ?? window.innerWidth;
-              const mid = cw * 0.5;
-              const tl = tSide === 'left' ? tOffset : cw - tOffset - tWidth;
-              const tr = tSide === 'left' ? tOffset + tWidth : cw - tOffset;
-              const snapLeft = (tl + tr) / 2 < mid;
-              return (
-                <div style={{ position: 'absolute', inset: 0, zIndex: 99, pointerEvents: 'none' }}>
-                  <div style={{ position: 'absolute', top: 0, bottom: 0, left: 0, width: '50%',
-                    background: snapLeft ? 'rgba(0,0,0,0.35)' : 'rgba(0,0,0,0.15)', transition: 'background 0.10s' }} />
-                  <div style={{ position: 'absolute', top: 0, bottom: 0, left: '50%', width: '50%',
-                    background: !snapLeft ? 'rgba(0,0,0,0.35)' : 'rgba(0,0,0,0.15)', transition: 'background 0.10s' }} />
-                  <div style={{ position: 'absolute', top: 0, bottom: 0, left: '50%', width: 1,
-                    background: 'rgba(255,255,255,0.12)' }} />
-                </div>
-              );
-            })()}
-
-            <ToolbarShell useStore={usePdfToolbarStore}><PdfToolbar /></ToolbarShell>
+            <PdfToolbar />
           </div>
         </>
       )}

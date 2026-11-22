@@ -124,7 +124,7 @@ const PdfImageObject: React.FC<Props> = ({ obj, page, camera, interactive }) => 
         {interactive && hover && (
           <>
             <button
-              title="删除"
+              aria-label="删除"
               onPointerDown={(e) => e.stopPropagation()}
               onClick={(e) => { e.stopPropagation(); deleteObject(page, obj.id); }}
               style={{
@@ -137,7 +137,7 @@ const PdfImageObject: React.FC<Props> = ({ obj, page, camera, interactive }) => 
               ×
             </button>
             <div
-              title="缩放"
+              data-tooltip="缩放"
               data-ink-object-control=""
               onPointerDown={onResizeDown}
               onPointerMove={onResizeMove}

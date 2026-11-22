@@ -62,6 +62,20 @@ function raster(ink: StreamingInkStroke) {
   const ctx = c.getContext('2d')!; ctx.scale(3, 3); ink.draw(ctx);
   return c;
 }
+
+function brushWidthProfile(ink: StreamingInkStroke) {
+  const image = document.createElement('canvas');
+  image.width = 900; image.height = 180;
+  const ctx = image.getContext('2d')!;
+  ctx.setTransform(2, 0, 0, 2, 0, 0);
+  ink.draw(ctx, 0, 0, undefined, true);
+  const data = pixels(image);
+  return Array.from({ length: 630 }, (_, i) => {
+    let width = 0;
+    for (let y = 40; y < 165; y++) width += data[(y * image.width + 90 + i) * 4 + 3] / 510;
+    return width;
+  });
+}
 beforeEach(() => {
   clearInkRasterCache();
   const original = document.createElement.bind(document);
@@ -69,6 +83,151 @@ beforeEach(() => {
     name === 'canvas' ? createCanvas(1, 1) : original(name, options)) as typeof document.createElement);
 });
 afterEach(() => { clearInkRasterCache(); clearStreamingInk(); vi.restoreAllMocks(); });
+
+describe('revised fountain and graphite', () => {
+  it('reduces sudden fountain width changes after pauses and pressure spikes', () => {
+    let x = 32, t = 0;
+    const points = Array.from({ length: 180 }, (_, i) => {
+      const pause = i < 10 || (i >= 92 && i < 100) || i > 166;
+      x += pause ? 0.48 : 2.22;
+      t += pause ? 19 : 5;
+      return { x, y: 55 + Math.sin(x / 29) * 0.8, t, pressure: pause ? 0.9 : 0.62 + Math.sin(i) * 0.08 };
+    });
+    const previous = new StreamingInkStroke(line('old-fountain', 0,
+      { points, style: 'fountain', renderVersion: 2, size: 20, opacity: 1, featherSize: 0.4 }));
+    const revised = new StreamingInkStroke(line('new-fountain', 0,
+      { points, style: 'fountain', renderVersion: 3, size: 20, opacity: 1, featherSize: 0.4 }));
+    try {
+      const variation = (widths: number[]) => widths.slice(1).reduce((total, v, i) => total + Math.abs(v - widths[i]), 0);
+      expect(variation(brushWidthProfile(revised))).toBeLessThan(variation(brushWidthProfile(previous)) * 0.8);
+    } finally {
+      previous.dispose();
+      revised.dispose();
+    }
+  });
+
+  it('uses fine paper grain and heavier graphite contact at higher pressure', () => {
+    const center = (pressure: number) => {
+      const stroke = line('graphite', 140, { style: 'pencil', renderVersion: 3, size: 16, opacity: 0.6, edgeFeather: false });
+      stroke.points.forEach(p => { p.pressure = pressure; });
+      const ink = new StreamingInkStroke(stroke);
+      try {
+        const ctx = raster(ink).getContext('2d')!;
+        const row = ctx.getImageData(108 * 3, 128 * 3, 145 * 3, 1).data;
+        return Array.from({ length: row.length / 4 }, (_, i) => row[4 * i + 3]);
+      } finally {
+        ink.dispose();
+      }
+    };
+    const light = center(0.12), dark = center(0.93);
+    const avg = (pixels: number[]) => pixels.reduce((a, b) => a + b, 0) / pixels.length;
+    expect(Math.max(...light) - Math.min(...light)).toBeGreaterThan(25);
+    expect(avg(dark)).toBeGreaterThan(avg(light) * 1.7);
+    expect(Math.max(...dark)).toBeLessThanOrEqual(154);
+  });
+
+  it.each(['fountain', 'pencil'] as const)('rebuilds the revised %s from serialized ink', style => {
+    const full = line('revised-' + style, 151, { style, renderVersion: 3, size: 12, edgeFeather: true, featherSize: 0.4 });
+    full.points.forEach((p, i) => { p.pressure = 0.1 + (i % 27) / 31; p.y += Math.sin(i / 6) * 6; });
+    const growing: PdfStroke = { ...full, points: [] };
+    const ink = new StreamingInkStroke(growing);
+    try {
+      for (let i = 0; i < full.points.length; i += 7) {
+        growing.points.push(...full.points.slice(i, i + 7));
+        ink.update();
+      }
+      const preview = raster(ink);
+      const restored = rebuildTiles([JSON.parse(JSON.stringify(full)) as PdfStroke]).get('0:0')!;
+      if (style === 'pencil') expectPixels(preview, restored);
+      else expectPixelsRestored(preview, restored);
+    } finally {
+      ink.dispose();
+    }
+  });
+});
+
+describe('solid pencil', () => {
+  it('keeps a uniform core across cells and retracing while pressure changes only the width', () => {
+    const stroke = line('hard-pencil', 130, {
+      style: 'pencil', renderVersion: 4, size: 16, opacity: 0.6,
+      pressureOpacity: true, edgeFeather: true, featherSize: 2,
+    });
+    for (const point of stroke.points) point.pressure = point.x < 220 ? 0.23 : 0.88;
+    const ink = new StreamingInkStroke(stroke);
+    try {
+      const preview = raster(ink);
+      const ctx = preview.getContext('2d')!;
+      const center = ctx.getImageData(65 * 3, 128 * 3, 315 * 3, 1).data;
+      expect(center.filter((_, i) => i % 4 === 3).every(alpha => alpha === 153)).toBe(true);
+
+      const column = (x: number) => ctx.getImageData(x * 3, 118 * 3, 1, 60).data.filter((_, i) => i % 4 === 3);
+      const thin = column(114), wide = column(314);
+      expect(wide.filter(alpha => alpha > 0).length).toBeGreaterThan(3 * thin.filter(alpha => alpha > 0).length);
+      expect(wide.filter(alpha => alpha > 0 && alpha < 153).length).toBeLessThanOrEqual(2);
+
+      const restored = rebuildTiles([JSON.parse(JSON.stringify(stroke)) as PdfStroke]).get('0:0')!;
+      expectPixelsRestored(preview, restored);
+    } finally {
+      ink.dispose();
+    }
+  });
+});
+
+describe('textured pencil and speed-sensitive fountain', () => {
+  it('keeps the pencil grain continuous and in the same place after rebuilding', () => {
+    const stroke = line('textured-pencil', 131, {
+      style: 'pencil', renderVersion: 5, size: 12, opacity: 0.8,
+      edgeFeather: true, featherSize: 2,
+    });
+    const growing: PdfStroke = { ...stroke, points: [] };
+    const ink = new StreamingInkStroke(growing);
+    try {
+      for (let i = 0; i < stroke.points.length; i += 8) {
+        growing.points.push(...stroke.points.slice(i, i + 8));
+        ink.update();
+      }
+      const preview = raster(ink);
+      const ctx = preview.getContext('2d')!;
+      const row = ctx.getImageData(65 * 3, 128 * 3, 315 * 3, 1).data.filter((_, i) => i % 4 === 3);
+      expect(Math.min(...row)).toBeGreaterThan(60);
+      expect(Math.max(...row) - Math.min(...row)).toBeGreaterThan(25);
+      expect(Math.max(...row)).toBeLessThanOrEqual(204);
+
+      const restored = rebuildTiles([JSON.parse(JSON.stringify(stroke)) as PdfStroke]).get('0:0')!;
+      const rebuiltRow = restored.getContext('2d')!.getImageData(65 * 3, 128 * 3, 315 * 3, 1).data.filter((_, i) => i % 4 === 3);
+      expect(Math.max(...row.map((alpha, i) => Math.abs(alpha - rebuiltRow[i])))).toBeLessThanOrEqual(1);
+      expectPixelsRestored(preview, restored);
+    } finally {
+      ink.dispose();
+    }
+  });
+
+  it('narrows fast fountain strokes at constant pressure and preserves the response at another zoom', () => {
+    const stroke = (style: 'marker' | 'fountain', interval: number, inputZoom: number) => line('pace', 0, {
+      style, renderVersion: style === 'marker' ? 2 : 5, size: 18, opacity: 1, edgeFeather: false, inputZoom,
+      points: Array.from({ length: 166 }, (_, i) => ({ x: 52 + i * 2, y: 56, pressure: 0.7, t: i * interval })),
+    });
+    const profile = (stroke: PdfStroke) => {
+      const ink = new StreamingInkStroke(stroke);
+      try { return brushWidthProfile(ink); } finally { ink.dispose(); }
+    };
+    const slow = profile(stroke('fountain', 10, 1));
+    const fast = profile(stroke('fountain', 2, 1));
+    const zoomed = profile(stroke('fountain', 4, 2));
+    expect(fast[120]).toBeLessThan(slow[120] * 0.62);
+    expect(fast[120]).toBeGreaterThan(slow[120] * 0.36);
+    expect(Math.abs(zoomed[120] - fast[120])).toBeLessThan(0.15);
+    expect(fast[14]).toBeLessThanOrEqual(fast[120] + 0.4); // fast pen-down cap
+    expect(Math.abs(profile(stroke('marker', 2, 1))[120] - profile(stroke('marker', 10, 1))[120])).toBeLessThan(0.15);
+
+    const fastStroke = stroke('fountain', 2, 1);
+    const ink = new StreamingInkStroke(fastStroke);
+    try {
+      const restored = rebuildTiles([JSON.parse(JSON.stringify(fastStroke)) as PdfStroke]).get('0:0')!;
+      expectPixelsRestored(raster(ink), restored);
+    } finally { ink.dispose(); }
+  });
+});
 
 describe('continuous retracing marker', () => {
   it.each(['marker', 'pencil'] as const)('%s processes only new samples after a long prefix', style => {
@@ -97,6 +256,38 @@ describe('continuous retracing marker', () => {
       expect(alpha).toBeLessThanOrEqual(129);
     }
     ink.dispose();
+  });
+
+  it('blits live cells to shared integer edges at fractional scale without changing stroke alpha', () => {
+    const ink = new StreamingInkStroke(line('aligned', 90, { edgeFeather: false }));
+    const canvas = document.createElement('canvas');
+    canvas.width = 720;
+    canvas.height = 480;
+    const ctx = canvas.getContext('2d')!;
+    const scale = 1.625, tx = 0.19, ty = 0.51;
+    ctx.setTransform(scale, 0, 0, scale, tx, ty);
+    const transform = ctx.getTransform();
+    const draw = vi.spyOn(ctx, 'drawImage');
+    try {
+      ink.draw(ctx, 0, 0, undefined, true);
+      const rects = draw.mock.calls.map(call => call.slice(5));
+      expect(rects.length).toBeGreaterThan(2);
+      for (const [x, y, width, height] of rects) {
+        const edges = [Number(x) * transform.a + transform.e, Number(y) * transform.d + transform.f,
+          (Number(x) + Number(width)) * transform.a + transform.e,
+          (Number(y) + Number(height)) * transform.d + transform.f];
+        for (const edge of edges) expect(edge).toBeCloseTo(Math.round(edge), 8);
+      }
+      const y = Math.round(128 * scale + ty);
+      for (const x of [128, 256, 384]) {
+        const edge = Math.round(x * scale + tx);
+        const pixels = ctx.getImageData(edge - 2, y, 5, 1).data;
+        expect([pixels[3], pixels[7], pixels[11], pixels[15], pixels[19]].every(alpha => alpha >= 126 && alpha <= 129)).toBe(true);
+      }
+      expect(ctx.getTransform().a).toBe(scale);
+    } finally {
+      ink.dispose();
+    }
   });
 
   it.each(['marker', 'fountain', 'pencil'] as const)('%s is deterministic across input batching, commit and reload', style => {

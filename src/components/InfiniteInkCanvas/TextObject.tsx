@@ -207,7 +207,7 @@ const TextObject: React.FC<Props> = ({ node, camera, interactive }) => {
         {interactive && hover && (
           <>
             <button
-              title="删除文本框"
+              aria-label="删除文本框"
               onPointerDown={(e) => e.stopPropagation()}
               onClick={(e) => { e.stopPropagation(); deleteMe(); }}
               style={{
@@ -220,7 +220,7 @@ const TextObject: React.FC<Props> = ({ node, camera, interactive }) => {
               ×
             </button>
             <div
-              title="拖拽调整宽度"
+              data-tooltip="拖拽调整宽度"
               data-ink-object-control=""
               onPointerDown={onRzDown}
               onPointerMove={onRzMove}

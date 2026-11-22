@@ -50,7 +50,7 @@ const Sidebar: React.FC<SidebarProps> = ({ onCreateNote }) => {
   };
 
   return (
-    <div style={{
+    <div data-note-sidebar style={{
       width: '220px',
       flexShrink: 0,
       height: '100%',
@@ -61,7 +61,7 @@ const Sidebar: React.FC<SidebarProps> = ({ onCreateNote }) => {
       position: 'relative',
       zIndex: 1,
       overflow: 'hidden',
-      background: 'var(--sidebar-bg, var(--glass-bg))',
+      background: 'rgba(var(--sidebar-tint), var(--workspace-sidebar-opacity, var(--sidebar-base-opacity)))',
     }}>
       {/* Create note button */}
       <button
@@ -235,7 +235,7 @@ const Sidebar: React.FC<SidebarProps> = ({ onCreateNote }) => {
                       e.stopPropagation();
                       handleStartEdit(tag.id, tag.name);
                     }}
-                    title="重命名"
+                    aria-label="重命名"
                     style={{
                       background: 'none',
                       border: 'none',

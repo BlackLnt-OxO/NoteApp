@@ -1,423 +1,287 @@
-/**
- * ToolbarShell — Draggable, resizable toolbar that snaps to left or right edge.
- *
- * - Drag the header strip to reposition or change dock side.
- * - While dragging, the canvas shows a dark overlay.
- * - Release near the left viewport edge → snap to LEFT side.
- * - Release near the right viewport edge → snap to RIGHT side.
- * - Release in the middle → stay on the current side at released position.
- * - Resize handle is always on the canvas-facing side.
- * - When collapsed, a small chevron button is visible on the docked edge.
- * - N key toggles expand / collapse.
- */
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
+import { isInkPointerActive, INK_STROKE_START } from '../inkInputActivity';
+import InkToolButton from './InkToolButton';
+import InkToolbarOptions, { toolLabel, type InkToolbarControls, type ToolSlot } from './InkToolbarOptions';
+import { INK_TOOLBAR_LAYOUT, useInkToolbarDock } from './inkToolbarLayout';
+import type { AlternatePen } from './useToolbarStore';
+import './inkToolbar.css';
 
-import React, { useRef, useEffect, useLayoutEffect, useCallback, useState } from 'react';
-import { useNoteStore } from "../../store";
-import { fs } from "../../utils";
-import { useCanvasToolbarStore } from './useToolbarStore';
-import {
-  MIN_TOOLBAR_WIDTH,
-  MAX_TOOLBAR_WIDTH,
-  RESIZE_HANDLE_WIDTH,
-} from './constants';
+const LEAVE_DELAY = 650;
+const instruments: ToolSlot[] = ['marker', 'alternate', 'laser', 'eraser'];
+type Panel = ToolSlot | 'more';
 
-// ---- Helpers ---------------------------------------------------------------
+const iconPaths = {
+  marker: 'M3 3c2.4 1 5-1 7.4 1.4a4.2 4.2 0 0 1 0 6 4.2 4.2 0 0 1-6 0C2 8 4 5.4 3 3Zm8.4 4.6 9.1 9.1a2.3 2.3 0 0 1-3.3 3.3l-9.1-9.1',
+  fountain: 'M12 2 6 11l3 7h6l3-7-6-9v8m-3 8v4h6v-4m-2-6a1 1 0 1 1-2 0 1 1 0 0 1 2 0Z',
+  pencil: 'M8 8l4-6 4 6v12l-2 2h-4l-2-2Zm0 0h8m-4 1v8m-4 1h8',
+  eraser: 'M5 10V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v5M5 10h14v9a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2Z',
+  select: 'M4 4l15 7-7 2-2 7L4 4z',
+  insert: 'M5 12h14m-7-7v14',
+  undo: 'M9 5l-5 5 5 5M4 10h10a5 5 0 0 1 0 10h-3',
+  redo: 'M15 5l5 5-5 5m5-5H10a5 5 0 0 0 0 10h3',
+  trash: 'M5 7h14m-12 0 1 13h8l1-13M9 7V4h6v3m-4 4v5m2-5v5',
+  close: 'm7 7 10 10M17 7 7 17',
+} as const;
 
-function shouldIgnoreShortcut(target: EventTarget | null): boolean {
-  const el = target as HTMLElement | null;
-  if (!el) return false;
-  return (
-    el.tagName === 'INPUT' ||
-    el.tagName === 'TEXTAREA' ||
-    el.tagName === 'SELECT' ||
-    el.isContentEditable
-  );
+function Icon({ name }: { name: keyof typeof iconPaths | 'more' | 'laser' }) {
+  if (name === 'laser') return <svg viewBox="0 0 24 24" width="21" height="21" fill="none" aria-hidden="true"
+    className="ink-laser-icon" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round">
+    <circle cx="7" cy="6" r="2.7" fill="currentColor" stroke="none" />
+    <path d="M7 1v1m-5 4h1m8 0h1m-8.5 4 1-1" />
+    <path d="M9.5 9a15 15 0 0 0 3.6 5.6" opacity=".82" />
+    <path d="m15.5 16.8 2 1.5" opacity=".58" />
+    <circle cx="20.5" cy="20" r="1" fill="currentColor" stroke="none" opacity=".48" />
+  </svg>;
+  return <svg viewBox="0 0 24 24" width="21" height="21" fill="none" aria-hidden="true"
+    stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+    {name === 'more' ? [5, 12, 19].map(x => <circle key={x} cx={x} cy={12} r="1.3" fill="currentColor" stroke="none" />)
+      : <path d={iconPaths[name]} />}
+  </svg>;
 }
 
-// ---- Props -----------------------------------------------------------------
-
-interface Props {
-  children: React.ReactNode;
-  /** Which toolbar memory store to bind (PDF vs infinite-canvas). */
-  useStore: typeof useCanvasToolbarStore;
+function PenVariants({ pen, render }: { pen: AlternatePen; render: (variant: AlternatePen) => ReactNode }) {
+  return <span className="ink-pen-variants" aria-hidden="true">
+    <span data-current={pen === 'fountain'}>{render('fountain')}</span>
+    <span data-current={pen === 'pencil'}>{render('pencil')}</span>
+  </span>;
 }
 
-// ---- Component -------------------------------------------------------------
+function nearDockEdge(handle: HTMLButtonElement | null, x: number, y: number) {
+  const edge = handle?.getBoundingClientRect();
+  return edge && edge.width > 0 && x >= edge.left - 20 && x <= edge.right + 20
+    && y >= edge.top - 14 && y <= edge.bottom + 14;
+}
 
-const ToolbarShell: React.FC<Props> = ({ children, useStore }) => {
-  const gfs = useNoteStore((s) => s.settings.fontSize);
-  const store = useStore();
-  const {
-    expanded, width, top, offset, side,
-    toggle, collapse, expand,
-    setWidth, setPosition, setSide,
-    setIsDragging, setDragCursorX,
-    clampPosition, loadState,
-  } = store;
+export default function ToolbarShell({ controls }: { controls: InkToolbarControls }) {
+  const dock = useInkToolbarDock();
+  const band = useRef<HTMLDivElement>(null);
+  const handle = useRef<HTMLButtonElement>(null);
+  const popupRef = useRef<HTMLElement>(null);
+  const previousPanelHeight = useRef<number>();
+  const resizeAnimation = useRef<Animation>();
+  const timer = useRef<ReturnType<typeof setTimeout>>();
+  const writingPointer = useRef<number | null>(null);
+  const expandedRef = useRef(false);
+  const [expanded, setExpanded] = useState(false);
+  const [writing, setWriting] = useState(false);
+  const [panel, setPanel] = useState<Panel | null>(null);
+  const [panelOpen, setPanelOpen] = useState(false);
 
-  const shellRef = useRef<HTMLDivElement>(null);
-  const containerRef = useRef<HTMLElement | null>(null);
-  const bodyRef = useRef<HTMLDivElement>(null);
+  const stopTimer = useCallback(() => { clearTimeout(timer.current); timer.current = undefined; }, []);
+  const closePanel = useCallback(() => setPanelOpen(false), []);
+  const collapse = useCallback(() => {
+    stopTimer();
+    expandedRef.current = false;
+    setExpanded(false);
+    closePanel();
+  }, [closePanel, stopTimer]);
 
-  // Minimum width that fits all the toolbar content (so buttons never overlap).
-  // Measured from the panel body at its `min-content` size; also used as the
-  // resize floor and the collapse trigger threshold.
-  const [fitMinWidth, setFitMinWidth] = useState(MIN_TOOLBAR_WIDTH);
+  const expand = useCallback(() => {
+    if (writingPointer.current !== null || isInkPointerActive() || document.querySelector('[data-file-dialog], .dialog-overlay')) return;
+    stopTimer();
+    expandedRef.current = true;
+    setExpanded(true);
+  }, [stopTimer]);
 
-  const dragRef = useRef<{
-    startMouseX: number;
-    startMouseY: number;
-    startOffset: number;
-    startTop: number;
-    pointerId: number;
-  } | null>(null);
-
-  const resizeRef = useRef<{
-    startMouseX: number;
-    startWidth: number;
-    pointerId: number;
-  } | null>(null);
-
-  const expandedRef = useRef(expanded);
-  expandedRef.current = expanded;
-  const widthRef = useRef(width);
-  widthRef.current = width;
-  const sideRef = useRef(side);
-  sideRef.current = side;
-
-  // ---- Mount / resize ------------------------------------------------------
-
-  useEffect(() => { loadState(); }, [loadState]);
+  const hideLater = useCallback(() => {
+    if (!expandedRef.current || timer.current !== undefined) return;
+    timer.current = setTimeout(collapse, LEAVE_DELAY);
+  }, [collapse]);
 
   useEffect(() => {
-    const onResize = () => clampPosition(window.innerWidth, window.innerHeight);
-    onResize();
-    window.addEventListener('resize', onResize);
-    return () => window.removeEventListener('resize', onResize);
-  }, [clampPosition]);
-
-  useEffect(() => {
-    if (shellRef.current) containerRef.current = shellRef.current.parentElement;
-  }, []);
-
-  // Measure the panel content's natural minimum width so tool buttons never
-  // overlap. Re-measures whenever the panel becomes visible.
-  const measureContentMin = useCallback((): number => {
-    const body = bodyRef.current;
-    if (!body) return MIN_TOOLBAR_WIDTH;
-    const prevW = body.style.width;
-    const prevMinW = body.style.minWidth;
-    body.style.width = 'min-content';
-    body.style.minWidth = 'min-content';
-    const w = body.getBoundingClientRect().width;
-    body.style.width = prevW;
-    body.style.minWidth = prevMinW;
-    return Math.max(MIN_TOOLBAR_WIDTH, Math.ceil(w) + 4);
-  }, []);
-
-  useLayoutEffect(() => {
-    if (!expanded) return;
-    setFitMinWidth(measureContentMin());
-  }, [expanded, measureContentMin]);
-
-  // ---- N-key toggle --------------------------------------------------------
-
-  useEffect(() => {
-    const onKeyDown = (e: KeyboardEvent) => {
-      if (e.key.toLowerCase() !== 'n') return;
-      if (e.ctrlKey || e.metaKey || e.altKey) return;
-      if (shouldIgnoreShortcut(e.target)) return;
-      e.preventDefault();
-      toggle();
-    };
-    window.addEventListener('keydown', onKeyDown);
-    return () => window.removeEventListener('keydown', onKeyDown);
-  }, [toggle]);
-
-  // ---- Header drag (reposition + snap-to-edge) -----------------------------
-
-  const onHeaderPointerDown = useCallback(
-    (e: React.PointerEvent) => {
-      e.preventDefault(); e.stopPropagation();
-      (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
-
-      setIsDragging(true);
-      setDragCursorX(e.clientX); // initial cursor position for overlay
-
-      dragRef.current = {
-        startMouseX: e.clientX, startMouseY: e.clientY,
-        startOffset: offset, startTop: top,
-        pointerId: e.pointerId,
-      };
-    },
-    [offset, top, setIsDragging],
-  );
-
-  const onHeaderPointerMove = useCallback(
-    (e: React.PointerEvent) => {
-      const d = dragRef.current;
-      if (!d || d.pointerId !== e.pointerId) return;
-      e.preventDefault(); e.stopPropagation();
-
-      const vpW = containerRef.current?.clientWidth ?? window.innerWidth;
-      const vpH = containerRef.current?.clientHeight ?? window.innerHeight;
-
-      // Horizontal delta — sign depends on which side we're on
-      let delta: number;
-      if (sideRef.current === 'right') {
-        // Mouse moving left = delta positive = offset increases
-        delta = d.startMouseX - e.clientX;
-      } else {
-        // Mouse moving right = delta positive = offset increases
-        delta = e.clientX - d.startMouseX;
+    const shortcut = (event: KeyboardEvent) => {
+      const target = event.target;
+      if (document.querySelector('[data-file-dialog], .dialog-overlay')) return;
+      if (target instanceof HTMLElement && (target.matches('input, textarea, select') || target.isContentEditable)) return;
+      if (event.key === 'Escape' && popupRef.current?.dataset.open === 'true') {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        closePanel();
       }
+      if (event.key.toLowerCase() === 'n' && !event.repeat && !event.ctrlKey && !event.metaKey && !event.altKey) {
+        event.preventDefault();
+        if (expandedRef.current) collapse(); else expand();
+      }
+    };
+    const outside = (event: PointerEvent) => {
+      if (event.target instanceof Node && !band.current?.contains(event.target)) closePanel();
+    };
+    const startWriting = (event: Event) => {
+      writingPointer.current = (event as CustomEvent<number>).detail;
+      setWriting(true);
+      collapse();
+    };
+    const stopWriting = () => {
+      writingPointer.current = null;
+      setWriting(false);
+    };
+    const release = (event: PointerEvent) => {
+      if (writingPointer.current !== event.pointerId) return;
+      if (event.type !== 'lostpointercapture' || event.target instanceof HTMLCanvasElement) stopWriting();
+    };
+    window.addEventListener(INK_STROKE_START, startWriting);
+    window.addEventListener('pointerup', release, true);
+    window.addEventListener('pointercancel', release, true);
+    window.addEventListener('lostpointercapture', release, true);
+    window.addEventListener('blur', stopWriting);
+    window.addEventListener('keydown', shortcut, true);
+    document.addEventListener('pointerdown', outside, true);
+    return () => {
+      stopTimer();
+      window.removeEventListener(INK_STROKE_START, startWriting);
+      window.removeEventListener('pointerup', release, true);
+      window.removeEventListener('pointercancel', release, true);
+      window.removeEventListener('lostpointercapture', release, true);
+      window.removeEventListener('blur', stopWriting);
+      window.removeEventListener('keydown', shortcut, true);
+      document.removeEventListener('pointerdown', outside, true);
+    };
+  }, [collapse, closePanel, expand, stopTimer]);
 
-      const nextOffset = Math.max(-20, Math.min(d.startOffset + delta, vpW - 60));
-      const nextTop = Math.max(4, Math.min(d.startTop + (e.clientY - d.startMouseY), Math.max(4, vpH - 36)));
-
-      setPosition(nextTop, nextOffset);
-      setDragCursorX(e.clientX); // update for real-time overlay zone
-    },
-    [setPosition, setDragCursorX],
-  );
-
-  const onHeaderPointerUp = useCallback(
-    (e: React.PointerEvent) => {
-      const d = dragRef.current;
-      if (!d || d.pointerId !== e.pointerId) return;
-      e.preventDefault(); e.stopPropagation();
-      try { (e.currentTarget as HTMLElement).releasePointerCapture?.(e.pointerId); } catch {}
-
-      const vpW = containerRef.current?.clientWidth ?? window.innerWidth;
-
-      // Snap to whichever half the toolbar CENTER is over — must match the
-      // canvas overlay highlight (center < vpW/2 → left). Read the live
-      // offset/width from the store (latest pointer-move position).
-      const st = useStore.getState();
-      const tl = st.side === 'left' ? st.offset : vpW - st.offset - st.width;
-      const tr = st.side === 'left' ? st.offset + st.width : vpW - st.offset;
-      const newSide = (tl + tr) / 2 < vpW / 2 ? 'left' : 'right';
-      setSide(newSide);
-      // Snap flush: offset = 0 (right against the edge)
-      setPosition(d.startTop + (e.clientY - d.startMouseY), 0);
-
-      setIsDragging(false);
-      setDragCursorX(0);
-      dragRef.current = null;
-    },
-    [setSide, setPosition, setIsDragging, setDragCursorX],
-  );
-
-  // ---- Resize handle -------------------------------------------------------
-
-  const onResizePointerDown = useCallback(
-    (e: React.PointerEvent) => {
-      e.preventDefault(); e.stopPropagation();
-      (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
-      resizeRef.current = {
-        startMouseX: e.clientX,
-        // Use the rendered width (min-width forces it to ≥ fitMinWidth even if
-        // the stored width was persisted smaller).
-        startWidth: Math.max(fitMinWidth, widthRef.current),
-        pointerId: e.pointerId,
-      };
-    },
-    [fitMinWidth],
-  );
-
-  const onResizePointerMove = useCallback(
-    (e: React.PointerEvent) => {
-      const rs = resizeRef.current;
-      if (!rs || rs.pointerId !== e.pointerId) return;
-      e.preventDefault(); e.stopPropagation();
-
-      // Resize handle is always on the canvas-facing edge.
-      // side='right' → handle on left → drag left = wider
-      // side='left'  → handle on right → drag right = wider
-      const delta = sideRef.current === 'right'
-        ? rs.startMouseX - e.clientX   // right dock: handle on left
-        : e.clientX - rs.startMouseX;  // left dock: handle on right
-
-      let nextWidth = rs.startWidth + delta;
-
-      // Below the content-fit minimum → collapse the toolbar.
-      if (nextWidth < fitMinWidth) {
-        collapse();
-        resizeRef.current = null;
-        try { (e.currentTarget as HTMLElement).releasePointerCapture?.(e.pointerId); } catch {}
+  useEffect(() => { closePanel(); }, [dock, closePanel]);
+  useLayoutEffect(() => {
+    const popup = popupRef.current;
+    if (!popup) return;
+    popup.inert = !panelOpen;
+    const previousHeight = previousPanelHeight.current;
+    previousPanelHeight.current = undefined;
+    resizeAnimation.current?.cancel();
+    if (!panelOpen || previousHeight === undefined || typeof popup.animate !== 'function'
+      || window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+    const nextHeight = popup.offsetHeight;
+    if (previousHeight === nextHeight) return;
+    resizeAnimation.current = popup.animate(
+      [{ height: previousHeight + 'px' }, { height: nextHeight + 'px' }],
+      { duration: 210, easing: 'cubic-bezier(.2,.75,.25,1)' },
+    );
+    resizeAnimation.current.onfinish = notifyLayout;
+  }, [panel, panelOpen]);
+  useEffect(() => {
+    const element = band.current;
+    const parent = element?.parentElement;
+    if (!element || !parent) return;
+    const update = () => element.style.setProperty('--ink-panel-height', Math.max(106, parent.clientHeight - 82) + 'px');
+    const approach = (event: PointerEvent) => {
+      if (event.pointerType === 'touch' || event.buttons !== 0 || isInkPointerActive()) return;
+      if (expandedRef.current && event.target instanceof Node && element.contains(event.target)) {
+        stopTimer();
         return;
       }
+      if (nearDockEdge(handle.current, event.clientX, event.clientY)) {
+        expand();
+      } else {
+        hideLater();
+      }
+    };
+    update();
+    const observer = new ResizeObserver(update);
+    observer.observe(parent);
+    parent.addEventListener('pointermove', approach, { passive: true });
+    return () => {
+      observer.disconnect();
+      parent.removeEventListener('pointermove', approach);
+    };
+  }, [expand, hideLater, stopTimer]);
+  useEffect(() => {
+    notifyLayout();
+  }, [dock, expanded, panelOpen, panel]);
 
-      nextWidth = Math.max(fitMinWidth, Math.min(MAX_TOOLBAR_WIDTH, nextWidth));
-      setWidth(nextWidth);
-    },
-    [collapse, setWidth, fitMinWidth],
-  );
+  function activate(slot: ToolSlot) {
+    if (slot === 'select' || slot === 'insert' || slot === 'eraser') {
+      controls.setTool(slot);
+      return;
+    }
+    const brush = slot === 'alternate' ? controls.alternatePen : slot;
+    controls.setBrush(brush);
+    controls.setTool('pen');
+  }
 
-  const onResizePointerUp = useCallback((e: React.PointerEvent) => {
-    if (!resizeRef.current) return;
-    e.preventDefault(); e.stopPropagation();
-    try { (e.currentTarget as HTMLElement).releasePointerCapture?.(resizeRef.current.pointerId); } catch {}
-    resizeRef.current = null;
-  }, []);
+  function active(slot: ToolSlot) {
+    if (slot === 'select' || slot === 'insert' || slot === 'eraser') return controls.tool === slot;
+    if (controls.tool !== 'pen') return false;
+    return slot === 'alternate' ? controls.brush === 'fountain' || controls.brush === 'pencil' : controls.brush === slot;
+  }
 
-  // ---- Event isolation -----------------------------------------------------
+  function hold(slot: ToolSlot) {
+    stopTimer();
+    activate(slot);
+    openPanel(slot);
+  }
 
-  const stopEvent = useCallback(
-    (e: React.PointerEvent | React.MouseEvent | React.WheelEvent) => e.stopPropagation(),
-    [],
-  );
+  function openPanel(next: Panel) {
+    if (panelOpen && panel !== next) previousPanelHeight.current = popupRef.current?.offsetHeight;
+    setPanel(next);
+    setPanelOpen(true);
+  }
 
-  // ---- RENDER --------------------------------------------------------------
+  function button(slot: ToolSlot) {
+    return <InkToolButton key={slot} label={toolLabel(slot, controls.alternatePen)}
+      tooltip={slot === 'laser' ? '激光笔 · 笔迹会自动消失' : undefined}
+      disabled={!expanded} pressed={active(slot)} expanded={panelOpen && panel === slot}
+      onPress={() => { activate(slot); closePanel(); }} onHold={() => hold(slot)}>
+      {slot === 'select' || slot === 'insert' ? <Icon name={slot} /> : <span className="ink-directional-icon">
+        {slot === 'alternate'
+          ? <PenVariants pen={controls.alternatePen} render={variant => <Icon name={variant} />} />
+          : <Icon name={slot} />}
+      </span>}
+    </InkToolButton>;
+  }
 
-  const isDragging = dragRef.current !== null;
-  const isResizing = resizeRef.current !== null;
-  const isLeft = side === 'left';
+  const history = () => <>
+    <InkToolButton label="撤销" onPress={controls.undo} disabled={!expanded || !controls.canUndo}><Icon name="undo" /></InkToolButton>
+    <InkToolButton label="重做" onPress={controls.redo} disabled={!expanded || !controls.canRedo}><Icon name="redo" /></InkToolButton>
+  </>;
 
-  // Chevron direction: always points toward canvas (away from docked edge)
-  const chevron = isLeft ? '▷' : '◁';
-
-  // CSS edge property
-  const edgeStyle = isLeft
-    ? { left: offset, right: undefined as number | undefined }
-    : { left: undefined as number | undefined, right: offset };
-
-  return (
-    <>
-      {/* ================================================================== */}
-      {/* COLLAPSED CHEVRON BUTTON — stuck to the docked edge               */}
-      {/* ================================================================== */}
-      {!expanded && (
-        <button
-          onClick={(e) => { e.stopPropagation(); toggle(); }}
-          onPointerDown={(e) => e.stopPropagation()}
-          style={{
-            position: 'absolute',
-            top,
-            ...(isLeft
-              ? { left: 0, borderRadius: '0 6px 6px 0' }
-              : { right: 0, borderRadius: '6px 0 0 6px' }),
-            zIndex: 101,
-            width: 16, height: 48,
-            border: 0,
-            background: 'var(--chrome-bg)',
-            color: 'var(--text-secondary)',
-            cursor: 'pointer',
-            display: 'flex', alignItems: 'center', justifyContent: 'center',
-            fontSize: fs(11, gfs), fontWeight: 700, padding: 0,
-            boxShadow: 'var(--glass-shadow)',
-            borderTop: '1px solid var(--glass-border)',
-            borderBottom: '1px solid var(--glass-border)',
-            ...(isLeft
-              ? { borderRight: '1px solid var(--glass-border)' }
-              : { borderLeft: '1px solid var(--glass-border)' }),
-            transition: 'color 0.15s, background 0.15s, width 0.12s',
-          }}
-          onMouseEnter={(el) => {
-            el.currentTarget.style.width = '22px';
-            el.currentTarget.style.color = 'var(--text-primary)';
-            el.currentTarget.style.background = 'var(--glass-bg-hover)';
-          }}
-          onMouseLeave={(el) => {
-            el.currentTarget.style.width = '16px';
-            el.currentTarget.style.color = 'var(--text-secondary)';
-            el.currentTarget.style.background = 'var(--chrome-bg)';
-          }}
-          title={`展开工具栏 (N) — 吸附在${isLeft ? '左' : '右'}侧`}
-          aria-label="展开工具栏"
-        >
-          {chevron}
-        </button>
-      )}
-
-      {/* ================================================================== */}
-      {/* EXPANDED PANEL                                                     */}
-      {/* ================================================================== */}
-      {expanded && (
-        <div
-          ref={shellRef}
-          className="canvas-toolbar-shell is-expanded"
-          style={{
-            position: 'absolute',
-            top,
-            ...edgeStyle,
-            zIndex: 100,
-            display: 'flex',
-            flexDirection: 'column',
-            pointerEvents: 'auto',
-            width,
-            minWidth: fitMinWidth,
-            transition: isDragging || isResizing ? 'none' : 'width 160ms ease',
-          }}
-          onPointerDown={stopEvent}
-          onPointerMove={stopEvent}
-          onPointerUp={stopEvent}
-          onWheel={stopEvent}
-        >
-          {/* Resize handle — always on the canvas-facing edge */}
-          <div
-            role="separator"
-            className={`toolbar-resize-handle${isResizing ? ' is-resizing' : ''}`}
-            style={{
-              position: 'absolute',
-              ...(isLeft ? { right: 0 } : { left: 0 }),
-              top: 0, bottom: 0,
-              width: RESIZE_HANDLE_WIDTH, cursor: 'ew-resize',
-              touchAction: 'none', zIndex: 2,
-              background: 'transparent',
-            }}
-            onPointerDown={onResizePointerDown}
-            onPointerMove={onResizePointerMove}
-            onPointerUp={onResizePointerUp}
-            onPointerCancel={onResizePointerUp}
-          />
-
-          {/* Header strip (drag handle) */}
-          <div
-            style={{
-              cursor: isDragging ? 'grabbing' : 'grab',
-              userSelect: 'none',
-              padding: '6px 14px 0 14px',
-              display: 'flex', alignItems: 'center',
-              position: 'sticky', top: 0, zIndex: 3,
-              borderRadius: '10px 10px 0 0',
-              background: isDragging ? 'rgba(100,130,200,0.15)' : 'transparent',
-              transition: 'background 0.15s',
-            }}
-            onPointerDown={onHeaderPointerDown}
-            onPointerMove={onHeaderPointerMove}
-            onPointerUp={onHeaderPointerUp}
-            onPointerCancel={onHeaderPointerUp}
-            onMouseEnter={(e) => { if (!isDragging) (e.currentTarget as HTMLElement).style.background = 'var(--glass-bg-hover)'; }}
-            onMouseLeave={(e) => { if (!isDragging) (e.currentTarget as HTMLElement).style.background = 'transparent'; }}
-          >
-            <span style={{
-              fontSize: fs(12, gfs), fontWeight: 600,
-              color: 'var(--text-secondary)',
-              pointerEvents: 'none',
-              userSelect: 'none',
-            }}>
-              笔刷工具
-            </span>
+  return <div className="ink-toolbar-band" data-ink-toolbar data-dock={dock}
+    data-expanded={expanded} data-writing={writing}
+    ref={band}
+    onTransitionEnd={event => { if (event.propertyName === 'transform' || event.propertyName === 'grid-template-rows') notifyLayout(); }}
+    onPointerLeave={event => {
+      if (event.pointerType === 'touch') return;
+      if (event.relatedTarget instanceof Node && band.current?.parentElement?.contains(event.relatedTarget)
+        && nearDockEdge(handle.current, event.clientX, event.clientY)) return;
+      hideLater();
+    }}>
+    <div className="ink-toolbar-dock">
+      <div className="ink-toolbar-row" role="toolbar" aria-label="手写工具栏" aria-hidden={!expanded}
+        onPointerEnter={stopTimer} onPointerMove={stopTimer}>
+        <div className="ink-toolbar-instruments">{instruments.map(button)}</div>
+        <span className="ink-toolbar-divider" />
+        <div className="ink-toolbar-aux">{button('select')}{button('insert')}{history()}</div>
+        <InkToolButton label="更多" onPress={() => panel === 'more' && panelOpen ? closePanel() : openPanel('more')}
+          expanded={panelOpen && panel === 'more'} disabled={!expanded}>
+          <Icon name="more" />
+        </InkToolButton>
+      </div>
+      <button type="button" ref={handle} className="ink-toolbar-handle" aria-label="展开手写工具栏" data-tooltip="展开手写工具栏（N）"
+        disabled={expanded || writing} aria-expanded={expanded} onClick={expand} />
+    </div>
+    {panel && <section ref={popupRef} className="ink-toolbar-popover"
+      data-ink-tool-popover data-open={panelOpen} aria-hidden={!panelOpen} role="dialog"
+      aria-label={panel === 'more' ? '更多工具' : toolLabel(panel, controls.alternatePen) + '工具盘'}
+      onPointerEnter={stopTimer} onPointerMove={stopTimer} onPointerDown={stopTimer}>
+      <header className="ink-toolbar-popover-header">
+        <strong>{panel === 'more' ? '更多工具' : panel === 'alternate'
+          ? <PenVariants pen={controls.alternatePen} render={variant => toolLabel('alternate', variant)} />
+          : toolLabel(panel, controls.alternatePen)}</strong>
+        <InkToolButton label="关闭工具盘" onPress={closePanel}><Icon name="close" /></InkToolButton>
+      </header>
+      <div className="ink-toolbar-panel-content" key={panel}>{panel === 'more'
+        ? <>
+          <div className="ink-tool-choice-row">{button('select')}{button('insert')}{history()}
+            <InkToolButton label={controls.clearLabel} onPress={() => { collapse(); controls.clear(); }}><Icon name="trash" /></InkToolButton>
           </div>
+          <label className="ink-tool-check">
+            <input type="checkbox" checked={controls.showDotGrid} onChange={event => controls.setShowDotGrid(event.target.checked)} />
+            显示点阵背景
+          </label>
+        </>
+        : <InkToolbarOptions slot={panel} controls={controls} />}
+      </div>
+    </section>}
+  </div>;
+}
 
-          {/* Panel body */}
-          <div ref={bodyRef} style={{
-            width: '100%', minWidth: 0,
-            overflowY: 'auto', overflowX: 'hidden',
-            border: '1px solid var(--glass-border)',
-            borderRadius: '10px',
-            background: 'var(--chrome-bg)',
-            backdropFilter: 'blur(14px)', WebkitBackdropFilter: 'blur(14px)',
-            boxShadow: 'var(--glass-shadow)',
-            maxHeight: 'calc(100vh - 36px)',
-          }}>
-            {children}
-          </div>
-        </div>
-      )}
-    </>
-  );
-};
-
-export default ToolbarShell;
+function notifyLayout() {
+  window.dispatchEvent(new Event(INK_TOOLBAR_LAYOUT));
+}

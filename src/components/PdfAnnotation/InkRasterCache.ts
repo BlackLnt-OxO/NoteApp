@@ -3,7 +3,7 @@ import type { PdfStroke } from './PdfTypes';
 import { drawAnnotatedStroke, drawInkRibbonSlice, prepareInkRibbon, prepareInkRibbonWork, drawInkRibbonSliceWork, drawPencilWork } from './PdfBrushRenderers';
 import { getCommittedStrokeBounds, getInkStrokeIndex } from './InkStrokeIndex';
 import {
-  getStreamingInk, StreamingInkStroke, renderStrokeOnce, renderStrokePreview, clearStreamingInk,
+  getStreamingInk, StreamingInkStroke, renderStrokeOnce, renderStrokePreview, clearStreamingInk, usesStreamingInk, usesOnePassInk,
   startStrokeOnceBuild, startStrokeOnceBuildWork, pumpStrokeOnceBuild, finishStrokeOnceBuild, type StrokeOnceBuild,
 } from './StreamingInkStroke';
 import { resolveFeatherWorld } from './InkMath';
@@ -197,7 +197,7 @@ function* buildCooperativeRaster(task: CooperativeRaster, stroke: PdfStroke, tx:
       const ctx = image.getContext('2d')!;
       ctx.setTransform(scale, 0, 0, scale, -minX * scale, -minY * scale);
       drawInkShape(ctx, { ...stroke, compositeOperation: 'source-over' });
-    } else if (stroke.renderVersion === 2 && stroke.style !== 'pencil') {
+    } else if (usesOnePassInk(stroke)) {
       const build = yield* startStrokeOnceBuildWork(stroke, scale, minX, minY, maxX, maxY);
       if (build) {
         task.canvas = build.coverage;
@@ -212,7 +212,7 @@ function* buildCooperativeRaster(task: CooperativeRaster, stroke: PdfStroke, tx:
       image = createInkCanvas(); image.width = width; image.height = height; task.canvas = image;
       const ctx = image.getContext('2d')!;
       ctx.setTransform(scale, 0, 0, scale, -minX * scale, -minY * scale);
-      if (stroke.renderVersion === 2) {
+      if (usesStreamingInk(stroke)) {
         const bounds = { minX: minX - 1, minY: minY - 1, maxX: maxX + 1, maxY: maxY + 1 };
         const ink = new StreamingInkStroke(stroke, bounds);
         try {
@@ -259,7 +259,7 @@ export function requestStrokeRaster(stroke: PdfStroke, tx: number, ty: number, t
 
   // Cheap geometry (ribbons, pencil grain) and small runs build synchronously;
   // slicing them would delay every ordinary stroke by a frame for nothing.
-  const small = !!stroke.geometry || stroke.renderVersion !== 2 || stroke.style === 'pencil';
+  const small = !!stroke.geometry || !usesOnePassInk(stroke);
   if (small || preview) return getStrokeRaster(stroke, tx, ty, tileSize, scale, undefined, preview);
 
   let buildMap = rasterBuildOwners.get(stroke);
@@ -372,15 +372,15 @@ export function getStrokeRaster(stroke: PdfStroke, tx: number, ty: number, tileS
   // built in, or the same ink would look different depending on where the user
   // looked first.
   //
-  // Version-2 marker/fountain is painted in ONE pass — the per-cell surfaces the
+  // Solid streaming ink is painted in ONE pass — the per-cell surfaces the
   // incremental raster allocates are what made opening a dense canvas take tens
-  // of seconds, and a committed stroke has nothing incremental about it. Pencil
-  // keeps the incremental raster (its grain is only defined step by step), and
+  // of seconds, and a committed stroke has nothing incremental about it. Earlier
+  // textured pencils keep their incremental raster, and
   // everything older keeps the ribbon renderer it was drawn with.
   const missStart = performance.now();
   let image: HTMLCanvasElement | null = null;
   let empty = false;
-  if (!stroke.geometry && stroke.renderVersion === 2 && stroke.style !== 'pencil') {
+  if (!stroke.geometry && usesOnePassInk(stroke)) {
     image = (preview ? renderStrokePreview : renderStrokeOnce)(stroke, scale, minX, minY, maxX, maxY);
     if (!image) {
       // The bounding box covers a tile the path never actually enters (an
@@ -401,7 +401,7 @@ export function getStrokeRaster(stroke: PdfStroke, tx: number, ty: number, tileS
     ctx.setTransform(scale, 0, 0, scale, -ox * scale - x0, -oy * scale - y0);
     if (stroke.geometry) {
       drawInkShape(ctx, { ...stroke, compositeOperation: 'source-over' });
-    } else if (stroke.renderVersion === 2) {
+    } else if (usesStreamingInk(stroke)) {
       getStreamingInk(stroke).draw(ctx, 0, 0, { minX: minX - 1, minY: minY - 1, maxX: maxX + 1, maxY: maxY + 1 });
     } else {
       const ribbon = prepare ? prepare() : prepareInkRibbon(stroke);

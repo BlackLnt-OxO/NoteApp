@@ -7,7 +7,7 @@
   gap: 12px;
   height: 100%;
   overflow: hidden;
-  background: var(--sidebar-bg,var(--glass-bg));
+  background: rgba(var(--sidebar-tint), var(--workspace-sidebar-opacity, var(--sidebar-base-opacity)));
 }
 
 .asset-view-switch,
