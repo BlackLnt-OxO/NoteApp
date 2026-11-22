@@ -250,7 +250,7 @@ function createController() {
 
   const onScroll = (event: Event) => {
     if (!(event.target instanceof Element) || !event.target.hasAttribute('data-glass-scroll-container')) return;
-    document.documentElement.dataset.glassScrolling = 'true';
+    if (document.documentElement.dataset.glassScrolling !== 'true') document.documentElement.dataset.glassScrolling = 'true';
     clearTimeout(scrollTimer);
     scrollTimer = window.setTimeout(() => {
       delete document.documentElement.dataset.glassScrolling;

@@ -57,6 +57,9 @@ const App: React.FC = () => {
   const [showCreateDialog, setShowCreateDialog] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const workspaceRef = useRef<HTMLDivElement>(null);
+  const setSidebarRail = useCallback((element: HTMLDivElement | null) => {
+    if (element) element.inert = sidebarCollapsed;
+  }, [sidebarCollapsed]);
   const previewBackgroundShade = useCallback((value: number | null) => {
     const style = workspaceRef.current?.style;
     if (value === null) style?.removeProperty('--workspace-shade-preview');
@@ -148,6 +151,7 @@ const App: React.FC = () => {
   // Ctrl+Scroll font zoom (throttled)
   useEffect(() => {
     let lastTime = 0;
+    let listening = false;
     const onWheel = (e: WheelEvent) => {
       if (e.ctrlKey) {
         e.preventDefault();
@@ -166,8 +170,25 @@ const App: React.FC = () => {
         }, 2500);
       }
     };
-    window.addEventListener('wheel', onWheel, { passive: false });
-    return () => window.removeEventListener('wheel', onWheel);
+    // Keep ordinary scrolling on the compositor. Only Ctrl+wheel needs to
+    // cancel the browser's default action; editing viewports own their zoom.
+    const captureWheel = (enable: boolean) => {
+      if (listening === enable) return;
+      listening = enable;
+      if (enable) window.addEventListener('wheel', onWheel, { passive: false });
+      else window.removeEventListener('wheel', onWheel);
+    };
+    const modifier = (event: KeyboardEvent) => captureWheel(event.ctrlKey);
+    const blur = () => captureWheel(false);
+    window.addEventListener('keydown', modifier, true);
+    window.addEventListener('keyup', modifier, true);
+    window.addEventListener('blur', blur);
+    return () => {
+      blur();
+      window.removeEventListener('keydown', modifier, true);
+      window.removeEventListener('keyup', modifier, true);
+      window.removeEventListener('blur', blur);
+    };
   }, []);
 
   const zoomStep = useCallback((delta: number) => {
@@ -282,7 +303,7 @@ const App: React.FC = () => {
   }
 
   const workspace = (
-    <div ref={workspaceRef} data-pointer-scope={showBackground || undefined} style={{
+    <div ref={workspaceRef} data-pointer-scope={showBackground || undefined} data-settings-open={showSettings ? '' : undefined} style={{
       '--workspace-shade': shade,
       '--workspace-current-shade': 'var(--workspace-shade-preview, var(--workspace-shade))',
       '--workspace-surface-opacity': 'min(1, calc(var(--workspace-current-shade) * 1.2))',
@@ -351,17 +372,17 @@ const App: React.FC = () => {
       </div>
 
       <div data-ink-workspace style={{ position: 'relative', zIndex: 2, flex: 1, display: 'flex', overflow: 'hidden' }}>
-        {/* Manual toggles reflow the grid. A workspace switch measures its new width immediately. */}
-        <div style={{
-          width: sidebarCollapsed ? 0 : 220,
-          overflow: 'hidden', flexShrink: 0,
-          display: 'flex',
-          transition: switchingView ? 'none' : 'width var(--transition-slow)',
-          borderRight: sidebarCollapsed ? 'none' : '1px solid var(--glass-border)',
-        }}>
-          {viewMode === 'notes'
-            ? <Sidebar onCreateNote={() => setShowCreateDialog(true)} />
-            : <AssetSidebar />}
+        <div style={{ width: sidebarCollapsed ? 0 : 220, flexShrink: 0 }}>
+          {/* Measure the workspace once at its final width. Only the rail slides. */}
+          <div ref={setSidebarRail} className="workspace-sidebar-rail" aria-hidden={sidebarCollapsed || undefined}
+            style={{
+              transform: sidebarCollapsed ? 'translateX(-100%)' : 'none',
+              transition: switchingView ? 'none' : undefined,
+            }}>
+            {viewMode === 'notes'
+              ? <Sidebar onCreateNote={() => setShowCreateDialog(true)} />
+              : <AssetSidebar />}
+          </div>
         </div>
         <div style={{ flex: 1, position: 'relative', overflow: 'hidden', borderRadius: '0 0 12px 0', display: 'flex', flexDirection: 'column' }}>
           {/* When the left sidebar is collapsed, a slim top bar keeps the view

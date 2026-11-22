@@ -195,6 +195,20 @@ body {
   white-space: nowrap;
 }
 
+.workspace-sidebar-rail {
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 220px;
+  z-index: 100;
+  display: flex;
+  border-right: 1px solid var(--glass-border);
+  transition: transform var(--transition-slow);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .workspace-sidebar-rail { transition: none; }
+}
+
 .workspace-mode-switch [aria-current="page"] {
   background: var(--accent);
   color: white;
@@ -695,11 +709,58 @@ body {
 }
 
 .settings-overlay {
+  background: rgb(9 11 22 / .34);
   animation: none;
 }
 
 .settings-dialog {
+  --settings-glass-tint: rgb(27 28 46 / .72);
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  max-width: calc(100% - 32px);
+  max-height: 85%;
+  padding: 0;
+  overflow: hidden;
+  background: var(--dialog-bg);
   animation: settings-enter 150ms ease-out;
+}
+
+[data-theme="light"] .settings-dialog {
+  --settings-glass-tint: rgb(246 242 238 / .78);
+}
+
+.settings-frost-cache {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  visibility: hidden;
+}
+
+.settings-frost-cache[data-ready] { visibility: visible; }
+
+.settings-dialog::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  background:
+    linear-gradient(var(--settings-glass-tint), var(--settings-glass-tint)),
+    rgba(var(--app-overlay), var(--workspace-current-shade, .2));
+}
+
+.settings-scroll {
+  position: relative;
+  z-index: 1;
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+  padding: 24px;
 }
 
 @keyframes settings-enter {

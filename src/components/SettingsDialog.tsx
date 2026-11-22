@@ -6,6 +6,7 @@ import { backgroundShade, cardFrostRadius } from '../workspaceBackground';
 import ColorPicker from './ColorPicker';
 import { askConfirm } from './ConfirmDialog';
 import LiquidGlassCard from './LiquidGlassCard';
+import SettingsBackdrop from './SettingsBackdrop';
 import { setGlassBlur } from './liquidGlassSurface';
 
 interface SettingsDialogProps {
@@ -250,8 +251,11 @@ const SettingsDialog: React.FC<SettingsDialogProps> = ({ onClose, previewBackgro
       onMouseUp={(e) => {
         if (e.target === e.currentTarget && (e.currentTarget as HTMLElement).dataset.mdTarget === '1') onClose();
       }}>
-      <div className="dialog settings-dialog" onClick={(e) => e.stopPropagation()} style={{ minWidth: dw, maxHeight: '85vh', fontSize: gfs }}>
-        <h3 style={{ fontSize: fs(18, gfs), marginBottom: fs(20, gfs) }}>设置</h3>
+      <div className="dialog settings-dialog" role="dialog" aria-modal="true" aria-labelledby="settings-heading"
+        onClick={(e) => e.stopPropagation()} style={{ width: dw, fontSize: gfs }}>
+        <SettingsBackdrop wallpaper={settings.backgroundImage} />
+        <div className="settings-scroll" data-glass-scroll-container>
+        <h3 id="settings-heading" style={{ fontSize: fs(18, gfs), marginBottom: fs(20, gfs) }}>设置</h3>
 
         <div style={sectionStyle}>
           <label style={labelStyle(gfs)}>主题模式</label>
@@ -450,34 +454,6 @@ const SettingsDialog: React.FC<SettingsDialogProps> = ({ onClose, previewBackgro
             </div>
           </div>
 
-          {/* Color picker overlay */}
-          {showPicker && (
-            <div className="dialog-overlay" style={{ zIndex: 10002 }}
-              onMouseDown={(e) => { (e.currentTarget as HTMLElement).dataset.mdTarget = e.target === e.currentTarget ? '1' : '0'; }}
-              onMouseUp={(e) => {
-                if (e.target === e.currentTarget && (e.currentTarget as HTMLElement).dataset.mdTarget === '1') {
-                  const custom = localSettings.customNoteColors || [];
-                  if (editingColor) {
-                    // Editing existing color — replace old with new
-                    const replaced = custom.map(x => x === editingColor ? pickerColor : x);
-                    handleChange('customNoteColors', replaced);
-                    if (localSettings.defaultNoteColor === editingColor) handleChange('defaultNoteColor', pickerColor);
-                  } else {
-                    // Adding new color
-                    if (!custom.includes(pickerColor)) {
-                      handleChange('customNoteColors', [...custom, pickerColor]);
-                    }
-                  }
-                  setShowPicker(false);
-                }
-              }}>
-              <ColorPicker
-                color={editingColor || '#ffffff'}
-                onChange={setPickerColor}
-                gfs={gfs}
-              />
-            </div>
-          )}
         </div>
 
         {/* Configurable shortcuts */}
@@ -506,7 +482,25 @@ const SettingsDialog: React.FC<SettingsDialogProps> = ({ onClose, previewBackgro
             fontWeight: 500, cursor: 'pointer', fontFamily: 'inherit',
           }}>保存设置</button>
         </div>
+        </div>
       </div>
+      {showPicker && (
+        <div className="dialog-overlay" style={{ zIndex: 10002 }}
+          onMouseDown={e => { e.currentTarget.dataset.mdTarget = e.target === e.currentTarget ? '1' : '0'; }}
+          onMouseUp={e => {
+            if (e.target !== e.currentTarget || e.currentTarget.dataset.mdTarget !== '1') return;
+            const custom = localSettings.customNoteColors || [];
+            if (editingColor) {
+              handleChange('customNoteColors', custom.map(color => color === editingColor ? pickerColor : color));
+              if (localSettings.defaultNoteColor === editingColor) handleChange('defaultNoteColor', pickerColor);
+            } else if (!custom.includes(pickerColor)) {
+              handleChange('customNoteColors', [...custom, pickerColor]);
+            }
+            setShowPicker(false);
+          }}>
+          <ColorPicker color={editingColor || '#ffffff'} onChange={setPickerColor} gfs={gfs} />
+        </div>
+      )}
     </div>
   );
 };

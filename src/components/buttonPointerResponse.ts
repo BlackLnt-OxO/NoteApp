@@ -45,6 +45,10 @@ export function useButtonPointerResponse(uiScale: number) {
 
     const updateLight = () => {
       frame = undefined;
+      if (needsHit) {
+        needsHit = false;
+        track(responseTarget(document.elementFromPoint(x, y)), undefined, false);
+      }
       const active = target;
       if (!active?.isConnected || responseTarget(active) !== active) {
         track(null);
@@ -84,7 +88,7 @@ export function useButtonPointerResponse(uiScale: number) {
       schedule();
     }
 
-    function track(next: HTMLElement | null, event?: PointerEvent) {
+    function track(next: HTMLElement | null, event?: PointerEvent, queue = true) {
       if (lit && lit !== next) {
         // Leave the last position in place while its light fades out.
         lit.removeAttribute('data-pointer-glow');
@@ -104,6 +108,7 @@ export function useButtonPointerResponse(uiScale: number) {
       }
       target = next;
       if (!target) {
+        needsHit = false;
         if (frame !== undefined) cancelAnimationFrame(frame);
         frame = undefined;
         return;
@@ -112,7 +117,7 @@ export function useButtonPointerResponse(uiScale: number) {
         x = event.clientX;
         y = event.clientY;
       }
-      schedule();
+      if (queue) schedule();
     }
 
     function move(event: PointerEvent) {
@@ -125,7 +130,8 @@ export function useButtonPointerResponse(uiScale: number) {
     const scroll = () => {
       if (!target) return;
       box = undefined;
-      track(responseTarget(document.elementFromPoint(x, y)));
+      needsHit = true;
+      schedule();
     };
     refreshHit.current = scroll;
     const animation = (event: AnimationEvent) => {
