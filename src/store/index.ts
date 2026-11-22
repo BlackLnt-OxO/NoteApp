@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { Note, Tag, AppSettings, MindMapState, ViewMode, DEFAULT_TAGS, DEFAULT_SETTINGS, DEFAULT_COLORS } from '../types';
+import { normalizeCardFrost } from '../workspaceBackground';
 
 interface NoteStore {
   // Load state
@@ -241,6 +242,7 @@ export const useNoteStore = create<NoteStore>((set, get) => ({
             ...DEFAULT_SETTINGS,
             ...data.settings,
             backgroundImage: data.settings?.backgroundImage || null,
+            cardFrost: normalizeCardFrost(data.settings?.cardFrost),
           },
           mindMap: data.mindMap || {
             offsetX: 0, offsetY: 0, scale: 1,

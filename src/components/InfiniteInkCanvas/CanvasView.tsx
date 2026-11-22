@@ -180,7 +180,7 @@ const CanvasView: React.FC = () => {
         {navigationError || saveError || storageWarning || '画布保存失败'}
         {saveStatus === 'error' && <button onClick={() => { setNavigationError(null); void useCanvasStore.getState().saveCanvasData(); }}>重试保存</button>}
       </div>}
-      <div key={currentCanvasId || 'home'} className="animate-fade-in" style={{ position: 'absolute', inset: 0 }}>
+      <div key={currentCanvasId || 'home'} className={current ? 'animate-fade-in' : undefined} style={{ position: 'absolute', inset: 0 }}>
         {!currentCanvasId || !current ? (
           <CanvasHome onOpen={openCanvas} onNew={newCanvas} />
         ) : (

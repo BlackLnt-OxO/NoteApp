@@ -304,7 +304,7 @@ const PdfView: React.FC = () => {
 
   return (
     <div style={{ position: 'absolute', inset: 0, overflow: 'hidden', background: fileName ? 'var(--page-bg)' : undefined }}>
-      <div key={documentKey.current.key} className="animate-fade-in" style={{ position: 'absolute', inset: 0 }}>
+      <div key={documentKey.current.key} className={fileName ? 'animate-fade-in' : undefined} style={{ position: 'absolute', inset: 0 }}>
       {!fileName ? (
         <LibraryHome onImport={workspace.pickAndOpen} onOpen={workspace.open} onReplace={workspace.replace} importing={workspace.busy} />
       ) : (

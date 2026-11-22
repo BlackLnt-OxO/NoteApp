@@ -1,29 +1,30 @@
-import { useEffect, useRef, type ComponentPropsWithoutRef, type PointerEvent } from 'react';
+import { useLayoutEffect, useRef, type ComponentPropsWithoutRef, type PointerEvent } from 'react';
 import { watchGlassCard } from './liquidGlassSurface';
 
 interface Props extends ComponentPropsWithoutRef<'div'> {
   radius: number;
   dragState?: 'placeholder' | 'preview';
+  frostPreview?: boolean;
 }
 
 export default function LiquidGlassCard({
-  radius, dragState, className, style, onPointerMove, onPointerLeave, ...props
+  radius, dragState, frostPreview, className, style, onPointerMove, onPointerLeave, ...props
 }: Props) {
   const card = useRef<HTMLDivElement>(null);
   const frame = useRef<number>();
   const pointer = useRef({ x: 0, y: 0 });
   const reducedMotion = useRef<MediaQueryList | undefined>();
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const element = card.current;
     if (!element || dragState === 'placeholder') return;
     reducedMotion.current = window.matchMedia?.('(prefers-reduced-motion: reduce)');
-    const unwatch = watchGlassCard(element, radius);
+    const unwatch = watchGlassCard(element, radius, frostPreview ? 'preview' : 'workspace');
     return () => {
       clearLight(element);
       unwatch?.();
     };
-  }, [dragState, radius]);
+  }, [dragState, radius, frostPreview]);
 
   function clearLight(element: HTMLDivElement) {
     if (frame.current !== undefined) cancelAnimationFrame(frame.current);

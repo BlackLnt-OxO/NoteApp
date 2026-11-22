@@ -1,10 +1,12 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useLayoutEffect } from 'react';
 import { useNoteStore } from '../store';
 import { fs, fsn } from '../utils';
 import { DEFAULT_COLORS } from '../types';
-import { backgroundShade } from '../workspaceBackground';
+import { backgroundShade, cardFrostRadius } from '../workspaceBackground';
 import ColorPicker from './ColorPicker';
 import { askConfirm } from './ConfirmDialog';
+import LiquidGlassCard from './LiquidGlassCard';
+import { setGlassBlur } from './liquidGlassSurface';
 
 interface SettingsDialogProps { onClose: () => void; }
 
@@ -51,6 +53,9 @@ const SettingsDialog: React.FC<SettingsDialogProps> = ({ onClose }) => {
   const { settings, updateSettings, saveData } = useNoteStore();
   const gfs = settings.fontSize;
   const [localSettings, setLocalSettings] = useState({ ...settings });
+  const [draftCardFrost, setDraftCardFrost] = useState(settings.cardFrost);
+  const previewRadius = cardFrostRadius(draftCardFrost);
+  useLayoutEffect(() => { setGlassBlur(previewRadius, 'preview'); }, [previewRadius]);
   // Sync external settings changes (e.g. font size shortcut) into local state
   useEffect(() => { setLocalSettings(prev => ({ ...prev, ...settings })); }, [settings]);
   const [fontOpen, setFontOpen] = useState(false);
@@ -86,11 +91,12 @@ const SettingsDialog: React.FC<SettingsDialogProps> = ({ onClose }) => {
   const handleChange = (key: string, value: any) => setLocalSettings((prev) => ({ ...prev, [key]: value }));
 
   const handleSave = () => {
-    updateSettings(localSettings);
+    const nextSettings = { ...localSettings, cardFrost: draftCardFrost };
+    updateSettings(nextSettings);
     saveData();
     // Sync shortcuts to main process only when settings are saved
     if (window.electronAPI) {
-      window.electronAPI.updateShortcuts(localSettings);
+      window.electronAPI.updateShortcuts(nextSettings);
     }
     onClose();
   };
@@ -294,6 +300,19 @@ const SettingsDialog: React.FC<SettingsDialogProps> = ({ onClose }) => {
               handleChange('backgroundOpacity', opacity);
               updateSettings({ backgroundOpacity: opacity });
             }} style={rangeStyle} />
+        </div>
+
+        <div style={sectionStyle}>
+          <label htmlFor="card-frost" style={labelStyle(gfs)}>卡片磨砂 <strong>{draftCardFrost}%</strong></label>
+          <input id="card-frost" type="range" min="0" max="100" value={draftCardFrost}
+            onChange={event => setDraftCardFrost(Number(event.target.value))} style={rangeStyle} />
+          <div className="card-frost-preview" aria-hidden="true" style={{
+            '--card-frost-filter': previewRadius ? `blur(${previewRadius}px)` : 'none',
+            '--workspace-surface-opacity': .52,
+            fontSize: fs(13, gfs),
+          } as React.CSSProperties}>
+            <LiquidGlassCard radius={10} frostPreview>预览</LiquidGlassCard>
+          </div>
         </div>
 
         <div style={sectionStyle}>

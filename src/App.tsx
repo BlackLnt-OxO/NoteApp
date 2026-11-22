@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useCallback } from 'react';
+import React, { useEffect, useState, useCallback, useLayoutEffect, useRef } from 'react';
 import { useNoteStore } from './store';
 import Sidebar from './components/Sidebar';
 import NoteGrid from './components/NoteGrid';
@@ -20,7 +20,8 @@ import PdfView from './components/PdfAnnotation/PdfView';
 import { usePdfStore } from './components/PdfAnnotation/PdfStore';
 import { themeCanvasColors, isDefaultBrushColor } from './themeColors';
 import { fs, fsn } from './utils';
-import { backgroundShade } from './workspaceBackground';
+import { backgroundShade, cardFrostRadius } from './workspaceBackground';
+import { setGlassBlur } from './components/liquidGlassSurface';
 
 // Round glass affordance shared by the collapsed-state screenshot buttons
 // (bottom-left cluster) — same look as the settings / fullscreen circles.
@@ -40,12 +41,18 @@ const App: React.FC = () => {
   const canvasOpen = useCanvasLibrary(s => s.canvases.some(canvas => canvas.id === s.currentCanvasId));
   const fileOpen = usePdfStore(s => !!s.fileName);
   const shade = backgroundShade(settings.backgroundOpacity);
+  const frostRadius = cardFrostRadius(settings.cardFrost);
   const showBackground = viewMode === 'notes' || (viewMode === 'inkcanvas' ? !canvasOpen : !fileOpen);
+  const previousView = useRef(viewMode);
+  const switchingView = previousView.current !== viewMode;
   const gfs = settings.fontSize;
   const titleBarH = gfs >= 18 ? fsn(38, gfs) : 38;
   const [showCreateDialog, setShowCreateDialog] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [assetError, setAssetError] = useState('');
+
+  useLayoutEffect(() => { previousView.current = viewMode; }, [viewMode]);
+  useLayoutEffect(() => { setGlassBlur(frostRadius); }, [frostRadius]);
 
   useEffect(() => {
     const assets = useAssetLibrary.getState();
@@ -263,6 +270,7 @@ const App: React.FC = () => {
   return (
     <div style={{
       '--workspace-surface-opacity': Math.min(1, shade * 1.2),
+      '--card-frost-filter': frostRadius ? `blur(${frostRadius}px)` : 'none',
       // Viewport zoom: compensate the layout size by 1/uiScale so that after
       // transform: scale the content exactly fills the fixed window.
       width: `${100 / uiScale}vw`,
@@ -326,14 +334,12 @@ const App: React.FC = () => {
       </div>
 
       <div data-ink-workspace style={{ position: 'relative', zIndex: 2, flex: 1, display: 'flex', overflow: 'hidden' }}>
-        {/* Sidebar lives in a width-clamping container so collapse/expand gets a
-            smooth height-free width transition (the content area re-flows each
-            frame, and NoteGrid/FlowGrid's left/top transitions animate the cards). */}
+        {/* Manual toggles reflow the grid. A workspace switch measures its new width immediately. */}
         <div style={{
           width: sidebarCollapsed ? 0 : 220,
           overflow: 'hidden', flexShrink: 0,
           display: 'flex',
-          transition: 'width var(--transition-slow)',
+          transition: switchingView ? 'none' : 'width var(--transition-slow)',
           borderRight: sidebarCollapsed ? 'none' : '1px solid var(--glass-border)',
         }}>
           {viewMode === 'notes'
@@ -360,8 +366,8 @@ const App: React.FC = () => {
               ))}
             </div>
           )}
-          {/* key=viewMode remounts on switch → the fade-in plays each time. */}
-          <div key={viewMode} className="animate-fade-in" style={{ flex: 1, position: 'relative', minHeight: 0 }}>
+          {/* Home grids animate their cards after the backdrop filters are ready. */}
+          <div key={viewMode} className={showBackground ? undefined : 'animate-fade-in'} style={{ flex: 1, position: 'relative', minHeight: 0 }}>
             {viewMode === 'inkcanvas' ? (
               <CanvasView />
             ) : viewMode === 'pdf' ? (

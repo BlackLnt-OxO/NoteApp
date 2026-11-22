@@ -10,6 +10,17 @@ export interface GlassShape {
   radius: number;
 }
 
+export interface GlassFilter {
+  element: SVGFilterElement;
+  centerBlur: SVGFEGaussianBlurElement;
+  rimBlur: SVGFEGaussianBlurElement;
+}
+
+export function updateGlassBlur({ centerBlur, rimBlur }: GlassFilter, radius: number) {
+  centerBlur.setAttribute('stdDeviation', String(radius));
+  rimBlur.setAttribute('stdDeviation', String(radius / 8));
+}
+
 export function glassSvg<K extends keyof SVGElementTagNameMap>(
   tag: K, attributes: Record<string, string | number> = {},
 ): SVGElementTagNameMap[K] {
@@ -23,7 +34,8 @@ export function createGlassMap({ width, height, radius }: GlassShape): string | 
   const canvas = document.createElement('canvas');
   const columns = canvas.width = Math.max(1, Math.round(width * scale));
   const rows = canvas.height = Math.max(1, Math.round(height * scale));
-  const ctx = canvas.getContext('2d');
+  // The generated map is immediately read back as a PNG.
+  const ctx = canvas.getContext('2d', { willReadFrequently: true });
   if (!ctx) return;
 
   const pixels = ctx.createImageData(columns, rows);
@@ -31,6 +43,7 @@ export function createGlassMap({ width, height, radius }: GlassShape): string | 
   const halfHeight = height / 2;
   const corner = Math.min(radius, halfWidth, halfHeight);
   const bevel = Math.min(EDGE_WIDTH, halfWidth, halfHeight);
+  const innerLimit = Math.min(0, corner - bevel);
 
   for (let y = 0; y < rows; y++) {
     const offsetY = (y + 0.5) * height / rows - halfHeight;
@@ -38,15 +51,18 @@ export function createGlassMap({ width, height, radius }: GlassShape): string | 
     for (let x = 0; x < columns; x++) {
       const offsetX = (x + 0.5) * width / columns - halfWidth;
       const curvedX = Math.abs(offsetX) - (halfWidth - corner);
-      const outsideX = Math.max(0, curvedX);
-      const outsideY = Math.max(0, curvedY);
-      const diagonal = Math.hypot(outsideX, outsideY);
-      const depth = corner - (diagonal + Math.min(Math.max(curvedX, curvedY), 0));
       const index = (y * columns + x) * 4;
       // R/G encode horizontal/vertical movement. B is the rim's blend mask.
       pixels.data[index] = 128;
       pixels.data[index + 1] = 128;
       pixels.data[index + 3] = 255;
+      const nearestEdge = Math.max(curvedX, curvedY);
+      if (nearestEdge <= innerLimit) continue;
+
+      const outsideX = Math.max(0, curvedX);
+      const outsideY = Math.max(0, curvedY);
+      const diagonal = Math.hypot(outsideX, outsideY);
+      const depth = corner - (diagonal + Math.min(nearestEdge, 0));
       if (depth < 0 || depth >= bevel) continue;
 
       const normalX = diagonal > 0 ? outsideX / diagonal : Number(curvedX > curvedY);
@@ -64,7 +80,7 @@ export function createGlassMap({ width, height, radius }: GlassShape): string | 
   return canvas.toDataURL();
 }
 
-export function createGlassFilter(id: string, shape: GlassShape, mapUrl: string, rgb: boolean): SVGFilterElement {
+export function createGlassFilter(id: string, shape: GlassShape, mapUrl: string, rgb: boolean, blur: number): GlassFilter {
   const filter = glassSvg('filter', {
     id, x: '0%', y: '0%', width: '100%', height: '100%', 'color-interpolation-filters': 'sRGB',
   });
@@ -72,10 +88,15 @@ export function createGlassFilter(id: string, shape: GlassShape, mapUrl: string,
     href: mapUrl, x: 0, y: 0, width: shape.width, height: shape.height,
     preserveAspectRatio: 'none', result: 'map',
   }));
+  const centerBlur = glassSvg('feGaussianBlur', { in: 'SourceGraphic', edgeMode: 'duplicate', result: 'frostedCenter' });
+  const rimBlur = glassSvg('feGaussianBlur', { in: 'SourceGraphic', edgeMode: 'duplicate', result: 'frostedRim' });
+  filter.append(centerBlur, rimBlur);
+  const glassFilter = { element: filter, centerBlur, rimBlur };
+  updateGlassBlur(glassFilter, blur);
 
   function displace(scale: number, result: string) {
     return glassSvg('feDisplacementMap', {
-      in: 'SourceGraphic', in2: 'map', scale, xChannelSelector: 'R', yChannelSelector: 'G', result,
+      in: 'frostedRim', in2: 'map', scale, xChannelSelector: 'R', yChannelSelector: 'G', result,
     });
   }
 
@@ -102,7 +123,7 @@ export function createGlassFilter(id: string, shape: GlassShape, mapUrl: string,
       in: 'map', type: 'matrix', values: '0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 1 0 0', result: 'rimMask',
     }),
     glassSvg('feComposite', { in: 'rim', in2: 'rimMask', operator: 'in', result: 'maskedRim' }),
-    glassSvg('feComposite', { in: 'maskedRim', in2: 'SourceGraphic', operator: 'over' }),
+    glassSvg('feComposite', { in: 'maskedRim', in2: 'frostedCenter', operator: 'over' }),
   );
-  return filter;
+  return glassFilter;
 }

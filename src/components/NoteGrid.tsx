@@ -1,6 +1,7 @@
 import React, { useState, useRef, useCallback, useMemo, useLayoutEffect } from 'react';
 import { useNoteStore } from '../store';
 import NoteCard from './NoteCard';
+import { useGlassEntrance } from './useGlassEntrance';
 import { fs, fsn } from '../utils';
 
 const PADDING = 36;
@@ -42,6 +43,7 @@ const NoteGrid: React.FC = () => {
   );
 
   const draggingNote = draggingNoteId ? filteredNotes.find((note) => note.id === draggingNoteId) : undefined;
+  const glassGridRef = useGlassEntrance(containerW > 0 && filteredNotes.length > 0);
 
   // Measure the real width synchronously before first paint, so cards render at
   // their final positions immediately — otherwise each mount re-plays the
@@ -207,7 +209,7 @@ const NoteGrid: React.FC = () => {
       <div ref={containerRef} data-glass-scroll-container onPointerMove={handlePointerMove} onPointerUp={handlePointerUp}
         onPointerCancel={endDrag} onLostPointerCapture={endDrag} onClick={handleContainerClick}
         style={{ position: 'relative', width: '100%', height: '100%', overflow: 'auto', zIndex: 1, touchAction: 'none' }}>
-        <div style={{ position: 'relative', minHeight: totalHeight }} data-grid-bg="true">
+        <div ref={glassGridRef} style={{ position: 'relative', minHeight: totalHeight }} data-grid-bg="true">
           {containerW > 0 && filteredNotes.map((note, idx) => {
             const pos = indexToPos(idx);
             const isBeingDragged = draggingNoteId === note.id;

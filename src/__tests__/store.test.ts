@@ -526,6 +526,18 @@ describe('NoteStore', () => {
       expect(s.mindMap.offsetX).toBe(5);
     });
 
+    it.each([
+      [{}, 0],
+      [{ cardFrost: 50 }, 50],
+      [{ cardFrost: 150 }, 100],
+      [{ cardFrost: -10 }, 0],
+      [{ cardFrost: '50' }, 0],
+    ])('restores the card frost percentage from %j', async (settings, expected) => {
+      vi.mocked(window.electronAPI!.loadStore).mockResolvedValueOnce({ settings });
+      await useNoteStore.getState().loadData();
+      expect(useNoteStore.getState().settings.cardFrost).toBe(expected);
+    });
+
     it('falls back to localStorage when electronAPI is absent', async () => {
       const original = window.electronAPI;
       delete (window as any).electronAPI;

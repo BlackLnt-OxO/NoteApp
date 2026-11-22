@@ -1,13 +1,17 @@
-import { createGlassFilter, createGlassMap, glassSvg, type GlassShape } from './liquidGlassFilters';
+import { createGlassFilter, createGlassMap, glassSvg, updateGlassBlur, type GlassFilter, type GlassShape } from './liquidGlassFilters';
 
 const RESIZE_SETTLE_MS = 80;
 const SCROLL_SETTLE_MS = 150;
 const UNUSED_FILTER_LIMIT = 8;
+const ENTRANCE_TIMEOUT_MS = 120;
+type GlassScope = 'workspace' | 'preview';
 
 interface Card {
   element: HTMLElement;
   radius: number;
   visible: boolean;
+  scope: GlassScope;
+  useFallback?: boolean;
   width: number;
   height: number;
   resizeTimer?: number;
@@ -18,19 +22,33 @@ interface FilterPair {
   key: string;
   rgb: string;
   mono: string;
-  nodes: SVGFilterElement[];
+  scope: GlassScope;
+  nodes: GlassFilter[];
   cards: Set<Card>;
+  loading?: Promise<void>;
 }
 
 let controller: ReturnType<typeof createController> | undefined;
+const blurByScope: Record<GlassScope, number> = { workspace: 0, preview: 0 };
 
-export function watchGlassCard(element: HTMLElement, radius: number) {
+export function setGlassBlur(radius: number, scope: GlassScope = 'workspace') {
+  if (blurByScope[scope] === radius) return;
+  blurByScope[scope] = radius;
+  controller?.updateBlur(scope, radius);
+}
+
+export function prepareGlassEntrance(grid: HTMLElement, reveal: () => void) {
+  if (controller) return controller.prepareEntrance(grid, reveal);
+  reveal();
+}
+
+export function watchGlassCard(element: HTMLElement, radius: number, scope: GlassScope = 'workspace') {
   if (!window.ResizeObserver || !window.IntersectionObserver
     || !window.CSS?.supports('backdrop-filter', 'url("#noteapp-glass")')
     || !/\bChrom(?:e|ium)\//.test(navigator.userAgent)) return;
 
   controller ??= createController();
-  return controller.watch(element, radius);
+  return controller.watch(element, radius, scope);
 }
 
 function createController() {
@@ -48,7 +66,7 @@ function createController() {
 
   function discard(pair: FilterPair) {
     filters.delete(pair.key);
-    for (const node of pair.nodes) node.remove();
+    for (const node of pair.nodes) node.element.remove();
   }
 
   function release(card: Card) {
@@ -70,29 +88,32 @@ function createController() {
     }
   }
 
-  function makeFilters(key: string, shape: GlassShape): FilterPair | undefined {
+  function makeFilters(key: string, shape: GlassShape, scope: GlassScope): FilterPair | undefined {
     let mapUrl: string | undefined;
     try { mapUrl = createGlassMap(shape); } catch { return; }
     if (!mapUrl || mapUrl === 'data:,') return;
 
     const id = `noteapp-glass-${++nextId}`;
-    const pair: FilterPair = { key, rgb: id + '-rgb', mono: id + '-mono', nodes: [], cards: new Set() };
+    const pair: FilterPair = { key, rgb: id + '-rgb', mono: id + '-mono', scope, nodes: [], cards: new Set() };
     filters.set(key, pair);
 
     const map = new Image();
     map.src = mapUrl;
-    void map.decode().then(() => {
+    if (!definitions?.isConnected) {
+      const svg = glassSvg('svg', { 'aria-hidden': 'true', width: 0, height: 0 });
+      svg.style.position = 'absolute';
+      svg.style.pointerEvents = 'none';
+      definitions = glassSvg('defs');
+      svg.append(definitions);
+      document.body.append(svg);
+    }
+    const blur = blurByScope[scope];
+    pair.nodes = [createGlassFilter(pair.rgb, shape, mapUrl, true, blur), createGlassFilter(pair.mono, shape, mapUrl, false, blur)];
+    // Start loading the SVG's image while the shared PNG is decoding.
+    definitions.append(...pair.nodes.map(node => node.element));
+    pair.loading = map.decode().then(() => {
       if (filters.get(key) !== pair) return;
-      if (!definitions?.isConnected) {
-        const svg = glassSvg('svg', { 'aria-hidden': 'true', width: 0, height: 0 });
-        svg.style.position = 'absolute';
-        svg.style.pointerEvents = 'none';
-        definitions = glassSvg('defs');
-        svg.append(definitions);
-        document.body.append(svg);
-      }
-      pair.nodes = [createGlassFilter(pair.rgb, shape, mapUrl, true), createGlassFilter(pair.mono, shape, mapUrl, false)];
-      definitions.append(...pair.nodes);
+      pair.loading = undefined;
       for (const card of pair.cards) activate(card, pair);
     }).catch(() => {
       if (filters.get(key) !== pair) return;
@@ -105,15 +126,75 @@ function createController() {
   }
 
   function refresh(card: Card) {
-    if (!card.visible || card.resizeTimer !== undefined || !card.width || !card.height || card.filters) return;
-    const { width, height, radius } = card;
-    const key = `${width}:${height}:${radius}`;
-    const pair = filters.get(key) ?? makeFilters(key, { width, height, radius });
+    if (!card.visible || card.useFallback || card.resizeTimer !== undefined || !card.width || !card.height || card.filters) return;
+    const { width, height, radius, scope } = card;
+    const key = `${scope}:${width}:${height}:${radius}`;
+    const pair = filters.get(key) ?? makeFilters(key, { width, height, radius }, scope);
     if (!pair) return;
 
     pair.cards.add(card);
     card.filters = pair;
-    if (pair.nodes.length) activate(card, pair);
+    if (!pair.loading) activate(card, pair);
+  }
+
+  function prepareEntrance(grid: HTMLElement, reveal: () => void) {
+    const deadline = performance.now() + ENTRANCE_TIMEOUT_MS;
+    const clip = { left: 0, top: 0, right: document.documentElement.clientWidth, bottom: document.documentElement.clientHeight };
+    for (let parent = grid.parentElement; parent; parent = parent.parentElement) {
+      if (!parent.hasAttribute('data-glass-scroll-container')) continue;
+      const bounds = parent.getBoundingClientRect();
+      clip.left = Math.max(clip.left, bounds.left);
+      clip.top = Math.max(clip.top, bounds.top);
+      clip.right = Math.min(clip.right, bounds.right);
+      clip.bottom = Math.min(clip.bottom, bounds.bottom);
+    }
+
+    const visible: { card: Card; width: number; height: number }[] = [];
+    for (const element of grid.querySelectorAll<HTMLElement>('.liquid-glass-card')) {
+      const card = cards.get(element);
+      if (!card) continue;
+      const bounds = element.getBoundingClientRect();
+      if (bounds.right <= clip.left || bounds.left >= clip.right || bounds.bottom <= clip.top || bounds.top >= clip.bottom) continue;
+      visible.push({ card, width: element.offsetWidth, height: element.offsetHeight });
+    }
+
+    const loading = new Set<Promise<void>>();
+    for (const { card, width, height } of visible) {
+      if (performance.now() >= deadline) break;
+      if (card.width !== width || card.height !== height) release(card);
+      card.width = width;
+      card.height = height;
+      card.visible = true;
+      clearTimeout(card.resizeTimer);
+      card.resizeTimer = undefined;
+      refresh(card);
+      if (card.filters?.loading) loading.add(card.filters.loading);
+    }
+
+    let finished = false;
+    let timer: number | undefined;
+    const finish = () => {
+      if (finished) return;
+      finished = true;
+      clearTimeout(timer);
+      for (const { card } of visible) {
+        if (cards.get(card.element) !== card || card.element.dataset.glassOptics === 'true') continue;
+        // A card revealed with fallback keeps that material for this mount.
+        card.useFallback = true;
+        release(card);
+      }
+      reveal();
+    };
+
+    if (loading.size) {
+      timer = window.setTimeout(finish, Math.max(0, deadline - performance.now()));
+      void Promise.all(loading).then(finish);
+    } else finish();
+
+    return () => {
+      finished = true;
+      clearTimeout(timer);
+    };
   }
 
   const resize = new ResizeObserver(entries => {
@@ -167,8 +248,15 @@ function createController() {
   document.addEventListener('scroll', onScroll, { capture: true, passive: true });
 
   return {
-    watch(element: HTMLElement, radius: number) {
-      const card: Card = { element, radius, width: 0, height: 0, visible: false };
+    prepareEntrance,
+    updateBlur(scope: GlassScope, radius: number) {
+      for (const pair of filters.values()) {
+        if (pair.scope !== scope) continue;
+        for (const node of pair.nodes) updateGlassBlur(node, radius);
+      }
+    },
+    watch(element: HTMLElement, radius: number, scope: GlassScope) {
+      const card: Card = { element, radius, scope, width: 0, height: 0, visible: false };
       cards.set(element, card);
       resize.observe(element, { box: 'border-box' });
       intersection.observe(element);

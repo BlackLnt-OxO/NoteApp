@@ -46,6 +46,7 @@ export interface AppSettings {
   fontFamily: string;
   backgroundImage: string | null;
   backgroundOpacity: number;
+  cardFrost: number;
   gridSize: number;
   defaultNoteColor: string;
   customNoteColors: string[];
@@ -133,6 +134,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   fontFamily: 'Georgia, "Times New Roman", serif',
   backgroundImage: null,
   backgroundOpacity: 0.3,
+  cardFrost: 0,
   gridSize: 20,
   defaultNoteColor: '#2d2d44',
   customNoteColors: [],

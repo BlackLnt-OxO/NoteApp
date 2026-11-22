@@ -10,6 +10,7 @@
  */
 
 import React, { useState, useRef, useCallback, useMemo, useLayoutEffect } from 'react';
+import { useGlassEntrance } from './useGlassEntrance';
 
 const DRAG_THRESHOLD = 5;
 const PAD = 28;
@@ -70,6 +71,8 @@ export function FlowGrid<T>({
     }
     return out;
   }, [containerWidth, items.length, itemWidth, itemHeight, gap]);
+
+  const glassGridRef = useGlassEntrance(positions.length > 0);
 
   const totalHeight = useMemo(() => {
     if (positions.length === 0) return PAD * 2;
@@ -157,7 +160,7 @@ export function FlowGrid<T>({
       onPointerUp={onPointerUp}
       style={{ position: 'relative', width: '100%', height: '100%', overflow: 'auto', touchAction: 'none' }}
     >
-      <div style={{ position: 'relative', minHeight: totalHeight }}>
+      <div ref={glassGridRef} style={{ position: 'relative', minHeight: totalHeight }}>
         {positions.map((pos, idx) => {
           const item = items[idx];
           const isDraggingCard = dragging?.index === idx;
