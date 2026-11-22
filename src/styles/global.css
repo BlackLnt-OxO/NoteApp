@@ -197,6 +197,88 @@ body {
   color: white;
 }
 
+.liquid-glass-card {
+  --card-glass-base: #232335;
+  --card-glass-rim: rgb(255 255 255 / .15);
+  --card-glass-selected-rim: rgb(255 255 255 / .30);
+  --card-glass-shadow: rgb(8 8 26 / .24);
+  --text-secondary: rgb(255 255 255 / .76);
+  --text-muted: rgb(255 255 255 / .65);
+  background-color: var(--glass-bg);
+  background-color: color-mix(in srgb, var(--card-glass-base) calc(var(--workspace-surface-opacity, .84) * 100%), transparent);
+  box-shadow: 0 5px 16px var(--card-glass-shadow);
+}
+
+[data-theme="light"] .liquid-glass-card {
+  --card-glass-base: #f7f4ef;
+  --card-glass-rim: rgb(66 52 42 / .20);
+  --card-glass-shadow: rgb(64 52 43 / .17);
+  --text-secondary: rgb(35 30 25 / .78);
+  --text-muted: rgb(35 30 25 / .67);
+}
+
+.liquid-glass-card.liquid-glass-card--note {
+  --card-glass-base: color-mix(in srgb, #191929 68%, var(--note-glass-tint, #454264));
+  --card-glass-rim: rgb(255 255 255 / .18);
+  --text-primary: rgb(255 255 255 / .92);
+}
+
+.liquid-glass-card[data-selected="true"] {
+  --card-glass-rim: var(--card-glass-selected-rim);
+}
+
+.liquid-glass-card::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  padding: 2px;
+  border-radius: inherit;
+  pointer-events: none;
+  background-color: var(--card-glass-rim);
+  background-image: var(--card-glass-highlight, none);
+  mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+  mask-composite: exclude;
+}
+
+.liquid-glass-card[data-glass-light="true"] {
+  --card-glass-highlight: radial-gradient(
+    circle 85px at var(--glass-light-x) var(--glass-light-y),
+    rgb(255 255 255 / .72), transparent
+  );
+}
+
+.liquid-glass-card[data-drag-preview="true"] {
+  box-shadow: 0 12px 32px var(--card-glass-shadow);
+}
+
+.liquid-glass-card--library {
+  transition: transform var(--transition), box-shadow var(--transition);
+}
+
+.liquid-glass-card--library:hover {
+  transform: scale(var(--btn-scale));
+}
+
+.liquid-glass-card--library:active {
+  transform: scale(.97);
+}
+
+.liquid-glass-card[data-glass-optics="true"] {
+  --glass-filter: var(--glass-rgb-filter);
+  backdrop-filter: var(--glass-filter);
+}
+
+:root[data-glass-scrolling="true"] .liquid-glass-card[data-glass-optics="true"]:not(:hover, :focus-within, [data-selected="true"], [data-drag-preview="true"]) {
+  --glass-filter: var(--glass-mono-filter);
+}
+
+@supports not (mask-composite: exclude) {
+  .liquid-glass-card::after {
+    border: 2px solid var(--card-glass-rim);
+    background: none;
+  }
+}
+
 .btn-accent {
   background: var(--accent);
   color: #fff;

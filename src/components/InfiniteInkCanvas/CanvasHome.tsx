@@ -13,6 +13,7 @@ import { fs } from "../../utils";
 import { useCanvasLibrary } from './useCanvasLibrary';
 import FlowGrid from '../FlowGrid';
 import { askConfirm } from '../ConfirmDialog';
+import LiquidGlassCard from '../LiquidGlassCard';
 
 const CARD_W = 220;
 const CARD_H = 110;
@@ -120,7 +121,7 @@ const CanvasHome: React.FC<{ onOpen: (id: string) => void; onNew: () => void }> 
   }
 
   return (
-    <div style={{
+    <div data-glass-scroll-container style={{
       position: 'absolute', inset: 0, overflowY: 'auto', padding: '28px 32px',
       color: 'var(--text-primary)',
     }}>
@@ -199,19 +200,17 @@ const CanvasHome: React.FC<{ onOpen: (id: string) => void; onNew: () => void }> 
           getId={(c) => c.id}
           onReorder={reorderCanvases}
           onCardClick={(c) => onOpen(c.id)}
-          renderCard={(c, _idx, hovered) => (
-            <div
+          renderCard={(c, _idx, hovered, dragState) => (
+            <LiquidGlassCard radius={12} dragState={dragState}
               onContextMenu={(e) => {
                 e.preventDefault();
                 e.stopPropagation();
                 setCardMenu({ x: e.clientX, y: e.clientY, id: c.id, name: c.name, categoryId: c.categoryId });
               }}
-              className="hover-ring-light"
+              className="liquid-glass-card--library"
               style={{
                 width: '100%', height: '100%', boxSizing: 'border-box',
-                padding: '16px', borderRadius: '12px', cursor: 'pointer',
-                background: hovered ? 'var(--glass-bg-hover)' : 'var(--glass-bg-light)',
-                border: hovered ? '1px solid var(--glass-border-active)' : '1px solid var(--glass-border)',
+                padding: '16px', cursor: 'pointer',
                 display: 'flex', flexDirection: 'column', gap: 10,
                 position: 'relative', userSelect: 'none',
               }}>
@@ -282,7 +281,7 @@ const CanvasHome: React.FC<{ onOpen: (id: string) => void; onNew: () => void }> 
               <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: fs(11, gfs), color: 'var(--text-muted)' }}>
                 <span>{fmtTime(c.updatedAt)}</span>
               </div>
-            </div>
+            </LiquidGlassCard>
           )}
         />
       )}

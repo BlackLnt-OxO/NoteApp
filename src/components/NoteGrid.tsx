@@ -168,7 +168,7 @@ const NoteGrid: React.FC = () => {
   }, [pendingDrag, dragging, cols, sidePad, CELL_W, CELL_H, GAP, filteredNotes, notes, selectNote]);
 
   return (
-    <div ref={containerRef} onPointerMove={handlePointerMove} onPointerUp={handlePointerUp}
+    <div ref={containerRef} data-glass-scroll-container onPointerMove={handlePointerMove} onPointerUp={handlePointerUp}
       onClick={handleContainerClick} onPointerLeave={() => { }}
       style={{ position: 'relative', width: '100%', height: '100%', overflow: 'auto', zIndex: 1, touchAction: 'none' }}>
       <div style={{ position: 'relative', minHeight: totalHeight }} data-grid-bg="true">
@@ -216,7 +216,7 @@ const NoteGrid: React.FC = () => {
               opacity: isBeingDragged ? 0.25 : 1,
               zIndex: isExpanded ? 10 : isBeingDragged ? 0 : 2,
             }}>
-              <NoteCard note={note} isDragGhost={false} isExpanded={isExpanded} onDragStart={handleCardDragStart} />
+              <NoteCard note={note} isDragPlaceholder={isBeingDragged} isExpanded={isExpanded} onDragStart={handleCardDragStart} />
             </div>
           );
         })}
@@ -233,7 +233,7 @@ const NoteGrid: React.FC = () => {
           const gw = ghostNote ? ((ghostNote.customSize ? (ghostNote.width || CELL_W) : CELL_W) - fsn(12, gfs)) * 0.92 : (CELL_W - fsn(12, gfs)) * 0.92;
           const gh = ghostNote ? ((ghostNote.customSize ? (ghostNote.height || CELL_H) : CELL_H) - fsn(12, gfs)) * 0.92 : (CELL_H - fsn(12, gfs)) * 0.92;
           return (
-        <div style={{ position: 'fixed', left: dragging.ghostX, top: dragging.ghostY, width: gw, height: gh, zIndex: 9999, pointerEvents: 'auto', opacity: 0.88, filter: 'drop-shadow(0 12px 32px rgba(0,0,0,0.5))' }}>
+        <div style={{ position: 'fixed', left: dragging.ghostX, top: dragging.ghostY, width: gw, height: gh, zIndex: 9999, pointerEvents: 'auto' }}>
           {(() => { const note = filteredNotes.find((n) => n.id === dragging.noteId); return note ? <NoteCard note={note} isDragGhost /> : null; })()}
         </div>
       )})()}

@@ -111,7 +111,6 @@ const App: React.FC = () => {
         ...n,
         content: n.content,
         fontSize: settings.fontSize,
-        settingsBgOpacity: settings.backgroundOpacity,
       });
     });
     // Keep default-brush ink contrast-correct when the theme flips (user-picked
@@ -123,7 +122,7 @@ const App: React.FC = () => {
     }
     // PDF annotations use a FIXED default color (PDF_ANNOTATION_BLUE) that does
     // NOT follow the app theme — intentionally no PDF branch here.
-  }, [settings.theme, settings.fontFamily, settings.fontSize, settings.backgroundOpacity]);
+  }, [settings.theme, settings.fontFamily, settings.fontSize]);
 
   // Ctrl+Scroll font zoom (throttled)
   useEffect(() => {
@@ -263,7 +262,7 @@ const App: React.FC = () => {
 
   return (
     <div style={{
-      '--workspace-sidebar-opacity': Math.min(1, shade * 1.2),
+      '--workspace-surface-opacity': Math.min(1, shade * 1.2),
       // Viewport zoom: compensate the layout size by 1/uiScale so that after
       // transform: scale the content exactly fills the fixed window.
       width: `${100 / uiScale}vw`,

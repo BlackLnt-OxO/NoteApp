@@ -21,7 +21,7 @@ export interface FlowGridProps<T> {
   gap: number;
   getId: (item: T) => string;
   /** Renders one card; `hovered` toggles hover-action buttons. */
-  renderCard: (item: T, index: number, hovered: boolean) => React.ReactNode;
+  renderCard: (item: T, index: number, hovered: boolean, dragState?: 'placeholder' | 'preview') => React.ReactNode;
   onReorder: (fromIndex: number, toIndex: number) => void;
   onCardClick?: (item: T) => void;
   empty?: React.ReactNode;
@@ -152,6 +152,7 @@ export function FlowGrid<T>({
   return (
     <div
       ref={containerRef}
+      data-glass-scroll-container
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}
       style={{ position: 'relative', width: '100%', height: '100%', overflow: 'auto', touchAction: 'none' }}
@@ -177,7 +178,7 @@ export function FlowGrid<T>({
                 zIndex: isDraggingCard ? 0 : 2,
               }}
             >
-              {renderCard(item, idx, hoverId === id)}
+              {renderCard(item, idx, hoverId === id, isDraggingCard ? 'placeholder' : undefined)}
             </div>
           );
         })}
@@ -189,9 +190,8 @@ export function FlowGrid<T>({
           <div style={{
             position: 'fixed', left: dragging.ghostX, top: dragging.ghostY,
             width: itemWidth, height: itemHeight, zIndex: 9999, pointerEvents: 'none',
-            opacity: 0.85, filter: 'drop-shadow(0 12px 32px rgba(0,0,0,0.4))',
           }}>
-            {renderCard(ghost, dragging.index, false)}
+            {renderCard(ghost, dragging.index, false, 'preview')}
           </div>
         ) : null;
       })()}

@@ -216,9 +216,9 @@ const PdfSidebar: React.FC = () => {
         overflow: 'hidden',
         transition: 'width var(--transition-slow)',
         display: 'flex', flexDirection: 'column',
-        background: 'rgba(var(--pdf-rail-tint), var(--workspace-sidebar-opacity, .92))',
+        background: 'rgba(var(--pdf-rail-tint), var(--workspace-surface-opacity, .92))',
         borderRight: sidebarOpen ? '1px solid var(--glass-border)' : 'none',
-        backdropFilter: 'blur(calc(10px * var(--workspace-sidebar-opacity, .92)))',
+        backdropFilter: 'blur(calc(10px * var(--workspace-surface-opacity, .92)))',
       }}>
         <div style={{
           display: 'flex', alignItems: 'center', justifyContent: 'space-between',

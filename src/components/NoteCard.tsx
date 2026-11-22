@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom';
 import { Note } from '../types';
 import { useNoteStore } from '../store';
 import { fs, fsn } from '../utils';
+import LiquidGlassCard from './LiquidGlassCard';
 
 const QUICK_COLORS = ['#2d2d44', '#6b5ce7', '#e8a0b4', '#95a5a6'];
 const ALL_COLORS = ['#2d2d44', '#6b5ce7', '#e74c3c', '#e67e22', '#2ecc71', '#3498db', '#1abc9c', '#e91e63', '#9b59b6', '#95a5a6', '#f39c12', '#34495e'];
@@ -10,13 +11,14 @@ const ALL_COLORS = ['#2d2d44', '#6b5ce7', '#e74c3c', '#e67e22', '#2ecc71', '#349
 interface NoteCardProps {
   note: Note;
   isDragGhost?: boolean;
+  isDragPlaceholder?: boolean;
   isExpanded?: boolean;
   onDragStart?: (e: React.MouseEvent, noteId: string) => void;
   onEditStart?: () => void;
   onEditEnd?: () => void;
 }
 
-const NoteCard: React.FC<NoteCardProps> = ({ note, isDragGhost, isExpanded, onDragStart, onEditStart, onEditEnd }) => {
+const NoteCard: React.FC<NoteCardProps> = ({ note, isDragGhost, isDragPlaceholder, isExpanded, onDragStart, onEditStart, onEditEnd }) => {
   const { updateNote, deleteNote, selectNote, selectedNoteId, setNoteFloating } = useNoteStore();
   const [content, setContent] = useState(note.content);
   const [showMenu, setShowMenu] = useState(false);
@@ -58,7 +60,7 @@ const NoteCard: React.FC<NoteCardProps> = ({ note, isDragGhost, isExpanded, onDr
     const api = window.electronAPI;
     if (!note.isFloating || !api) return;
     const t = setTimeout(() => {
-      api.updateFloatingNote(note.id, { ...note, settingsBgOpacity: settings.backgroundOpacity });
+      api.updateFloatingNote(note.id, note);
     }, 400);
     return () => clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -262,7 +264,7 @@ const NoteCard: React.FC<NoteCardProps> = ({ note, isDragGhost, isExpanded, onDr
         setNoteFloating(note.id, false, undefined);
         await new Promise(r => setTimeout(r, 100));
         await window.electronAPI.createFloatingNote({
-          ...note, content, tag: tag?.name || note.tag || '通用', fontSize: settings.fontSize, settingsBgOpacity: settings.backgroundOpacity,
+          ...note, content, tag: tag?.name || note.tag || '通用', fontSize: settings.fontSize,
           floatCloseKey: settings.floatCloseKey, floatPenetrateKey: settings.floatPenetrateKey,
         });
         setNoteFloating(note.id, true, '');
@@ -278,7 +280,7 @@ const NoteCard: React.FC<NoteCardProps> = ({ note, isDragGhost, isExpanded, onDr
       } else {
         if (window.electronAPI) {
           await window.electronAPI.createFloatingNote({
-            ...note, content, tag: tag?.name || note.tag || '通用', fontSize: settings.fontSize, settingsBgOpacity: settings.backgroundOpacity,
+            ...note, content, tag: tag?.name || note.tag || '通用', fontSize: settings.fontSize,
             floatCloseKey: settings.floatCloseKey, floatPenetrateKey: settings.floatPenetrateKey,
           });
           setNoteFloating(note.id, true, '');
@@ -345,7 +347,7 @@ const NoteCard: React.FC<NoteCardProps> = ({ note, isDragGhost, isExpanded, onDr
     update(note.id, { color });
     // Sync floating window color
     if (note.isFloating && window.electronAPI) {
-      window.electronAPI.updateFloatingNote(note.id, { ...note, color, content, settingsBgOpacity: settings.backgroundOpacity });
+      window.electronAPI.updateFloatingNote(note.id, { ...note, color, content });
     }
   };
 
@@ -354,20 +356,18 @@ const NoteCard: React.FC<NoteCardProps> = ({ note, isDragGhost, isExpanded, onDr
 
   return (
     <>
-      <div onContextMenu={handleContextMenu} style={{
+      <LiquidGlassCard className="liquid-glass-card--note" radius={14}
+        data-selected={isSelected || undefined} dragState={isDragGhost ? 'preview' : isDragPlaceholder ? 'placeholder' : undefined}
+        onContextMenu={handleContextMenu} style={{
         minWidth: '100%',
         width: showExpanded ? 'auto' : '100%',
         minHeight: '100%',
         height: showExpanded ? 'auto' : '100%',
-        borderRadius: '14px',
-        background: note.color === 'transparent' ? 'rgba(0,0,0,0.3)' : `${note.color}99`,
-        backdropFilter: 'blur(20px)', WebkitBackdropFilter: 'blur(20px)',
-        border: isSelected ? '2px solid rgba(255,255,255,0.55)' : '1px solid rgba(255,255,255,0.18)',
-        boxShadow: isDragGhost ? '0 16px 48px rgba(0,0,0,0.5)' : isSelected ? '0 10px 32px rgba(0,0,0,0.4)' : '0 4px 12px rgba(0,0,0,0.2)',
+        '--note-glass-tint': note.color,
         display: 'flex', flexDirection: 'column',
         transition: 'box-shadow 0.2s, border 0.2s, transform 0.2s, width 0.2s, height 0.2s',
         position: 'relative', userSelect: 'none', overflow: 'hidden',
-      }}
+      } as React.CSSProperties}
       onMouseEnter={(e) => { if (!isDragGhost && !showExpanded) { e.currentTarget.style.transform = 'scale(1.012)'; } }}
       onMouseLeave={(e) => { e.currentTarget.style.transform = 'scale(1)'; }}>
         {/* Header — fixed above scrollable area, always visible */}
@@ -531,7 +531,7 @@ const NoteCard: React.FC<NoteCardProps> = ({ note, isDragGhost, isExpanded, onDr
           borderRadius: '0 0 14px 0',
         }} />
 
-      </div>
+      </LiquidGlassCard>
 
       {/* Image lightbox with scroll zoom + drag pan */}
       {lightboxImg && createPortal(

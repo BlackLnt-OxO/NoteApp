@@ -9,6 +9,7 @@ import { usePdfLibrary, type PdfCategory, type PdfLibraryItem } from './PdfLibra
 import { fileTypeLabel } from '../FileLibrary/fileTypes';
 import FlowGrid from '../FlowGrid';
 import { askConfirm } from '../ConfirmDialog';
+import LiquidGlassCard from '../LiquidGlassCard';
 
 // ---- helpers ------------------------------------------------------------------
 
@@ -93,7 +94,7 @@ const LibraryHome: React.FC<Props> = ({ onImport, onOpen, onReplace, importing }
   });
 
   return (
-    <div style={{
+    <div data-glass-scroll-container style={{
       position: 'absolute', inset: 0, overflowY: 'auto', padding: '28px 32px',
       color: 'var(--text-primary)',
     }}>
@@ -180,19 +181,17 @@ const LibraryHome: React.FC<Props> = ({ onImport, onOpen, onReplace, importing }
             items.findIndex(item => item.id === sorted[from].id), items.findIndex(item => item.id === sorted[to].id),
           )}
           onCardClick={item => void onOpen(item)}
-          renderCard={(item, _idx, hovered) => (
-            <div
+          renderCard={(item, _idx, hovered, dragState) => (
+            <LiquidGlassCard radius={12} dragState={dragState}
               onContextMenu={(e) => {
                 e.preventDefault();
                 e.stopPropagation();
                 setCardMenu({ x: e.clientX, y: e.clientY, item });
               }}
-              className="hover-ring-light"
+              className="liquid-glass-card--library"
               style={{
                 width: '100%', height: '100%', boxSizing: 'border-box',
-                padding: '16px', borderRadius: '12px', cursor: 'pointer',
-                background: hovered ? 'var(--glass-bg-hover)' : 'var(--glass-bg-light)',
-                border: hovered ? '1px solid var(--glass-border-active)' : '1px solid var(--glass-border)',
+                padding: '16px', cursor: 'pointer',
                 display: 'flex', flexDirection: 'column', gap: 10,
                 position: 'relative', userSelect: 'none',
               }}
@@ -233,7 +232,7 @@ const LibraryHome: React.FC<Props> = ({ onImport, onOpen, onReplace, importing }
                 <span>{item.categoryId ? (categories.find((c) => c.id === item.categoryId)?.name ?? '') : ''}</span>
                 <span style={{ marginRight: hovered ? 24 : 0 }}>{relativeTime(item.lastOpened)}</span>
               </div>
-            </div>
+            </LiquidGlassCard>
           )}
         />
       )}
