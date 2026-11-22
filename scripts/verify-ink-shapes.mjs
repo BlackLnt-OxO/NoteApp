@@ -17,7 +17,7 @@ await new Promise(resolve => http.listen(0, '127.0.0.1', resolve));
 const port = http.address().port;
 const helper = path.join(directory, 'helper'); fs.mkdirSync(helper);
 fs.writeFileSync(path.join(helper, 'package.json'), JSON.stringify({ name: 'ink-shape-smoke', main: 'main.cjs' }));
-const args = { url: `http://127.0.0.1:${port}/scripts/ink-shapes-smoke.html`, output, profile };
+const args = { url: `http://127.0.0.1:${port}/scripts/ink-shapes-smoke.html`, output, profile, dpr: process.argv[3] ?? '1' };
 fs.writeFileSync(path.join(helper, 'main.cjs'), `
 const {app,BrowserWindow}=require('electron');
 const fs=require('node:fs'),path=require('node:path');
@@ -25,17 +25,23 @@ const settings=${JSON.stringify(args)};
 app.setPath('userData',settings.profile);
 app.commandLine.appendSwitch('disable-renderer-backgrounding');
 app.commandLine.appendSwitch('disable-backgrounding-occluded-windows');
-app.commandLine.appendSwitch('force-device-scale-factor','1');
+app.commandLine.appendSwitch('force-device-scale-factor',settings.dpr);
 app.whenReady().then(async()=>{
   const win=new BrowserWindow({width:1000,height:720,useContentSize:true,show:false,webPreferences:{backgroundThrottling:false,offscreen:true}});
   win.webContents.setFrameRate(60);
+  win.webContents.debugger.attach('1.3');
   const errors=[];win.webContents.on('console-message',(_event,level,message)=>{if(level>=2)errors.push(message)});
   await win.loadURL(settings.url);
   const deadline=Date.now()+90000, captures=new Set();let busy=false;
   const timer=setInterval(async()=>{
     if(busy)return;busy=true;
     try{
-      const state=await win.webContents.executeJavaScript('({capture:window.shapeCapture,result:window.benchmarkResult})');
+      const state=await win.webContents.executeJavaScript('({capture:window.shapeCapture,result:window.benchmarkResult,mouse:window.inkSmokeMouse})');
+      if(state.mouse){
+        const {id,events}=state.mouse;
+        for(const event of events) await win.webContents.debugger.sendCommand('Input.dispatchMouseEvent',event);
+        await win.webContents.executeJavaScript('window.inkSmokeMouse=null;window.inkSmokeMouseDone='+id);
+      }
       if(state.capture&&!captures.has(state.capture)){
         captures.add(state.capture);const image=await win.webContents.capturePage();
         fs.mkdirSync(path.dirname(settings.output),{recursive:true});

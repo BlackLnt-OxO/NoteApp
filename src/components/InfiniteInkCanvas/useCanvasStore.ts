@@ -5,6 +5,7 @@ import { reportInkFrame } from '../InkFrameStats';
 import { loadQuickSizes, saveQuickSizes } from '../inkToolPrefs';
 import { replaceStrokePoints } from '../InkShapeGeometry';
 import { moveSelectedItem } from '../InkSelection';
+import { commentChanged, type CommentFrame } from '../InkComments';
 import type {
   Camera,
   BrushSettings,
@@ -70,6 +71,8 @@ export interface CanvasStore {
    *  (used by multi-image import so a single import = a single undo). */
   addImageObject: (data: { dataUrl: string; x: number; y: number; width: number; height: number }, recordHistory?: boolean) => void;
   addAssetObject: (data: import('../FileLibrary/fileTypes').AssetPlacement) => void;
+  addComment: (frame: CommentFrame) => void;
+  updateComment: (previous: CommentFrame, next: CommentFrame) => void;
   resizeAssetObject: (id: string, width: number, height: number) => void;
   updateImageObject: (id: string, patch: Partial<Pick<ImageObject, 'x' | 'y' | 'width' | 'height'>>) => void;
   setCamera: (partial: Partial<Camera>) => void;
@@ -177,6 +180,16 @@ export const useCanvasStore = create<CanvasStore>((set, get) => ({
     history.push(objects);
     const next = redoStack.pop()!;
     set({ objects: next, history, redoStack, renderEpoch: get().renderEpoch + 1 });
+  },
+
+  addComment: (frame) => {
+    get().pushHistory();
+    set(state => ({ objects: [...state.objects, frame], selectedIds: [frame.id] }));
+  },
+  updateComment: (previous, next) => {
+    if (!commentChanged(previous, next) || !get().objects.includes(previous)) return;
+    get().pushHistory();
+    set(state => ({ objects: state.objects.map(item => item === previous ? next : item) }));
   },
 
   // --- Objects ---

@@ -1,6 +1,6 @@
 import type React from 'react';
 import type { PdfCamera, PdfItem } from './PdfAnnotation/PdfTypes';
-import { boundsIntersectRect, hitTestStroke } from './PdfAnnotation/PdfEngine';
+import { boundsIntersectRect, hitTestStroke, type Bounds } from './PdfAnnotation/PdfEngine';
 import { getCommittedStrokeBounds } from './PdfAnnotation/InkStrokeIndex';
 import { replaceStrokePoints } from './InkShapeGeometry';
 import { setPointerHold } from './inkInputActivity';
@@ -38,36 +38,65 @@ function objectElements(container: HTMLElement | null): Map<string, HTMLElement>
   return new Map([...container?.querySelectorAll<HTMLElement>('[data-ink-object-id]') ?? []]
     .map(element => [element.dataset.inkObjectId!, element]));
 }
-export function boxSelectableIds(items: readonly PdfItem[], rect: { x1: number; y1: number; x2: number; y2: number }, container: HTMLElement | null, camera: PdfCamera): string[] {
+export function readInkItemBounds(container: HTMLElement | null, camera: PdfCamera): (item: PdfItem) => Bounds {
   const elements = objectElements(container), origin = container?.getBoundingClientRect();
-  return items.filter(item => {
-    if (item.type === 'stroke') return boundsIntersectRect(getCommittedStrokeBounds(item), rect.x1, rect.y1, rect.x2, rect.y2);
-    const r = elements.get(item.id)?.getBoundingClientRect();
-    const b = r?.width && r.height && origin ? {
+  return item => {
+    if (item.type === 'stroke') return getCommittedStrokeBounds(item);
+    const r = item.type === 'comment' ? undefined : elements.get(item.id)?.getBoundingClientRect();
+    return r?.width && r.height && origin ? {
       minX: (r.left - origin.left - camera.x) / camera.zoom, minY: (r.top - origin.top - camera.y) / camera.zoom,
       maxX: (r.right - origin.left - camera.x) / camera.zoom, maxY: (r.bottom - origin.top - camera.y) / camera.zoom,
     } : { minX: item.x, minY: item.y, maxX: item.x + item.width, maxY: item.y + item.height };
+  };
+}
+export function boxSelectableIds(items: readonly PdfItem[], rect: { x1: number; y1: number; x2: number; y2: number }, container: HTMLElement | null, camera: PdfCamera): string[] {
+  const readBounds = readInkItemBounds(container, camera);
+  return items.filter(item => {
+    const b = readBounds(item);
+    // A marquee drawn inside a comment can select its content independently.
+    if (item.type === 'comment') {
+      return b.minX >= Math.min(rect.x1, rect.x2) && b.maxX <= Math.max(rect.x1, rect.x2)
+        && b.minY >= Math.min(rect.y1, rect.y2) && b.maxY <= Math.max(rect.y1, rect.y2);
+    }
     return boundsIntersectRect(b, rect.x1, rect.y1, rect.x2, rect.y2);
   }).map(item => item.id);
 }
 
-export interface ObjectDragPreview { ids: Set<string>; elements: Map<string, { element: HTMLElement; translate: string }> }
+export interface ObjectDragPreview {
+  ids: Set<string>;
+  commentIds: Set<string>;
+  elements: Map<HTMLElement, string>;
+}
 export function createObjectDragPreview(items: readonly PdfItem[], ids: readonly string[], container: HTMLElement | null): ObjectDragPreview {
-  const selected = new Set(ids), preview: ObjectDragPreview = { ids: new Set(items.filter(item => item.type !== 'stroke' && selected.has(item.id)).map(item => item.id)), elements: new Map() };
+  const selected = new Set(ids);
+  const preview: ObjectDragPreview = { ids: new Set(), commentIds: new Set(), elements: new Map() };
+  for (const item of items) {
+    if (item.type === 'stroke' || !selected.has(item.id)) continue;
+    preview.ids.add(item.id);
+    if (item.type === 'comment') preview.commentIds.add(item.id);
+  }
   refreshObjectDragElements(preview, container);
   return preview;
 }
 function refreshObjectDragElements(preview: ObjectDragPreview, container: HTMLElement | null) {
-  if (preview.elements.size >= preview.ids.size) return;
-  for (const [id, element] of objectElements(container)) if (preview.ids.has(id) && !preview.elements.has(id)) preview.elements.set(id, { element, translate: element.style.translate });
+  if (preview.elements.size >= preview.ids.size + preview.commentIds.size) return;
+  for (const [id, element] of objectElements(container)) {
+    if (preview.ids.has(id) && !preview.elements.has(element)) preview.elements.set(element, element.style.translate);
+  }
+  if (!preview.commentIds.size) return;
+  for (const element of container?.querySelectorAll<HTMLElement>('[data-ink-comment-fill]') ?? []) {
+    if (preview.commentIds.has(element.dataset.inkCommentFill!) && !preview.elements.has(element)) {
+      preview.elements.set(element, element.style.translate);
+    }
+  }
 }
 export function drawObjectDragPreview(preview: ObjectDragPreview, container: HTMLElement | null, dx: number, dy: number, zoom: number, uiScale: number) {
   refreshObjectDragElements(preview, container);
   const translate = `${dx * zoom / uiScale}px ${dy * zoom / uiScale}px`;
-  for (const { element } of preview.elements.values()) element.style.translate = translate;
+  for (const element of preview.elements.keys()) element.style.translate = translate;
 }
 export function clearObjectDragPreview(preview: ObjectDragPreview | undefined) {
-  if (preview) for (const { element, translate } of preview.elements.values()) element.style.translate = translate;
+  if (preview) for (const [element, translate] of preview.elements) element.style.translate = translate;
 }
 
 export interface SelectionCapture { target: Element; pointerId: number; external: boolean }
@@ -107,13 +136,14 @@ export function inkSelectionCaptureHandlers(options: {
     onPointerDownCapture: (event: React.PointerEvent<HTMLElement>) => {
       if (event.button !== 0 || !options.enabled()) return;
       const target = event.target as Element;
-      if (target.closest('button,input,textarea,[contenteditable="true"],[data-lightbox],[data-ink-shape-panel]')) return;
+      if (target.closest('button,input,textarea,[contenteditable="true"],[data-lightbox],[data-ink-shape-panel],[data-ink-comment-resize]')) return;
       if (target.closest('[data-ink-object-control]') && !event.shiftKey && !event.ctrlKey) return;
       const object = target.closest('[data-ink-object-id]');
       const shape = (event.shiftKey || event.ctrlKey) && target.closest('[data-ink-shape-editor] svg');
       const id = object?.getAttribute('data-ink-object-id') ?? (shape ? options.shapeId.current : null);
       if (!id) return;
-      event.stopPropagation(); options.down(event as unknown as InkPointer, id, object ?? options.canvas.current!);
+      const title = target.closest('[data-ink-comment-title]');
+      event.stopPropagation(); options.down(event as unknown as InkPointer, id, title ?? object ?? options.canvas.current!);
     },
     onPointerMoveCapture: (event: React.PointerEvent<HTMLElement>) => forward(event, options.move),
     onPointerUpCapture: (event: React.PointerEvent<HTMLElement>) => forward(event, options.up),

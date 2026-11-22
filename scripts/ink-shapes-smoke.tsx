@@ -8,6 +8,7 @@ import { useNoteStore } from '../src/store';
 import { useInkShapePreferences } from '../src/components/InkShapePreferences';
 import { shapePathPoints, shapeBounds, type InkShapeGeometry, type ShapePoint } from '../src/components/InkShapeGeometry';
 import { readInkFrame } from '../src/components/InkFrameStats';
+import { COMMENT_HEADER_HEIGHT, type CommentFrame } from '../src/components/InkComments';
 import type { PdfStroke, PdfItem } from '../src/components/PdfAnnotation/PdfTypes';
 import '../src/styles/global.css';
 
@@ -24,12 +25,13 @@ async function settle() {
   while (performance.now() - start < 450 || readInkFrame().queuedTiles > 0);
 }
 function blankPdf() {
-  const objects = ['<< /Type /Catalog /Pages 2 0 R >>', '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
-    '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 1000 720] /Resources << >> /Contents 4 0 R >>', '<< /Length 0 >>\nstream\n\nendstream'];
+  const page = '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 1000 720] /Resources << >> /Contents 4 0 R >>';
+  const objects = ['<< /Type /Catalog /Pages 2 0 R >>', '<< /Type /Pages /Kids [3 0 R 5 0 R] /Count 2 >>',
+    page, '<< /Length 0 >>\nstream\n\nendstream', page];
   let pdf = '%PDF-1.4\n'; const offsets = [0];
   objects.forEach((value, i) => { offsets.push(pdf.length); pdf += `${i + 1} 0 obj\n${value}\nendobj\n`; });
   const xref = pdf.length;
-  pdf += `xref\n0 5\n0000000000 65535 f \n${offsets.slice(1).map(n => `${String(n).padStart(10, '0')} 00000 n \n`).join('')}trailer\n<< /Size 5 /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF\n`;
+  pdf += `xref\n0 ${offsets.length}\n0000000000 65535 f \n${offsets.slice(1).map(n => `${String(n).padStart(10, '0')} 00000 n \n`).join('')}trailer\n<< /Size ${offsets.length} /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF\n`;
   return new TextEncoder().encode(pdf).buffer;
 }
 function pen(target: Element, type: string, p: ShapePoint, modifiers: { shiftKey?: boolean; ctrlKey?: boolean } = {}) {
@@ -61,10 +63,31 @@ async function capture(name: string) {
   await waitFor(() => (window as any).shapeCaptureDone === name, 'Screenshot timed out');
 }
 
-// Synthetic input deliberately bypasses native pointer capture; actual pointer
-// ownership/cancellation is covered by the integration suite.
-Element.prototype.setPointerCapture = () => {};
-Element.prototype.releasePointerCapture = () => {};
+const nativeSetPointerCapture = Element.prototype.setPointerCapture;
+const nativeReleasePointerCapture = Element.prototype.releasePointerCapture;
+function useSyntheticPen() {
+  Element.prototype.setPointerCapture = () => {};
+  Element.prototype.releasePointerCapture = () => {};
+}
+function center(element: Element) {
+  const rect = element.getBoundingClientRect();
+  return { x: Math.round(rect.left + rect.width / 2), y: Math.round(rect.top + rect.height / 2) };
+}
+const mouseEvent = (type: 'mousePressed' | 'mouseMoved' | 'mouseReleased', position: ShapePoint, clickCount = 1) => ({
+  type, ...position, button: type === 'mouseMoved' ? 'none' : 'left', buttons: type === 'mouseReleased' ? 0 : 1, clickCount,
+});
+let mouseRequest = 0;
+async function mouse(...events: ReturnType<typeof mouseEvent>[]) {
+  const id = ++mouseRequest;
+  (window as any).inkSmokeMouse = { id, events };
+  await waitFor(() => (window as any).inkSmokeMouseDone === id, 'Native pointer input timed out');
+  await frame();
+}
+function key(key: string, options: KeyboardEventInit = {}, target: EventTarget = window) {
+  target.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true, ...options }));
+}
+
+useSyntheticPen();
 useNoteStore.setState({ uiScale: 1 });
 useInkShapePreferences.setState({ enabled: true, delay: 500 });
 (async () => {
@@ -143,7 +166,8 @@ useInkShapePreferences.setState({ enabled: true, delay: 500 });
       const circleGeometry = circle.geometry!;
       check(circleGeometry.kind === 'circle', 'Saved circle geometry missing');
       if (circleGeometry.kind === 'circle') {
-        const control = [...document.querySelectorAll('[data-ink-shape-editor] svg title')].find(el => el.textContent === '调整半径')!.parentElement!;
+        const control = document.querySelector('[data-ink-shape-editor] svg [aria-label="调整半径"]')!;
+        check(control, view + ': radius control did not render');
         const start = { x: circleGeometry.center.x, y: circleGeometry.center.y - circleGeometry.radius };
         const end = { ...start, y: start.y - 10 };
         pen(control, 'pointerdown', start); pen(control, 'pointermove', end); await frame();
@@ -205,13 +229,137 @@ useInkShapePreferences.setState({ enabled: true, delay: 500 });
       await frame(); await settle(); check(JSON.stringify(allItems()) === mixedSaved, view + ': mixed selection positions did not survive reload');
       store.setState({ selectedIds: [line.id, 'selection-image', 'selection-text'] }); await frame();
       await frame();
-      const outline = canvas.getContext('2d')!.getImageData(450, 184, 100, 5).data;
+      const dpr = window.devicePixelRatio;
+      const outline = canvas.getContext('2d')!.getImageData(450 * dpr, 184 * dpr, 100 * dpr, 5 * dpr).data;
       let outlined = false;
       for (let i = 0; i < outline.length; i += 4) if (outline[i + 3] > 40 && outline[i] > 60 && outline[i] < 180 && outline[i + 1] > 50 && outline[i + 1] < 160 && outline[i + 2] > 160) { outlined = true; break; }
       check(outlined, view + ': selection-only update did not repaint the ink outline');
       await capture('selection-' + view);
+
+      const frames = () => allItems().filter((item): item is CommentFrame => item.type === 'comment');
+      const title = (id: string) => document.querySelector<HTMLElement>(`[data-ink-comment-title="${id}"]`)!;
+      const fill = (id: string) => document.querySelector<HTMLElement>(`[data-ink-comment-fill="${id}"]`)!;
+      const titleInput = () => document.querySelector<HTMLInputElement>('input[aria-label="注释标题"]');
+      const find = (id: string) => allItems().find(item => item.id === id);
+      const changeTitle = (value: string, action: 'Enter' | 'Escape') => {
+        const editor = titleInput()!;
+        check(editor === document.activeElement, view + ': title field did not receive focus');
+        editor.value = value;
+        key('c', { isComposing: true }, editor);
+        key(action, {}, editor);
+      };
+      key('c', { ctrlKey: true });
+      key('c', { isComposing: true });
+      check(!frames().length, view + ': copy or IME created a frame');
+      key('c');
+      await waitFor(() => !!titleInput(), view + ': C did not open a title');
+      const inner = frames()[0];
+      const picture = object('selection-image').getBoundingClientRect();
+      const labelBounds = object('selection-text').getBoundingClientRect();
+      const box = fill(inner.id).getBoundingClientRect();
+      check(box.left < picture.left && box.right > labelBounds.right && box.bottom > labelBounds.bottom
+        && inner.y + COMMENT_HEADER_HEIGHT < 190, view + ': mixed selection was not enclosed');
+      check(document.elementFromPoint(picture.left + 15, picture.top + 15)?.closest('[data-ink-object-id]') === object('selection-image'),
+        view + ': comment body intercepted content');
+      changeTitle('手写和资料', 'Enter');
+      await frame();
+      check(frames()[0].title === '手写和资料' && frames().length === 1, view + ': failed to commit title');
+      key('c');
+      await waitFor(() => !!titleInput(), view + ': could not wrap an existing comment');
+      const outer = frames()[1];
+      changeTitle('本章整理', 'Enter');
+      await frame();
+
+      Element.prototype.setPointerCapture = nativeSetPointerCapture;
+      Element.prototype.releasePointerCapture = nativeReleasePointerCapture;
+      const titleCenter = center(title(outer.id));
+      await mouse(mouseEvent('mousePressed', titleCenter), mouseEvent('mouseReleased', titleCenter),
+        mouseEvent('mousePressed', titleCenter, 2), mouseEvent('mouseReleased', titleCenter, 2));
+      await waitFor(() => !!titleInput(), view + ': double-click did not rename');
+      changeTitle('取消这次改名', 'Escape');
+      await frame();
+      check((find(outer.id) as CommentFrame).title === '本章整理', view + ': Escape saved a title draft');
+
+      const asset: PdfItem = { type: 'asset', id: 'comment-test-asset', assetId: 'fixture', x: 840, y: 385, width: 90, height: 42, createdAt: 0 };
+      if (view === 'canvas') useCanvasStore.setState(s => ({ objects: [...s.objects, asset] }));
+      else usePdfStore.setState(s => ({ items: { ...s.items, 1: [...s.items[1], asset] } }));
+      await frame();
+      const dragHistory = () => view === 'canvas' ? useCanvasStore.getState().history.length : usePdfStore.getState().history[1].length;
+      const beforeCommentMove = allItems();
+      const previousHistory = dragHistory();
+      const target = { x: titleCenter.x + 40, y: titleCenter.y + 24 };
+      await mouse(mouseEvent('mousePressed', titleCenter), mouseEvent('mouseMoved', target));
+      await waitFor(() => fill(inner.id).style.translate === '40px 24px', view + ': nested frame did not preview the drag');
+      check(allItems() === beforeCommentMove && object('selection-text').style.translate === '40px 24px',
+        view + ': comment drag wrote the store before drop');
+      await mouse(mouseEvent('mouseReleased', target));
+      await settle();
+      check(dragHistory() === previousHistory + 1 && (find(inner.id) as CommentFrame).x === inner.x + 40
+        && find(asset.id) === asset && green(540, 214) && !green(500, 190), view + ': comment move or membership incorrect');
+      store.getState().undo(); await frame(); await settle();
+      check(allItems() === beforeCommentMove && green(500, 190), view + ': comment move did not undo in one step');
+      store.getState().redo(); await frame(); await settle();
+      check((find(outer.id) as CommentFrame).x === outer.x + 40 && green(540, 214), view + ': comment move did not redo');
+
+      // An object placed in the box after creation joins the next title drag.
+      if (view === 'canvas') useCanvasStore.getState().commitSelectionMove([asset.id], -160, 0);
+      else usePdfStore.getState().commitSelectionMove(1, [asset.id], -160, 0);
+      await frame();
+      const secondStart = center(title(outer.id));
+      const secondEnd = { x: secondStart.x + 12, y: secondStart.y + 8 };
+      await mouse(mouseEvent('mousePressed', secondStart), mouseEvent('mouseMoved', secondEnd), mouseEvent('mouseReleased', secondEnd));
+      check((find(asset.id) as typeof asset).x === 692, view + ': newly enclosed file card did not move');
+
+      const rootElement = document.getElementById('root')!;
+      rootElement.style.transformOrigin = '0 0';
+      rootElement.style.transform = 'scale(1.25)';
+      useNoteStore.setState({ uiScale: 1.25 });
+      store.setState({ camera: { x: 30, y: 20, zoom: 0.8 }, selectedIds: [outer.id] });
+      await frame(); await frame();
+      const current = find(outer.id) as CommentFrame;
+      const edge = object(outer.id).querySelector('[data-ink-comment-resize="e"]')!;
+      const edgeStart = center(edge);
+      check(document.elementFromPoint(edgeStart.x, edgeStart.y) === edge, view + ': scaled resize handle missed');
+      const edgeEnd = { x: edgeStart.x + 32, y: edgeStart.y };
+      const oldImage = find('selection-image');
+      const originalWidth = fill(outer.id).getBoundingClientRect().width;
+      await mouse(mouseEvent('mousePressed', edgeStart), mouseEvent('mouseMoved', edgeEnd));
+      await waitFor(() => fill(outer.id).getBoundingClientRect().width > originalWidth + 30, view + ': scaled resize did not display a preview', 3000);
+      check(find(outer.id) === current, view + ': resize committed before the pointer was lifted');
+      await mouse(mouseEvent('mouseReleased', edgeEnd));
+      check(Math.abs((find(outer.id) as CommentFrame).width - current.width - 40) < 0.01 && find('selection-image') === oldImage,
+        view + ': scaled resize changed content or used incorrect world units');
+      await capture('comment-' + view);
+
+      const savedComments = JSON.stringify(allItems());
+      if (view === 'canvas') {
+        check(await useCanvasStore.getState().saveCanvasData(), 'Comment canvas save failed');
+        useCanvasStore.setState(s => ({ objects: [], renderEpoch: s.renderEpoch + 1 })); await frame();
+        await useCanvasStore.getState().loadCanvasData('shape-smoke');
+      } else {
+        check((await usePdfStore.getState().saveAnnotations()).ok, 'Comment PDF save failed');
+        usePdfStore.getState().setCurrentPage(2);
+        await waitFor(() => !document.querySelector('[data-ink-comment-fill]'), 'Comment leaked to a different PDF page');
+        usePdfStore.setState(s => ({ items: {}, renderEpoch: s.renderEpoch + 1 }));
+        await usePdfStore.getState().loadAnnotations('shape-smoke-pdf');
+        usePdfStore.getState().setCurrentPage(1);
+      }
+      await frame();
+      check(JSON.stringify(allItems()) === savedComments && !!title(outer.id), view + ': saved comment did not reload');
+      store.setState({ activeTool: 'select', selectedIds: [outer.id] });
+      await frame();
+      if (view === 'canvas') key('Delete'); else usePdfStore.getState().deleteSelected();
+      await frame();
+      check(!find(outer.id) && !!find(inner.id) && !!find('selection-image') && !!find(asset.id), view + ': deleting a frame removed members');
+      store.getState().undo(); await frame();
+      check(!!find(outer.id), view + ': deletion did not undo');
+      useSyntheticPen();
+      rootElement.style.transform = '';
+      useNoteStore.setState({ uiScale: 1 });
+
       results[view] = { kinds, numericEdit: true, undoRedo: true, outlineDrag: true, controlPointDrag: true, crossTilePixels: true, saveReload: true,
         mixedSelection: { click: true, shiftAdd: true, ctrlSubtract: true, modifiedMarquee: true, transientDrag: true, undoRedo: true, saveReload: true, inkOutline: true },
+        comments: { mixedSelection: true, rename: true, nestedDrag: true, dynamicMembers: true, resizeAtUiScale: true, saveReload: true, delete: true, dpr },
         radiusAfterReload: edited.geometry?.kind === 'circle' ? edited.geometry.radius : null,
         bounds: shapeBounds(edited.geometry!), backend: readInkFrame().backend };
       root.unmount(); await frame();

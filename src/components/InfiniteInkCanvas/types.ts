@@ -120,7 +120,8 @@ export interface ImageObject {
 
 // ---- Unified Object Type -----------------------------------------------------
 
-export type CanvasObject = Stroke | TextNodeData | ImageObject | import('../FileLibrary/fileTypes').LinkedAssetObject;
+export type CanvasObject = Stroke | TextNodeData | ImageObject | import('../FileLibrary/fileTypes').LinkedAssetObject
+  | import('../InkComments').CommentFrame;
 
 // ---- Persisted Canvas Data ---------------------------------------------------
 

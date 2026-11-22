@@ -21,6 +21,7 @@ import { create } from 'zustand';
 import { loadQuickSizes, saveQuickSizes } from '../inkToolPrefs';
 import { replaceStrokePoints } from '../InkShapeGeometry';
 import { moveSelectedItem } from '../InkSelection';
+import { commentChanged, type CommentFrame } from '../InkComments';
 import type {
   PdfBrush,
   PdfCamera,
@@ -241,6 +242,8 @@ export interface PdfStore {
   ) => void;
   /** Remove any item (stroke or object) by id. Bumps epoch (may be a stroke). */
   deleteObject: (page: number, id: string) => void;
+  addComment: (page: number, frame: CommentFrame) => void;
+  updateComment: (page: number, previous: CommentFrame, next: CommentFrame) => void;
   /** Live group-drag of text/image objects (no history, no epoch). */
   moveObjectsLive: (page: number, ids: string[], dx: number, dy: number) => void;
 
@@ -616,6 +619,26 @@ export const usePdfStore = create<PdfStore>((set, get) => ({
     }));
   },
 
+  addComment: (page, frame) => {
+    const current = get().items[page] ?? [];
+    set(state => ({
+      items: { ...state.items, [page]: [...current, frame] },
+      history: pushHistoryEntry(state.history, page, current),
+      redoStack: { ...state.redoStack, [page]: [] },
+      selectedIds: [frame.id],
+      dirty: true,
+    }));
+  },
+  updateComment: (page, previous, next) => {
+    const current = get().items[page] ?? [];
+    if (!commentChanged(previous, next) || !current.includes(previous)) return;
+    set(state => ({
+      items: { ...state.items, [page]: current.map(item => item === previous ? next : item) },
+      history: pushHistoryEntry(state.history, page, current),
+      redoStack: { ...state.redoStack, [page]: [] },
+      dirty: true,
+    }));
+  },
   deleteObject: (page, id) => {
     const cur = get().items[page] ?? [];
     const next = cur.filter((o) => o.id !== id);

@@ -9,6 +9,8 @@ import React, { useRef, useEffect, useCallback } from 'react';
 import { useCanvasStore } from './useCanvasStore';
 import { useInkShapeGesture } from '../useInkShapeGesture';
 import InkShapeEditor from '../InkShapeEditor';
+import InkCommentLayer from '../InkCommentLayer';
+import { activateCommentDrag, commentDragIds, type PendingCommentDrag } from '../InkComments';
 import { beginSelectionCapture, endSelectionCapture, cancelSelectionCapture, inkSelectionCaptureHandlers,
   selectionOperation, combineSelection, hitSelectable, boxSelectableIds, createObjectDragPreview,
   drawObjectDragPreview, clearObjectDragPreview, type SelectionOperation, type SelectionCapture, type ObjectDragPreview } from '../InkSelection';
@@ -99,7 +101,9 @@ const InfiniteInkCanvas: React.FC = () => {
     objects: ObjectDragPreview;
     dx: number;
     dy: number;
+    comment: boolean;
   } | null>(null);
+  const pendingCommentDragRef = useRef<PendingCommentDrag | null>(null);
   const inkTilesRef = useRef<Map<string, HTMLCanvasElement>>(new Map());
   /** Pending frame of the lazy tile materialization chain (see InkTiles). */
   const materializeRafRef = useRef(0);
@@ -658,6 +662,7 @@ const InfiniteInkCanvas: React.FC = () => {
     clearObjectDragPreview(selectDragRef.current?.objects);
     if (selectDragRef.current?.preview) selectDragRef.current.preview.canvas.width = 0;
     selectDragRef.current = null;
+    pendingCommentDragRef.current = null;
     cancelSelectionCapture(selectionCaptureRef, pointerOwnerRef);
     displayLayersRef.current.invalidate();
     dirtyRef.current = true;
@@ -712,10 +717,11 @@ const InfiniteInkCanvas: React.FC = () => {
       if ((e.key === 'Delete' || e.key === 'Backspace') && state.editingTextId) {
         state.deleteTextNode(state.editingTextId);
       } else if (e.key === 'Delete' || e.key === 'Backspace') {
-        const assets = state.objects.filter(object => object.type === 'asset' && state.selectedIds.includes(object.id));
-        if (assets.length) {
+        const deletable = state.objects.filter(object => (object.type === 'asset' || object.type === 'comment')
+          && state.selectedIds.includes(object.id));
+        if (deletable.length) {
           e.preventDefault();
-          state.deleteObjects(assets.map(object => object.id));
+          state.deleteObjects(deletable.map(object => object.id));
         }
       }
       if (e.ctrlKey && e.key === '0') { e.preventDefault(); state.setCamera({ x: 0, y: 0, zoom: 1 }); }
@@ -735,7 +741,7 @@ const InfiniteInkCanvas: React.FC = () => {
 
   // ---- Select-drag helper ------------------------------------------------------
 
-  const startSelectDrag = (ids: string[], world: { x: number; y: number }) => {
+  const startSelectDrag = useCallback((ids: string[], world: { x: number; y: number }, comment = false) => {
     const state = useCanvasStore.getState();
     const idSet = new Set(ids);
     const strokes: Stroke[] = [];
@@ -761,11 +767,11 @@ const InfiniteInkCanvas: React.FC = () => {
       start: world, ids, strokes,
       objects: createObjectDragPreview(state.objects, ids, containerRef.current),
       preview: bakeDragPreview(strokes, targetBakeScale(tiles)),
-      dx: 0, dy: 0,
+      dx: 0, dy: 0, comment,
     };
     dirtyRef.current = true;
     scheduleRender();
-  };
+  }, [scheduleRender]);
 
   // ---- Pointer Down -----------------------------------------------------------
 
@@ -834,7 +840,10 @@ const InfiniteInkCanvas: React.FC = () => {
         const alreadySelected = state.selectedIds.includes(hit.id);
         const ids = alreadySelected ? state.selectedIds : [hit.id];
         if (!alreadySelected) state.setSelectedIds(ids);
-        startSelectDrag(ids, world);
+        if (hit.type === 'comment') pendingCommentDragRef.current = {
+          start: world, ids: commentDragIds({ items: state.objects, selectedIds: ids, camera: state.camera }, containerRef.current),
+        };
+        else startSelectDrag(ids, world);
         return;
       }
 
@@ -915,7 +924,7 @@ const InfiniteInkCanvas: React.FC = () => {
 
     dirtyRef.current = true;
     scheduleRender();
-  }, [getCanvasPos, scheduleRender]);
+  }, [getCanvasPos, scheduleRender, startSelectDrag]);
 
   // ---- Pointer Move -----------------------------------------------------------
 
@@ -966,6 +975,10 @@ const InfiniteInkCanvas: React.FC = () => {
       return;
     }
 
+    // Start the heavier paint preview only once a title press becomes a drag.
+    if (pendingCommentDragRef.current) {
+      activateCommentDrag(pendingCommentDragRef, screenToWorld(sx, sy, state.camera), state.camera.zoom, startSelectDrag);
+    }
     // Move selected strokes (snapshot + delta — no per-move store writes).
     if (selectDragRef.current) {
       const d = selectDragRef.current;
@@ -1017,7 +1030,7 @@ const InfiniteInkCanvas: React.FC = () => {
     dirtyRef.current = true;
     scheduleRender();
     } finally { reportInkFrame({ inputMs: performance.now() - inputStart }); }
-  }, [getCanvasPos, scheduleRender]);
+  }, [getCanvasPos, scheduleRender, startSelectDrag]);
 
   // ---- Pointer Up -------------------------------------------------------------
 
@@ -1025,12 +1038,14 @@ const InfiniteInkCanvas: React.FC = () => {
     if (pointerOwnerRef.current === null || pointerOwnerRef.current !== e.pointerId) return;
     shapeGesture.stop();
     const selectionCapture = endSelectionCapture(selectionCaptureRef);
-    if (e.type === 'pointerup' && (selectDragRef.current || selectAnchorRef.current)) {
+    if (e.type === 'pointerup' && (selectDragRef.current || selectAnchorRef.current || pendingCommentDragRef.current)) {
       const { sx, sy } = getCanvasPos(e), cam = useCanvasStore.getState().camera;
       const at = screenToWorld(sx, sy, cam);
+      activateCommentDrag(pendingCommentDragRef, at, cam.zoom, startSelectDrag);
       if (selectDragRef.current) { selectDragRef.current.dx = at.x - selectDragRef.current.start.x; selectDragRef.current.dy = at.y - selectDragRef.current.start.y; }
       if (selectionRectRef.current) { selectionRectRef.current.x2 = at.x; selectionRectRef.current.y2 = at.y; }
     }
+    pendingCommentDragRef.current = null;
     flushPanCamera();
     if (middlePanRef.current) { middlePanRef.current = false; setPointerHold(false); }
     flushInput();
@@ -1101,8 +1116,9 @@ const InfiniteInkCanvas: React.FC = () => {
       selectDragRef.current = null;
       clearObjectDragPreview(d.objects);
       const st = useCanvasStore.getState();
-      if (!d.dx && !d.dy && d.strokes.length) st.commitStrokesPoints(d.strokes.map(s => ({ id: s.id, points: s.points })));
-      else st.commitSelectionMove(d.ids, d.dx, d.dy);
+      if (d.comment && e.type !== 'pointerup') d.dx = d.dy = 0;
+      if (d.dx || d.dy) st.commitSelectionMove(d.ids, d.dx, d.dy);
+      else if (!d.comment && d.strokes.length) st.commitStrokesPoints(d.strokes.map(s => ({ id: s.id, points: s.points })));
       const objects = useCanvasStore.getState().objects;
       // The index is updated in this handler. Undo may arrive before effects
       // run, so the diff baseline has to follow the same commit.
@@ -1171,7 +1187,7 @@ const InfiniteInkCanvas: React.FC = () => {
     }
     isDrawingRef.current = false;
     panAnchorRef.current = null;
-  }, [scheduleMaterialize, scheduleRender]);
+  }, [scheduleMaterialize, scheduleRender, startSelectDrag]);
 
   pointerUpRef.current = handlePointerUp;
 
@@ -1369,9 +1385,15 @@ const InfiniteInkCanvas: React.FC = () => {
     down: handlePointerDown, move: handlePointerMove, up: handlePointerUp });
   const cullWidth = extent?.width ?? window.innerWidth;
   const cullHeight = extent?.height ?? window.innerHeight;
+  const readCommentSelection = useCallback(() => {
+    const state = useCanvasStore.getState();
+    if (!state.loaded || !state.currentCanvasId || state.activeTool !== 'select'
+      || state.editingTextId || pointerOwnerRef.current !== null) return null;
+    return { items: state.objects, selectedIds: state.selectedIds, camera: state.camera };
+  }, []);
 
   return (
-    <div ref={containerRef}
+    <div ref={containerRef} tabIndex={-1}
       {...assetDropTarget}
       {...selectionEvents}
       onGotPointerCaptureCapture={event => { const id = (event.target as HTMLElement).closest('[data-ink-object-id]')?.getAttribute('data-ink-object-id'); if (id) manipulatedIdsRef.current.add(id); }}
@@ -1393,8 +1415,12 @@ const InfiniteInkCanvas: React.FC = () => {
         onPointerCancel={handlePointerUp}
         onLostPointerCapture={handlePointerUp}
         onPointerLeave={hideCursor} />
-      <canvas ref={backgroundLayerRef} aria-hidden="true" data-ink-layer="background" style={{ position: 'absolute', inset: 0, pointerEvents: 'none', zIndex: -2 }} />
+      <canvas ref={backgroundLayerRef} aria-hidden="true" data-ink-layer="background" style={{ position: 'absolute', inset: 0, pointerEvents: 'none', zIndex: -3 }} />
       <canvas ref={committedLayerRef} aria-hidden="true" data-ink-layer="committed" style={{ position: 'absolute', inset: 0, pointerEvents: 'none', zIndex: -1 }} />
+      <InkCommentLayer key={shapeScope} container={containerRef} items={objects} selectedIds={selectedIds}
+        camera={camera} uiScale={uiScale} viewportWidth={cullWidth} viewportHeight={cullHeight} interactive={activeTool === 'select'}
+        readSelection={readCommentSelection} onCreate={useCanvasStore.getState().addComment}
+        onUpdate={useCanvasStore.getState().updateComment} onSelect={id => useCanvasStore.getState().setSelectedIds([id])} />
       {selectedShape && <InkShapeEditor key={shapeScope + selectedShape.id} stroke={selectedShape} camera={camera} uiScale={uiScale} container={containerRef}
         original={shapeGesture.recent} onPreview={previewShapeEdit} onFinish={finishShapeEdit}
         onDismiss={() => { shapeGesture.dismiss(); useCanvasStore.getState().clearSelection(); }} />}

@@ -104,6 +104,11 @@ export function PreviewPage({ doc, page, items = NO_ITEMS, maxWidth }: {
         const style = { left: item.x * layout.scale, top: item.y * layout.scale, width: item.width * layout.scale, height: item.height * layout.scale };
         if (item.type === 'asset') return <PreviewAsset key={item.id} object={item} style={style} />;
         if (item.type === 'image') return <img key={item.id} alt="" src={item.dataUrl} className="file-preview-object" style={style} />;
+        if (item.type === 'comment') return <div key={item.id} className="file-preview-object" style={{
+          ...style, pointerEvents: 'none', border: '1px solid var(--accent)', borderRadius: 3,
+          color: 'var(--text-primary)', fontSize: 14 * layout.scale,
+        }}><div style={{ background: 'color-mix(in srgb, var(--page-bg) 70%, var(--accent))', paddingInline: '.55em',
+          lineHeight: 2, overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis' }}>{item.title}</div></div>;
         return <div key={item.id} className="file-preview-object" style={{ ...style, whiteSpace: 'pre-wrap',
           color: item.color, background: item.backgroundColor, fontSize: item.fontSize * layout.scale }}>{item.content}</div>;
       })}

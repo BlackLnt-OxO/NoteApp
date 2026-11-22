@@ -347,6 +347,61 @@ describe('mixed object selection', () => {
     expect((s.items()[0] as PdfStroke).points[0]).toMatchObject({ x: 130, y: 120 });
     act(() => useNoteStore.setState({ uiScale: s.originalScale }));
   });
+  it.each(['canvas', 'pdf'] as const)('%s creates, edits and drags a comment around mixed content', async view => {
+    const s = await mountMixed(view);
+    if (view === 'canvas') act(() => useCanvasStore.setState({ loaded: true, currentCanvasId: 'comment-test' }));
+    fireEvent.keyDown(window, { key: 'c' });
+    expect(s.items()).toHaveLength(3);
+    box(s.canvas, 90, 60, 445, 170);
+    fireEvent.keyDown(window, { key: 'c', ctrlKey: true });
+    fireEvent.keyDown(window, { key: 'c', isComposing: true });
+    expect(s.items()).toHaveLength(3);
+    fireEvent.keyDown(window, { key: 'c' });
+    const comment = s.items().find(item => item.type === 'comment')!;
+    expect(comment).toMatchObject({ x: 80, y: 36, width: 366, height: 130 });
+    let input = s.root.getByRole('textbox', { name: '注释标题' });
+    expect(input).toBe(document.activeElement);
+    fireEvent.change(input, { target: { value: '复习区' } });
+    fireEvent.keyDown(input, { key: 'Enter', isComposing: true });
+    expect(s.root.queryByRole('textbox', { name: '注释标题' })).toBe(input);
+    fireEvent.keyDown(input, { key: 'Enter' });
+    expect(s.items().find(item => item.type === 'comment')?.title).toBe('复习区');
+    const header = s.root.getByRole('button', { name: '复习区' });
+    const before = s.items();
+    pointer(header, 'pointerdown', 240, 54); pointer(header, 'pointermove', 300, 84); frame();
+    const fill = s.root.container.querySelector<HTMLElement>('[data-ink-comment-fill]')!;
+    expect(fill.style.translate).toBe('60px 30px');
+    expect(s.items()).toBe(before);
+    pointer(header, 'pointercancel', 300, 84); frame();
+    expect(fill.style.translate).toBe('');
+    expect(s.items()).toBe(before);
+    pointer(header, 'pointerdown', 240, 54); pointer(header, 'pointerup', 300, 84); frame();
+    expect(s.items()[0]).toMatchObject({ points: [{ x: 160, y: 130 }, { x: 220, y: 130 }] });
+    expect(s.items()[1]).toMatchObject({ x: 280, y: 110 });
+    expect(s.items().find(item => item.type === 'comment')).toMatchObject({ x: 140, y: 66 });
+    act(() => s.store.getState().undo()); frame();
+    expect(s.items()).toBe(before);
+
+    act(() => s.store.getState().setSelectedIds([comment.id])); frame();
+    const edge = s.object(comment.id).querySelector('[data-ink-comment-resize="e"]')!;
+    pointer(edge, 'pointerdown', 446, 100);
+    pointer(s.canvas, 'pointermove', 500, 100); frame();
+    expect(fill.style.width).toBe('420px');
+    expect(s.items()).toBe(before);
+    pointer(s.canvas, 'pointerup', 500, 100); frame();
+    expect(s.items().find(item => item.type === 'comment')?.width).toBe(420);
+    expect(s.items()[1]).toBe(before[1]);
+
+    if (view === 'pdf') {
+      fireEvent.doubleClick(header);
+      input = s.root.getByRole('textbox', { name: '注释标题' });
+      fireEvent.change(input, { target: { value: '第一页' } });
+      await act(async () => usePdfStore.getState().setCurrentPage(2));
+      expect(s.items().find(item => item.type === 'comment')?.title).toBe('第一页');
+      expect(s.root.container.querySelector('[data-ink-comment-fill]')).toBeNull();
+    }
+    act(() => useNoteStore.setState({ uiScale: s.originalScale }));
+  });
 });
 
 describe('wheel input', () => {

@@ -216,7 +216,7 @@ export default function ToolbarShell({ controls }: { controls: InkToolbarControl
 
   function button(slot: ToolSlot) {
     return <InkToolButton key={slot} label={toolLabel(slot, controls.alternatePen)}
-      tooltip={slot === 'laser' ? '激光笔 · 笔迹会自动消失' : undefined}
+      tooltip={slot === 'select' ? '选择 · 选中后按 C 创建注释框' : slot === 'laser' ? '激光笔 · 笔迹会自动消失' : undefined}
       disabled={!expanded} pressed={active(slot)} expanded={panelOpen && panel === slot}
       onPress={() => { activate(slot); closePanel(); }} onHold={() => hold(slot)}>
       {slot === 'select' || slot === 'insert' ? <Icon name={slot} /> : <span className="ink-directional-icon">

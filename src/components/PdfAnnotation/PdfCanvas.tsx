@@ -7,6 +7,8 @@ import { inkPointerSamples, InkPointerQueue } from '../InkPointerSamples';
 import { releaseStreamingInk } from './StreamingInkStroke';
 import { useInkShapeGesture } from '../useInkShapeGesture';
 import InkShapeEditor from '../InkShapeEditor';
+import InkCommentLayer from '../InkCommentLayer';
+import { activateCommentDrag, commentDragIds, type CommentFrame, type PendingCommentDrag } from '../InkComments';
 import { beginSelectionCapture, endSelectionCapture, cancelSelectionCapture, inkSelectionCaptureHandlers,
   selectionOperation, combineSelection, hitSelectable, boxSelectableIds, createObjectDragPreview,
   drawObjectDragPreview, clearObjectDragPreview, type SelectionOperation, type SelectionCapture, type ObjectDragPreview } from '../InkSelection';
@@ -308,7 +310,9 @@ const PdfCanvas: React.FC = () => {
     objects: ObjectDragPreview;
     dx: number;
     dy: number;
+    comment: boolean;
   } | null>(null);
+  const pendingCommentDragRef = useRef<PendingCommentDrag | null>(null);
 
   // Active whole-stroke-eraser wipe session (drag-to-erase), page-scoped so the
   // current page can't change under a pointer capture. Pointer moves are
@@ -713,6 +717,7 @@ const PdfCanvas: React.FC = () => {
     clearObjectDragPreview(selectDragRef.current?.objects);
     if (selectDragRef.current?.preview) selectDragRef.current.preview.canvas.width = 0;
     selectDragRef.current = null;
+    pendingCommentDragRef.current = null;
     cancelSelectionCapture(selectionCaptureRef, pointerOwnerRef);
     displayLayersRef.current.invalidate();
     scheduleMaterialize();
@@ -999,6 +1004,32 @@ const PdfCanvas: React.FC = () => {
     });
   }, [flushStrokeWipe, doRender]);
 
+  const startSelectDrag = useCallback((ids: string[], world: { x: number; y: number }, comment = false) => {
+    const state = usePdfStore.getState();
+    const items = state.items[state.currentPage] ?? EMPTY_ITEMS;
+    const idSet = new Set(ids);
+    const dragged = strokesOnly(items).filter(stroke => idSet.has(stroke.id));
+    selectDragRef.current = {
+      start: world, ids, strokes: dragged,
+      objects: createObjectDragPreview(items, ids, containerRef.current),
+      preview: bakeDragPreview(dragged, SCALE),
+      dx: 0, dy: 0, comment,
+    };
+    // Hide only the dragged ink's tile regions while drawing its live preview.
+    const tiles = inkTilesRef.current;
+    const index = getInkStrokeIndex(tiles);
+    traceInkStrokes('drag-start', tiles, dragged, { surface: 'pdf' });
+    if (dragged.length) {
+      const keys = new Set(dragged.flatMap(strokeTileKeys));
+      removeStrokesFromInk(tiles, index.grid, idSet, dragged, index.bounds, true);
+      index.remove(idSet);
+      backendRef.current?.suppress(idSet, keys);
+      displayLayersRef.current.invalidate(keys);
+    }
+    dirtyRef.current = true;
+    scheduleRender();
+  }, [scheduleRender]);
+
   // ---- Pointer Down -----------------------------------------------------------
 
   const handlePointerDown = useCallback((e: React.PointerEvent<HTMLCanvasElement>, preferredId?: string, captureTarget?: Element) => {
@@ -1052,7 +1083,7 @@ const PdfCanvas: React.FC = () => {
       beginSelectionCapture(selectionCaptureRef, captureTarget ?? canvas, e.pointerId, canvas);
       const operation = selectionOperation(e);
       selectionOperationRef.current = { operation, base: st.selectedIds.slice() };
-      const items = st.items[st.currentPage] ?? [], strokes = strokesOnly(items);
+      const items = st.items[st.currentPage] ?? EMPTY_ITEMS;
       const hit = hitSelectable(items, world.x, world.y, preferredId);
 
       if (hit) {
@@ -1060,38 +1091,13 @@ const PdfCanvas: React.FC = () => {
           st.setSelectedIds(combineSelection(st.selectedIds, [hit.id], operation));
           return;
         }
-        // Press on a stroke → select (or keep the group) and begin drag-move.
         const alreadySelected = st.selectedIds.includes(hit.id);
         const ids = alreadySelected ? st.selectedIds : [hit.id];
         if (!alreadySelected) st.setSelectedIds(ids);
-
-        // Keep original ink for the raster preview; commit the mixed group once on drop.
-        const idSet = new Set(ids);
-        const dragged: PdfStroke[] = [];
-        for (const s of strokes) {
-          if (idSet.has(s.id)) dragged.push(s);
-        }
-        selectDragRef.current = {
-          start: world, ids, strokes: dragged,
-          objects: createObjectDragPreview(items, ids, containerRef.current),
-          preview: bakeDragPreview(dragged, SCALE),
-          dx: 0, dy: 0,
+        if (hit.type === 'comment') pendingCommentDragRef.current = {
+          start: world, ids: commentDragIds({ items, selectedIds: ids, camera: st.camera }, containerRef.current),
         };
-        // Hide the selected strokes from the tiles — they're drawn live during
-        // the drag. Clear ONLY their own pixels: rebuilding the page's tiles here
-        // is what made dragging on a dense page stall for seconds.
-        const tiles = inkTilesRef.current;
-        const index = getInkStrokeIndex(tiles);
-        traceInkStrokes('drag-start', tiles, dragged, { surface: 'pdf' });
-        if (dragged.length) {
-          const keys = new Set(dragged.flatMap(strokeTileKeys));
-          removeStrokesFromInk(tiles, index.grid, idSet, dragged, index.bounds, true);
-          index.remove(idSet);
-          backendRef.current?.suppress(idSet, keys);
-          displayLayersRef.current.invalidate(keys);
-        }
-        dirtyRef.current = true;
-        scheduleRender();
+        else startSelectDrag(ids, world);
       } else if (st.selectionMode === 'click') {
         if (operation === 'replace') st.clearSelection();
       } else {
@@ -1171,7 +1177,7 @@ const PdfCanvas: React.FC = () => {
     }
     dirtyRef.current = true;
     scheduleRender();
-  }, [getCanvasPos, scheduleRender, rebuildInk, updateRingColor]);
+  }, [getCanvasPos, scheduleRender, rebuildInk, updateRingColor, startSelectDrag]);
 
   // ---- Pointer Move -----------------------------------------------------------
 
@@ -1218,6 +1224,9 @@ const PdfCanvas: React.FC = () => {
       return;
     }
 
+    if (pendingCommentDragRef.current) {
+      activateCommentDrag(pendingCommentDragRef, screenToWorld(sx, sy, st.camera), st.camera.zoom, startSelectDrag);
+    }
     // Drag-move selected strokes: update the live delta (absolute, no drift).
     if (selectDragRef.current) {
       const d = selectDragRef.current;
@@ -1283,7 +1292,7 @@ const PdfCanvas: React.FC = () => {
       scheduleRender();
     }
     } finally { reportInkFrame({ inputMs: performance.now() - inputStart }); }
-  }, [getCanvasPos, scheduleRender, updateRingColor]);
+  }, [getCanvasPos, scheduleRender, updateRingColor, startSelectDrag]);
 
   // ---- Pointer Up -------------------------------------------------------------
 
@@ -1291,12 +1300,14 @@ const PdfCanvas: React.FC = () => {
     if (pointerOwnerRef.current === null || pointerOwnerRef.current !== e.pointerId) return;
     shapeGesture.stop();
     const selectionCapture = endSelectionCapture(selectionCaptureRef);
-    if (e.type === 'pointerup' && (selectDragRef.current || selectAnchorRef.current)) {
+    if (e.type === 'pointerup' && (selectDragRef.current || selectAnchorRef.current || pendingCommentDragRef.current)) {
       const { sx, sy } = getCanvasPos(e), cam = usePdfStore.getState().camera;
       const at = screenToWorld(sx, sy, cam);
+      activateCommentDrag(pendingCommentDragRef, at, cam.zoom, startSelectDrag);
       if (selectDragRef.current) { selectDragRef.current.dx = at.x - selectDragRef.current.start.x; selectDragRef.current.dy = at.y - selectDragRef.current.start.y; }
       if (selectionRectRef.current) { selectionRectRef.current.x2 = at.x; selectionRectRef.current.y2 = at.y; }
     }
+    pendingCommentDragRef.current = null;
     flushPanCamera();
     flushInput();
     const tailStroke = currentStrokeRef.current ?? eraserStrokeRef.current;
@@ -1363,8 +1374,9 @@ const PdfCanvas: React.FC = () => {
       selectDragRef.current = null;
       clearObjectDragPreview(d.objects);
       const st = usePdfStore.getState();
-      if (!d.dx && !d.dy && d.strokes.length) st.commitStrokesPoints(st.currentPage, d.strokes.map(s => ({ id: s.id, points: s.points })));
-      else st.commitSelectionMove(st.currentPage, d.ids, d.dx, d.dy);
+      if (d.comment && e.type !== 'pointerup') d.dx = d.dy = 0;
+      if (d.dx || d.dy) st.commitSelectionMove(st.currentPage, d.ids, d.dx, d.dy);
+      else if (!d.comment && d.strokes.length) st.commitStrokesPoints(st.currentPage, d.strokes.map(s => ({ id: s.id, points: s.points })));
       const strokes = strokesOnly(usePdfStore.getState().items[st.currentPage] ?? []);
       prevPageInkRef.current = { page: st.currentPage, strokes };
       const tiles = inkTilesRef.current;
@@ -1445,7 +1457,7 @@ const PdfCanvas: React.FC = () => {
 
     isDrawingRef.current = false;
     panAnchorRef.current = null;
-  }, [scheduleMaterialize, scheduleRender]);
+  }, [scheduleMaterialize, scheduleRender, startSelectDrag]);
 
   pointerUpRef.current = handlePointerUp;
 
@@ -1612,9 +1624,17 @@ const PdfCanvas: React.FC = () => {
     down: handlePointerDown, move: handlePointerMove, up: handlePointerUp });
   const cullWidth = extent?.width ?? window.innerWidth;
   const cullHeight = extent?.height ?? window.innerHeight;
+  const readCommentSelection = useCallback(() => {
+    const state = usePdfStore.getState();
+    if (!state.pdfDoc || !state.pageSizes[state.currentPage] || state.currentItemId !== currentItemId
+      || state.currentPage !== currentPage || state.activeTool !== 'select' || state.editingTextId
+      || pointerOwnerRef.current !== null) return null;
+    return { items: state.items[currentPage] ?? EMPTY_ITEMS, selectedIds: state.selectedIds, camera: state.camera };
+  }, [currentItemId, currentPage]);
+  const createComment = useCallback((frame: CommentFrame) => usePdfStore.getState().addComment(currentPage, frame), [currentPage]);
 
   return (
-    <div ref={containerRef}
+    <div ref={containerRef} tabIndex={-1}
       {...assetDropTarget}
       {...selectionEvents}
       onGotPointerCaptureCapture={event => { const id = (event.target as HTMLElement).closest('[data-ink-object-id]')?.getAttribute('data-ink-object-id'); if (id) manipulatedIdsRef.current.add(id); }}
@@ -1630,8 +1650,13 @@ const PdfCanvas: React.FC = () => {
         onLostPointerCapture={handlePointerUp}
         onPointerLeave={hideCursor}
       />
-      <canvas ref={backgroundLayerRef} aria-hidden="true" data-ink-layer="background" style={{ position: 'absolute', inset: 0, pointerEvents: 'none', zIndex: -2 }} />
+      <canvas ref={backgroundLayerRef} aria-hidden="true" data-ink-layer="background" style={{ position: 'absolute', inset: 0, pointerEvents: 'none', zIndex: -3 }} />
       <canvas ref={committedLayerRef} aria-hidden="true" data-ink-layer="committed" style={{ position: 'absolute', inset: 0, pointerEvents: 'none', zIndex: -1 }} />
+      <InkCommentLayer key={shapeScope} container={containerRef} items={currentItems} selectedIds={selectedIds}
+        camera={camera} uiScale={uiScale} viewportWidth={cullWidth} viewportHeight={cullHeight} interactive={activeTool === 'select'}
+        readSelection={readCommentSelection} onCreate={createComment}
+        onUpdate={(previous, next) => usePdfStore.getState().updateComment(currentPage, previous, next)}
+        onSelect={id => usePdfStore.getState().setSelectedIds([id])} />
       {selectedShape && <InkShapeEditor key={shapeScope + selectedShape.id} stroke={selectedShape} camera={camera} uiScale={uiScale} container={containerRef}
         original={shapeGesture.recent} onPreview={previewShapeEdit} onFinish={finishShapeEdit}
         onDismiss={() => { shapeGesture.dismiss(); usePdfStore.getState().clearSelection(); }} />}
