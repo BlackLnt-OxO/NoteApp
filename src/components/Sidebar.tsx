@@ -4,6 +4,8 @@ import { DEFAULT_COLORS } from '../types';
 import { askConfirm } from './ConfirmDialog';
 import WorkspaceModeSwitch from './WorkspaceModeSwitch';
 
+const SIDEBAR_PADDING = 12;
+
 interface SidebarProps {
   onCreateNote: () => void;
 }
@@ -57,7 +59,7 @@ const Sidebar: React.FC<SidebarProps> = ({ onCreateNote }) => {
       height: '100%',
       display: 'flex',
       flexDirection: 'column',
-      padding: '12px',
+      padding: SIDEBAR_PADDING,
       gap: '4px',
       position: 'relative',
       zIndex: 1,
@@ -94,6 +96,10 @@ const Sidebar: React.FC<SidebarProps> = ({ onCreateNote }) => {
         flex: 1,
         overflowY: 'auto',
         overflowX: 'hidden',
+        // The full-width rows keep their alignment while their hover rings can paint in the sidebar gutter.
+        marginInline: -SIDEBAR_PADDING,
+        paddingInline: SIDEBAR_PADDING,
+        paddingBottom: 6,
         display: 'flex',
         flexDirection: 'column',
         gap: '2px',
