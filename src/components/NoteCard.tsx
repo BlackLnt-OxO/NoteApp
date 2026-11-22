@@ -13,7 +13,7 @@ interface NoteCardProps {
   isDragGhost?: boolean;
   isDragPlaceholder?: boolean;
   isExpanded?: boolean;
-  onDragStart?: (e: React.MouseEvent, noteId: string) => void;
+  onDragStart?: (e: React.PointerEvent, noteId: string) => void;
   onEditStart?: () => void;
   onEditEnd?: () => void;
 }
@@ -164,7 +164,7 @@ const NoteCard: React.FC<NoteCardProps> = ({ note, isDragGhost, isDragPlaceholde
     const target = e.target as HTMLElement;
     if (target.closest('button') || target.closest('.color-dot') || target.closest('.resize-handle')) return;
     e.stopPropagation();
-    if (onDragStart) onDragStart(e as any, note.id);
+    onDragStart?.(e, note.id);
   }, [note.id, onDragStart]);
 
   // Content click
