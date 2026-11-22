@@ -64,7 +64,7 @@ const Sidebar: React.FC<SidebarProps> = ({ onCreateNote }) => {
       position: 'relative',
       zIndex: 1,
       overflow: 'hidden',
-      background: 'rgba(var(--sidebar-tint), var(--workspace-surface-opacity, var(--sidebar-base-opacity)))',
+      background: 'rgba(var(--sidebar-tint), var(--workspace-sidebar-opacity, var(--sidebar-base-opacity)))',
     }}>
       <WorkspaceModeSwitch />
 

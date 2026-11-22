@@ -1,4 +1,5 @@
 import React, { useEffect, useState, useCallback, useLayoutEffect, useRef } from 'react';
+import { useShallow } from 'zustand/react/shallow';
 import { useNoteStore } from './store';
 import Sidebar from './components/Sidebar';
 import NoteGrid from './components/NoteGrid';
@@ -37,8 +38,12 @@ const shotBtnStyle: React.CSSProperties = {
 };
 
 const App: React.FC = () => {
-  const { settings, loadData, saveData, setNoteFloating, viewMode, setViewMode, sidebarCollapsed, setSidebarCollapsed, toggleSidebar, setUiScale } = useNoteStore();
-  // Subscribe via selector so the title-bar zoom readout re-renders on change.
+  const { settings, loadData, saveData, setNoteFloating, viewMode, setViewMode,
+    sidebarCollapsed, setSidebarCollapsed, toggleSidebar, setUiScale } = useNoteStore(useShallow(s => ({
+    settings: s.settings, loadData: s.loadData, saveData: s.saveData, setNoteFloating: s.setNoteFloating,
+    viewMode: s.viewMode, setViewMode: s.setViewMode, sidebarCollapsed: s.sidebarCollapsed,
+    setSidebarCollapsed: s.setSidebarCollapsed, toggleSidebar: s.toggleSidebar, setUiScale: s.setUiScale,
+  })));
   const uiScale = useNoteStore((s) => s.uiScale);
   const canvasOpen = useCanvasLibrary(s => s.canvases.some(canvas => canvas.id === s.currentCanvasId));
   const fileOpen = usePdfStore(s => !!s.fileName);
@@ -51,9 +56,15 @@ const App: React.FC = () => {
   const titleBarH = gfs >= 18 ? fsn(38, gfs) : 38;
   const [showCreateDialog, setShowCreateDialog] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
+  const workspaceRef = useRef<HTMLDivElement>(null);
+  const previewBackgroundShade = useCallback((value: number | null) => {
+    const style = workspaceRef.current?.style;
+    if (value === null) style?.removeProperty('--workspace-shade-preview');
+    else style?.setProperty('--workspace-shade-preview', String(value));
+  }, []);
   const [assetError, setAssetError] = useState('');
 
-  useButtonPointerResponse();
+  useButtonPointerResponse(uiScale);
   useLayoutEffect(() => { previousView.current = viewMode; }, [viewMode]);
   useLayoutEffect(() => { setGlassBlur(frostRadius); }, [frostRadius]);
 
@@ -271,8 +282,11 @@ const App: React.FC = () => {
   }
 
   const workspace = (
-    <div data-pointer-scope={showBackground || undefined} style={{
-      '--workspace-surface-opacity': Math.min(1, shade * 1.2),
+    <div ref={workspaceRef} data-pointer-scope={showBackground || undefined} style={{
+      '--workspace-shade': shade,
+      '--workspace-current-shade': 'var(--workspace-shade-preview, var(--workspace-shade))',
+      '--workspace-surface-opacity': 'min(1, calc(var(--workspace-current-shade) * 1.2))',
+      '--workspace-sidebar-opacity': 'max(.37, var(--workspace-surface-opacity))',
       '--card-frost-filter': frostRadius ? `blur(${frostRadius}px)` : 'none',
       // Viewport zoom: compensate the layout size by 1/uiScale so that after
       // transform: scale the content exactly fills the fixed window.
@@ -307,7 +321,7 @@ const App: React.FC = () => {
       {settings.backgroundImage && showBackground && (
         <div data-workspace-background-shade style={{
           position: 'absolute', inset: 0, zIndex: 1, pointerEvents: 'none',
-          background: `rgba(var(--app-overlay), ${shade})`,
+          background: 'rgba(var(--app-overlay), var(--workspace-current-shade))',
         }} />
       )}
 
@@ -461,7 +475,7 @@ const App: React.FC = () => {
         }}>{Math.round((uiZoomToast.value - 0.1) * 100)}%</div>
       )}
       {showCreateDialog && <CreateNoteDialog onClose={() => setShowCreateDialog(false)} />}
-      {showSettings && <SettingsDialog onClose={() => setShowSettings(false)} />}
+      {showSettings && <SettingsDialog onClose={() => setShowSettings(false)} previewBackgroundShade={previewBackgroundShade} />}
       <AssetPreview onOpen={path => void openAssetDocument(path)} />
       {assetError && <FileDialog title="资料操作失败" onClose={() => setAssetError('')}>
         <p role="alert" className="file-library-error">{assetError}</p>

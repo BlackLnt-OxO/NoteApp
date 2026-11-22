@@ -679,6 +679,30 @@ body {
   animation: scaleIn 0.2s ease-out;
 }
 
+.settings-overlay,
+.settings-overlay .dialog-overlay,
+.settings-dialog :is(.glass-btn, .glass-input) {
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+
+.settings-overlay {
+  animation: none;
+}
+
+.settings-dialog {
+  animation: settings-enter 150ms ease-out;
+}
+
+@keyframes settings-enter {
+  from { translate: 0 6px; }
+  to { translate: 0 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .settings-dialog { animation: none; }
+}
+
 .dialog h3 {
   font-size: 18px;
   font-weight: 600;
