@@ -19,19 +19,24 @@
   transition: opacity 200ms ease-out;
   background: radial-gradient(
     circle var(--pointer-light-radius, 48px) at var(--pointer-light-x, 50%) var(--pointer-light-y, 50%),
-    var(--pointer-light-color, rgb(255 255 255 / .8)), transparent
+    var(--pointer-light-color, rgb(255 255 255 / .8)),
+    var(--pointer-light-falloff, transparent) 68%, transparent
   );
   mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
   mask-composite: exclude;
 }
 
 [data-theme="light"] :where(button, [role="button"], [data-pointer-button], .liquid-glass-card):where([data-pointer-scope], [data-pointer-scope] *) {
-  --pointer-light-color: rgb(32 23 64 / .52);
+  --glass-border: rgb(60 49 89 / .24);
+  --glass-border-active: rgb(60 49 89 / .33);
+  --pointer-light-color: rgb(255 255 255 / .98);
+  --pointer-light-falloff: rgb(68 52 101 / .18);
 }
 
-:is(.btn-accent, .btn-danger, .color-swatch, .color-dot, .liquid-glass-card--note, [aria-current="page"]):where([data-pointer-scope], [data-pointer-scope] *),
+:is(.btn-accent, .btn-danger, .color-swatch, .color-dot, .liquid-glass-card--note, [aria-current="page"], [data-pointer-fill="solid"], .title-btn.close:hover):where([data-pointer-scope], [data-pointer-scope] *),
 .liquid-glass-card--note :where(button, [data-pointer-button]) {
   --pointer-light-color: rgb(255 255 255 / .8);
+  --pointer-light-falloff: transparent;
 }
 
 [data-pointer-glow]:not(.liquid-glass-card, :disabled, [aria-disabled="true"])::after,
