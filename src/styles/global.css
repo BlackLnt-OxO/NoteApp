@@ -367,7 +367,8 @@ body {
 }
 .hover-ring-dark:active { transform: scale(0.97); }
 
-.sidebar-toggle {
+.workspace-corner-button {
+  position: relative;
   display: grid;
   place-items: center;
   width: 36px;
@@ -382,14 +383,47 @@ body {
   transition: border-color var(--transition), color var(--transition);
 }
 
-.sidebar-toggle:hover {
+.workspace-corner-button::after {
+  content: '';
+  position: absolute;
+  inset: -1px;
+  border-radius: inherit;
+  box-shadow: 0 0 0 1px var(--ring-on-light), var(--glow-soft);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--transition);
+}
+
+.workspace-corner-button:is(:hover, :focus-visible)::after {
+  opacity: 1;
+}
+
+.workspace-corner-button:hover {
   border-color: var(--glass-border-active);
   color: var(--text-primary);
 }
 
-.sidebar-toggle:focus-visible {
+.workspace-corner-button:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
+}
+
+.settings-toggle {
+  position: absolute;
+  right: 16px;
+  bottom: 16px;
+  z-index: 120;
+  border-radius: 50%;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .settings-toggle > svg {
+    transition: transform var(--transition);
+  }
+
+  .settings-toggle:hover > svg {
+    transform: rotate(30deg);
+  }
 }
 
 .glass-input {
