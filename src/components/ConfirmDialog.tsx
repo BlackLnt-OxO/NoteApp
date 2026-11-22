@@ -5,8 +5,9 @@
  * <ConfirmHost /> mounted at the app root renders the dialog.
  */
 
-import React from 'react';
+import React, { useContext } from 'react';
 import { create } from 'zustand';
+import { HomeButtonResponse } from './buttonPointerResponse';
 
 export interface ConfirmOptions {
   title: string;
@@ -39,6 +40,7 @@ export function askConfirm(opts: ConfirmOptions): void {
 }
 
 export const ConfirmHost: React.FC = () => {
+  const pointerScope = useContext(HomeButtonResponse);
   const req = useConfirmStore((s) => s.req);
   const close = useConfirmStore((s) => s.close);
   if (!req) return null;
@@ -51,6 +53,7 @@ export const ConfirmHost: React.FC = () => {
   return (
     <div
       className="dialog-overlay"
+      data-pointer-scope={pointerScope || undefined}
       style={{ zIndex: 20000 }}
       onMouseDown={(e) => { (e.currentTarget as HTMLElement).dataset.md = e.target === e.currentTarget ? '1' : '0'; }}
       onMouseUp={(e) => {

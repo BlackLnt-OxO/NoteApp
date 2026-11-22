@@ -121,6 +121,7 @@ const Sidebar: React.FC<SidebarProps> = ({ onCreateNote }) => {
           return (
           <div
             key={tag.id}
+            data-pointer-button
             onClick={() => setActiveTag(tag.id)}
             onMouseEnter={() => setHoverTag(tag.id)}
             onMouseLeave={() => setHoverTag(null)}

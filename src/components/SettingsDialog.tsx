@@ -173,7 +173,7 @@ const SettingsDialog: React.FC<SettingsDialogProps> = ({ onClose }) => {
   const dw = fsn(480, gfs);
 
   return (
-    <div className="dialog-overlay"
+    <div className="dialog-overlay" data-pointer-scope
       onMouseDown={(e) => { (e.currentTarget as HTMLElement).dataset.mdTarget = e.target === e.currentTarget ? '1' : '0'; }}
       onMouseUp={(e) => {
         if (e.target === e.currentTarget && (e.currentTarget as HTMLElement).dataset.mdTarget === '1') onClose();
@@ -205,12 +205,14 @@ const SettingsDialog: React.FC<SettingsDialogProps> = ({ onClose }) => {
 
         <div style={sectionStyle}>
           <label htmlFor="ink-toolbar-dock" style={labelStyle(gfs)}>手写工具栏位置</label>
-          <select id="ink-toolbar-dock" className="glass-btn" value={localSettings.inkToolbarDock}
-            onChange={event => handleChange('inkToolbarDock', event.target.value)}
-            style={{ fontSize: fs(13, gfs), colorScheme: localSettings.theme }}>
-            <option value="bottom">底部</option>
-            <option value="top">顶部</option>
-          </select>
+          <span data-pointer-button className="pointer-select">
+            <select id="ink-toolbar-dock" className="glass-btn" value={localSettings.inkToolbarDock}
+              onChange={event => handleChange('inkToolbarDock', event.target.value)}
+              style={{ fontSize: fs(13, gfs), colorScheme: localSettings.theme }}>
+              <option value="bottom">底部</option>
+              <option value="top">顶部</option>
+            </select>
+          </span>
         </div>
 
         <div style={sectionStyle}>

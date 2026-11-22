@@ -365,11 +365,9 @@ const NoteCard: React.FC<NoteCardProps> = ({ note, isDragGhost, isDragPlaceholde
         height: showExpanded ? 'auto' : '100%',
         '--note-glass-tint': note.color,
         display: 'flex', flexDirection: 'column',
-        transition: 'box-shadow 0.2s, border 0.2s, transform 0.2s, width 0.2s, height 0.2s',
+        transition: 'box-shadow 0.2s, border 0.2s, width 0.2s, height 0.2s',
         position: 'relative', userSelect: 'none', overflow: 'hidden',
-      } as React.CSSProperties}
-      onMouseEnter={(e) => { if (!isDragGhost && !showExpanded) { e.currentTarget.style.transform = 'scale(1.012)'; } }}
-      onMouseLeave={(e) => { e.currentTarget.style.transform = 'scale(1)'; }}>
+      } as React.CSSProperties}>
         {/* Header — fixed above scrollable area, always visible */}
         <div onPointerDown={handleHeaderPointerDown} style={{
           display: 'flex', alignItems: 'center', justifyContent: 'space-between',
@@ -576,7 +574,7 @@ const NoteCard: React.FC<NoteCardProps> = ({ note, isDragGhost, isDragPlaceholde
       {/* Context menu */}
       {showMenu && createPortal(<>
         <div style={{ position: 'fixed', inset: 0, zIndex: 9998 }} onClick={() => setShowMenu(false)} onContextMenu={(ev) => { ev.preventDefault(); setShowMenu(false); }} />
-        <div className="context-menu" style={{ left: clampedMenuX, top: clampedMenuY }}>
+        <div className="context-menu" data-pointer-scope style={{ left: clampedMenuX, top: clampedMenuY }}>
           <button className="context-menu-item" onClick={() => { setShowMenu(false); setIsEditing(true); onEditStart?.(); }} style={{ fontSize: fs(13, gfs) }}>编辑</button>
           <button className="context-menu-item" onClick={handlePinToScreen} style={{ fontSize: fs(13, gfs) }}>{note.isFloating ? '取消固定' : '固定到屏幕'}</button>
           <div className="context-menu-divider" />
@@ -595,7 +593,7 @@ const NoteCard: React.FC<NoteCardProps> = ({ note, isDragGhost, isDragPlaceholde
       {imgSaveMenu && createPortal(<>
         <div style={{ position: 'fixed', inset: 0, zIndex: 10000 }} onClick={() => setImgSaveMenu(null)}
           onContextMenu={(ev) => { ev.preventDefault(); setImgSaveMenu(null); }} />
-        <div className="context-menu" style={{
+        <div className="context-menu" data-pointer-scope style={{
           left: Math.min(imgSaveMenu.x, window.innerWidth - 180),
           top: Math.min(imgSaveMenu.y, window.innerHeight - 60),
         }}>

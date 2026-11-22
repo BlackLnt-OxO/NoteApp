@@ -22,6 +22,8 @@ import { themeCanvasColors, isDefaultBrushColor } from './themeColors';
 import { fs, fsn } from './utils';
 import { backgroundShade, cardFrostRadius } from './workspaceBackground';
 import { setGlassBlur } from './components/liquidGlassSurface';
+import { HomeButtonResponse, useButtonPointerResponse } from './components/buttonPointerResponse';
+import './styles/buttonPointerResponse.css';
 
 // Round glass affordance shared by the collapsed-state screenshot buttons
 // (bottom-left cluster) — same look as the settings / fullscreen circles.
@@ -51,6 +53,7 @@ const App: React.FC = () => {
   const [showSettings, setShowSettings] = useState(false);
   const [assetError, setAssetError] = useState('');
 
+  useButtonPointerResponse();
   useLayoutEffect(() => { previousView.current = viewMode; }, [viewMode]);
   useLayoutEffect(() => { setGlassBlur(frostRadius); }, [frostRadius]);
 
@@ -267,8 +270,8 @@ const App: React.FC = () => {
       : null;
   }
 
-  return (
-    <div style={{
+  const workspace = (
+    <div data-pointer-scope={showBackground || undefined} style={{
       '--workspace-surface-opacity': Math.min(1, shade * 1.2),
       '--card-frost-filter': frostRadius ? `blur(${frostRadius}px)` : 'none',
       // Viewport zoom: compensate the layout size by 1/uiScale so that after
@@ -318,7 +321,7 @@ const App: React.FC = () => {
             Sticky Notes
           </span>
         </div>
-        <div className="title-bar-right">
+        <div className="title-bar-right" data-pointer-scope>
           <span
             data-tooltip="界面缩放：Ctrl+Shift 加/减 (60%–150%)"
             style={{ fontSize: fs(11, gfs), color: 'var(--text-muted)', marginRight: fs(8, gfs), userSelect: 'none', minWidth: fsn(38, gfs), textAlign: 'right' }}
@@ -379,7 +382,7 @@ const App: React.FC = () => {
 
           {/* Canvas keeps the screenshot controls beside the workspace.
               Notes shows them here when its sidebar is collapsed. */}
-          <div style={{
+          <div data-pointer-scope style={{
             position: 'absolute', bottom: '16px', left: '16px', zIndex: 120,
             display: 'flex', flexDirection: 'column', gap: '8px', alignItems: 'center',
           }}>
@@ -413,7 +416,7 @@ const App: React.FC = () => {
           </div>
 
           {/* Global settings entry — bottom-right on all three views. */}
-          <button onClick={() => setShowSettings(true)} aria-label="设置" className="workspace-corner-button settings-toggle">
+          <button onClick={() => setShowSettings(true)} aria-label="设置" className="workspace-corner-button settings-toggle" data-pointer-scope>
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/>
               <circle cx="12" cy="12" r="3"/>
@@ -467,6 +470,7 @@ const App: React.FC = () => {
       <ConfirmHost />
     </div>
   );
+  return <HomeButtonResponse.Provider value={showBackground || showSettings}>{workspace}</HomeButtonResponse.Provider>;
 };
 
 export default App;

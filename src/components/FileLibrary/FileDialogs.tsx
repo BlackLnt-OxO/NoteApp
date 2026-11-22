@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { useContext, useEffect, useRef, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import type { PdfJsDocument } from '../PdfAnnotation/PdfLoader';
 import type { PdfItem } from '../PdfAnnotation/PdfTypes';
@@ -6,9 +6,11 @@ import { drawAnnotatedStroke } from '../PdfAnnotation/PdfBrushRenderers';
 import { resolveAsset, useAssetLibrary } from './assetLibrary';
 import { useAssetImage } from './AssetObject';
 import { fileName } from './fileTypes';
+import { HomeButtonResponse } from '../buttonPointerResponse';
 import './fileLibrary.css';
 
 export function FileDialog({ title, onClose, children }: { title: string; onClose: () => void; children: ReactNode }) {
+  const pointerScope = useContext(HomeButtonResponse);
   const closeRef = useRef<HTMLButtonElement>(null);
   const section = useRef<HTMLElement>(null);
   useEffect(() => {
@@ -16,7 +18,7 @@ export function FileDialog({ title, onClose, children }: { title: string; onClos
     closeRef.current?.focus();
     return () => { if (previous instanceof HTMLElement && previous.isConnected) previous.focus(); };
   }, []);
-  return createPortal(<div className="file-dialog-backdrop" data-file-dialog
+  return createPortal(<div className="file-dialog-backdrop" data-file-dialog data-pointer-scope={pointerScope || undefined}
     onKeyDown={event => {
       event.stopPropagation();
       if (event.key === 'Escape') { event.preventDefault(); onClose(); }

@@ -173,11 +173,14 @@ body {
    light/glass → dark glow; solid/dark → light glow. Disabled buttons never glow. */
 .glass-btn:hover:not(:disabled) {
   border-color: var(--glass-border-active);
+}
+
+.glass-btn:hover:not(:disabled, :where([data-pointer-scope] *)) {
   box-shadow: 0 0 0 1px var(--ring-on-light), var(--glow-soft) !important;
   transform: scale(var(--btn-scale));
 }
 
-.glass-btn:active { transform: scale(0.97); }
+.glass-btn:active:not(:where([data-pointer-scope] *)) { transform: scale(0.97); }
 
 .workspace-mode-switch {
   display: grid;
@@ -236,31 +239,23 @@ body {
   border-radius: inherit;
   pointer-events: none;
   background-color: var(--card-glass-rim);
-  background-image: var(--card-glass-highlight, none);
   mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
   mask-composite: exclude;
-}
-
-.liquid-glass-card[data-glass-light="true"] {
-  --card-glass-highlight: radial-gradient(
-    circle 85px at var(--glass-light-x) var(--glass-light-y),
-    rgb(255 255 255 / .72), transparent
-  );
 }
 
 .liquid-glass-card[data-drag-preview="true"] {
   box-shadow: 0 12px 32px var(--card-glass-shadow);
 }
 
-.liquid-glass-card--library {
+.liquid-glass-card--library:not(:where([data-pointer-scope] *)) {
   transition: transform var(--transition), box-shadow var(--transition);
 }
 
-.liquid-glass-card--library:hover {
+.liquid-glass-card--library:hover:not(:where([data-pointer-scope] *)) {
   transform: scale(var(--btn-scale));
 }
 
-.liquid-glass-card--library:active {
+.liquid-glass-card--library:active:not(:where([data-pointer-scope] *)) {
   transform: scale(.97);
 }
 
@@ -328,10 +323,13 @@ body {
 }
 .btn-accent:hover:not(:disabled) {
   border-color: rgba(255, 255, 255, 0.35);
+}
+
+.btn-accent:hover:not(:disabled, :where([data-pointer-scope] *)) {
   box-shadow: 0 0 0 1px var(--ring-on-dark), var(--glow-on-color) !important;
   transform: scale(var(--btn-scale));
 }
-.btn-accent:active { transform: scale(0.97); }
+.btn-accent:active:not(:where([data-pointer-scope] *)) { transform: scale(0.97); }
 
 .btn-danger {
   background: var(--danger);
@@ -341,10 +339,13 @@ body {
 }
 .btn-danger:hover:not(:disabled) {
   border-color: rgba(255, 255, 255, 0.35);
+}
+
+.btn-danger:hover:not(:disabled, :where([data-pointer-scope] *)) {
   box-shadow: 0 0 0 1px var(--ring-on-dark), var(--glow-on-color) !important;
   transform: scale(var(--btn-scale));
 }
-.btn-danger:active { transform: scale(0.97); }
+.btn-danger:active:not(:where([data-pointer-scope] *)) { transform: scale(0.97); }
 
 /* Lightweight hover ring for inline-styled buttons (no background change —
    only an outer ring/glow + a slight raise). Pick by the button's own tone:
@@ -352,20 +353,20 @@ body {
 .hover-ring-light {
   transition: all var(--transition);
 }
-.hover-ring-light:hover:not(:disabled) {
+.hover-ring-light:hover:not(:disabled, :where([data-pointer-scope] *)) {
   box-shadow: 0 0 0 1px var(--ring-on-light), var(--glow-soft) !important;
   transform: scale(var(--btn-scale));
 }
-.hover-ring-light:active { transform: scale(0.97); }
+.hover-ring-light:active:not(:where([data-pointer-scope] *)) { transform: scale(0.97); }
 
 .hover-ring-dark {
   transition: all var(--transition);
 }
-.hover-ring-dark:hover:not(:disabled) {
+.hover-ring-dark:hover:not(:disabled, :where([data-pointer-scope] *)) {
   box-shadow: 0 0 0 1px var(--ring-on-dark), var(--glow-on-color) !important;
   transform: scale(var(--btn-scale));
 }
-.hover-ring-dark:active { transform: scale(0.97); }
+.hover-ring-dark:active:not(:where([data-pointer-scope] *)) { transform: scale(0.97); }
 
 .workspace-corner-button {
   position: relative;
@@ -383,18 +384,18 @@ body {
   transition: border-color var(--transition), color var(--transition);
 }
 
-.workspace-corner-button::after {
+.workspace-corner-button::before {
   content: '';
   position: absolute;
   inset: -1px;
   border-radius: inherit;
-  box-shadow: 0 0 0 1px var(--ring-on-light), var(--glow-soft);
+  box-shadow: var(--glow-soft);
   opacity: 0;
   pointer-events: none;
   transition: opacity var(--transition);
 }
 
-.workspace-corner-button:is(:hover, :focus-visible)::after {
+.workspace-corner-button:is([data-pointer-glow], :focus-visible)::before {
   opacity: 1;
 }
 
@@ -599,7 +600,7 @@ body {
   flex-shrink: 0;
 }
 
-.color-swatch:hover {
+.color-swatch:hover:not(:where([data-pointer-scope] *)) {
   transform: scale(1.15);
 }
 
