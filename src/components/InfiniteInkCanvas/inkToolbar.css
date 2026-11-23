@@ -11,14 +11,13 @@
   --ink-chrome: rgba(39, 40, 57, .97);
   --ink-edge: rgba(224, 225, 253, .19);
   --ink-shadow: 0 7px 23px rgba(12, 12, 22, .32);
+  --ink-row-length: 410px;
+  --ink-safe-start: 8px;
+  --ink-safe-end: 8px;
+  --ink-panel-width: min(320px, calc(100% - 16px));
   position: absolute;
-  inset-inline: 58px;
-  bottom: 0;
+  inset: 0 0 0 var(--ink-rail-width, 0px);
   z-index: 110;
-  display: flex;
-  height: 57px;
-  align-items: flex-end;
-  justify-content: center;
   pointer-events: none;
   color: var(--text-primary);
   container-type: inline-size;
@@ -32,18 +31,33 @@
   --ink-shadow: 0 7px 23px rgba(60, 47, 47, .17);
 }
 
-.ink-toolbar-band[data-dock="top"] {
+.ink-toolbar-band:is([data-dock="top"], [data-dock="left"]) {
   --ink-dock-sign: -1;
-  inset-inline: 16px;
-  top: 0;
-  bottom: auto;
-  align-items: flex-start;
+}
+
+.ink-toolbar-band[data-dock="bottom"] {
+  --ink-safe-start: 58px;
+  --ink-safe-end: 58px;
 }
 
 .ink-toolbar-dock {
-  position: relative;
+  position: absolute;
+  bottom: 0;
+  left: clamp(min(var(--ink-safe-start), max(0px, (100% - var(--ink-row-length)) / 2)),
+    calc(var(--ink-dock-offset) - var(--ink-row-length) / 2),
+    max(0px, 100% - var(--ink-row-length) - var(--ink-safe-end)));
   width: max-content;
   max-width: 100%;
+}
+
+.ink-toolbar-band[data-dock="top"] .ink-toolbar-dock {
+  top: 0;
+  bottom: auto;
+}
+
+.ink-toolbar-band[data-dragging="true"] .ink-toolbar-row {
+  border-color: var(--ink-focus);
+  transition: none;
 }
 
 .ink-toolbar-row,
@@ -64,6 +78,23 @@
   transform-origin: center bottom;
   transition: transform 240ms var(--ink-spring), border-color var(--ink-change), box-shadow var(--ink-change);
 }
+
+.ink-toolbar-drag-grip {
+  flex: none;
+  width: 18px;
+  min-height: 32px;
+  align-self: stretch;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: grab;
+  touch-action: none;
+}
+
+.ink-toolbar-drag-grip:hover { color: var(--text-primary); }
+.ink-toolbar-drag-grip:active, .ink-toolbar-handle:active { cursor: grabbing; }
 
 .ink-toolbar-band[data-dock="top"] .ink-toolbar-row {
   transform-origin: center top;
@@ -88,7 +119,7 @@
   background: transparent;
   pointer-events: auto;
   cursor: pointer;
-  touch-action: manipulation;
+  touch-action: none;
 }
 
 .ink-toolbar-band[data-dock="top"] .ink-toolbar-handle {
@@ -196,10 +227,9 @@
 .ink-toolbar-popover {
   position: absolute;
   z-index: 1;
-  bottom: calc(100% + 5px);
-  left: 50%;
-  translate: -50% 0;
-  width: min(320px, 100%);
+  bottom: 62px;
+  left: clamp(8px, calc(var(--ink-dock-offset) - var(--ink-panel-width) / 2), calc(100% - var(--ink-panel-width) - 8px));
+  width: var(--ink-panel-width);
   max-height: var(--ink-panel-height, 380px);
   overflow: auto;
   overscroll-behavior: contain;
@@ -225,10 +255,89 @@
 }
 
 .ink-toolbar-band[data-dock="top"] .ink-toolbar-popover {
-  top: calc(100% + 5px);
+  top: 62px;
   bottom: auto;
   transform-origin: center top;
 }
+
+.ink-toolbar-band:is([data-dock="left"], [data-dock="right"]) {
+  --ink-safe-start: 8px;
+  --ink-safe-end: 72px;
+  --ink-panel-width: min(320px, max(0px, 100% - 80px));
+}
+
+.ink-toolbar-band[data-dock="left"] { --ink-safe-start: var(--ink-left-start, 8px); }
+
+.ink-toolbar-band:is([data-dock="left"], [data-dock="right"]) .ink-toolbar-dock {
+  top: clamp(min(var(--ink-safe-start), max(0px, (100% - var(--ink-row-length)) / 2)),
+    calc(var(--ink-dock-offset) - var(--ink-row-length) / 2),
+    max(0px, 100% - var(--ink-row-length) - var(--ink-safe-end)));
+  bottom: auto;
+}
+
+.ink-toolbar-band[data-dock="left"] .ink-toolbar-dock { left: 0; }
+.ink-toolbar-band[data-dock="right"] .ink-toolbar-dock { left: auto; right: 0; }
+
+.ink-toolbar-band:is([data-dock="left"], [data-dock="right"]) :is(.ink-toolbar-row, .ink-toolbar-instruments, .ink-toolbar-aux) {
+  flex-direction: column;
+}
+
+.ink-toolbar-band:is([data-dock="left"], [data-dock="right"]) .ink-toolbar-row {
+  max-height: max(48px, calc(var(--ink-editor-height, 440px) - var(--ink-safe-start) - var(--ink-safe-end)));
+  overflow: auto;
+  scrollbar-width: none;
+  transform: translateX(calc(var(--ink-dock-sign) * (80% - var(--ink-peek)))) scale(.8);
+}
+
+.ink-toolbar-band[data-dock="left"] .ink-toolbar-row { transform-origin: left center; }
+.ink-toolbar-band[data-dock="right"] .ink-toolbar-row { transform-origin: right center; }
+
+.ink-toolbar-band:is([data-dock="left"], [data-dock="right"])[data-expanded="true"] .ink-toolbar-row {
+  transform: translateX(calc(-7px * var(--ink-dock-sign)));
+}
+
+.ink-toolbar-band:is([data-dock="left"], [data-dock="right"]) .ink-toolbar-drag-grip {
+  width: 100%;
+  min-height: 18px;
+}
+
+.ink-toolbar-band:is([data-dock="left"], [data-dock="right"]) .ink-toolbar-divider {
+  width: 23px;
+  height: 1px;
+  flex: none;
+  margin: 2px 0;
+}
+
+.ink-toolbar-band:is([data-dock="left"], [data-dock="right"]) .ink-toolbar-handle {
+  top: 10%;
+  bottom: 10%;
+  width: 18px;
+  height: auto;
+  inset-inline: auto;
+}
+
+.ink-toolbar-band[data-dock="left"] .ink-toolbar-handle { left: 0; }
+.ink-toolbar-band[data-dock="right"] .ink-toolbar-handle { right: 0; }
+
+.ink-toolbar-band:is([data-dock="top"], [data-dock="bottom"])[data-expanded="true"] .ink-toolbar-handle { height: 7px; }
+.ink-toolbar-band:is([data-dock="left"], [data-dock="right"])[data-expanded="true"] .ink-toolbar-handle { width: 7px; }
+
+.ink-toolbar-band[data-dock="left"] .ink-directional-icon { rotate: 90deg; }
+.ink-toolbar-band[data-dock="right"] .ink-directional-icon { rotate: -90deg; }
+
+.ink-toolbar-band:is([data-dock="left"], [data-dock="right"]) .ink-toolbar-button[aria-pressed="true"] .ink-directional-icon {
+  translate: calc(-2px * var(--ink-dock-sign)) 0;
+}
+
+.ink-toolbar-band:is([data-dock="left"], [data-dock="right"]) .ink-toolbar-popover {
+  top: clamp(8px, calc(var(--ink-dock-offset) - var(--ink-popup-height, 0px) / 2),
+    calc(100% - var(--ink-popup-height, 0px) - 8px));
+  bottom: auto;
+  transform-origin: center;
+}
+
+.ink-toolbar-band[data-dock="left"] .ink-toolbar-popover { left: 64px; }
+.ink-toolbar-band[data-dock="right"] .ink-toolbar-popover { left: auto; right: 64px; }
 
 @starting-style {
   .ink-toolbar-popover[data-open="true"] {

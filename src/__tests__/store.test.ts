@@ -551,6 +551,18 @@ describe('NoteStore', () => {
             isFloating: false }],
           tags: DEFAULT_TAGS,
           settings: DEFAULT_SETTINGS,
+    it.each([
+      [{ inkToolbarDock: 'top' }, { edge: 'top', offset: .5 }],
+      [{ inkToolbarDock: 'bottom' }, { edge: 'bottom', offset: .5 }],
+      [{ inkToolbarPosition: { edge: 'left', offset: .24 } }, { edge: 'left', offset: .24 }],
+      [{ inkToolbarPosition: { edge: 'right', offset: 1.2 } }, { edge: 'right', offset: 1 }],
+    ])('loads the toolbar placement from %j', async (settings, expected) => {
+      vi.mocked(window.electronAPI!.loadStore).mockResolvedValueOnce({ settings });
+      await useNoteStore.getState().loadData();
+      expect(useNoteStore.getState().settings.inkToolbarPosition).toEqual(expected);
+      expect(useNoteStore.getState().settings).not.toHaveProperty('inkToolbarDock');
+    });
+
           mindMap: { offsetX: 0, offsetY: 0, scale: 1, backgroundImage: null, showDots: true },
         }),
       );

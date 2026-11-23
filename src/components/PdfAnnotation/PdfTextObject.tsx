@@ -1,3 +1,4 @@
+import IconAction from '../IconAction';
 /**
  * PdfTextObject — a committed text card on the PDF page, rendered as a light
  * DOM card (mirrors InfiniteInkCanvas/TextObject): drag-to-move, corner (width)
@@ -201,19 +202,13 @@ const PdfTextObject: React.FC<Props> = ({ node, page, camera, interactive }) => 
 
         {interactive && hover && (
           <>
-            <button
-              aria-label="删除文本框"
+            <IconAction danger label="删除文本框"
               onPointerDown={(e) => e.stopPropagation()}
               onClick={(e) => { e.stopPropagation(); deleteMe(); }}
               style={{
                 position: 'absolute', top: -8, right: -8, width: 20, height: 20,
-                borderRadius: '50%', border: 'none', cursor: 'pointer',
-                background: 'rgba(231,76,60,0.9)', color: '#fff', fontSize: 12,
-                lineHeight: 1, display: 'flex', alignItems: 'center', justifyContent: 'center',
               }}
-            >
-              ×
-            </button>
+            />
             <div
               data-tooltip="拖拽调整宽度"
               data-ink-object-control=""

@@ -7,6 +7,7 @@ import ColorPicker from './ColorPicker';
 import { askConfirm } from './ConfirmDialog';
 import LiquidGlassCard from './LiquidGlassCard';
 import SettingsBackdrop from './SettingsBackdrop';
+import IconAction from './IconAction';
 import { setGlassBlur } from './liquidGlassSurface';
 
 interface SettingsDialogProps {
@@ -251,7 +252,7 @@ const SettingsDialog: React.FC<SettingsDialogProps> = ({ onClose, previewBackgro
       onMouseUp={(e) => {
         if (e.target === e.currentTarget && (e.currentTarget as HTMLElement).dataset.mdTarget === '1') onClose();
       }}>
-      <div className="dialog settings-dialog" role="dialog" aria-modal="true" aria-labelledby="settings-heading"
+      <div className="dialog settings-dialog frosted-dialog-shell" role="dialog" aria-modal="true" aria-labelledby="settings-heading"
         onClick={(e) => e.stopPropagation()} style={{ width: dw, fontSize: gfs }}>
         <SettingsBackdrop wallpaper={settings.backgroundImage} />
         <div className="settings-scroll" data-glass-scroll-container>
@@ -281,18 +282,6 @@ const SettingsDialog: React.FC<SettingsDialogProps> = ({ onClose, previewBackgro
         </div>
 
         <div style={sectionStyle}>
-          <label htmlFor="ink-toolbar-dock" style={labelStyle(gfs)}>手写工具栏位置</label>
-          <span data-pointer-button className="pointer-select">
-            <select id="ink-toolbar-dock" className="glass-btn" value={localSettings.inkToolbarDock}
-              onChange={event => handleChange('inkToolbarDock', event.target.value)}
-              style={{ fontSize: fs(13, gfs), colorScheme: localSettings.theme }}>
-              <option value="bottom">底部</option>
-              <option value="top">顶部</option>
-            </select>
-          </span>
-        </div>
-
-        <div style={sectionStyle}>
           <label style={labelStyle(gfs)}>数据目录</label>
           <div style={{ fontSize: fs(11, gfs), color: 'var(--text-muted)', marginBottom: fs(8, gfs), wordBreak: 'break-all' }}>{dataDirPath || '…'}</div>
           <div style={{ display: 'flex', gap: fs(6, gfs), alignItems: 'center', flexWrap: 'wrap' }}>
@@ -314,10 +303,10 @@ const SettingsDialog: React.FC<SettingsDialogProps> = ({ onClose, previewBackgro
         <div style={sectionStyle} ref={fontDropdownRef}>
           <label style={labelStyle(gfs)}>字体</label>
           <div style={{ position: 'relative' }}>
-            <button onClick={() => setFontOpen(!fontOpen)} className="hover-ring-light" style={{
+            <button onClick={() => setFontOpen(!fontOpen)} className="settings-font-trigger" style={{
               width: '100%', padding: `${fs(10, gfs)} ${fs(14, gfs)}`,
               background: 'var(--glass-bg-light)',
-              border: '1px solid var(--glass-border)', borderRadius: 'var(--radius-md)',
+              borderWidth: 1, borderStyle: 'solid', borderRadius: 'var(--radius-md)',
               color: 'var(--text-primary)', fontSize: fs(13, gfs), fontFamily: 'inherit', cursor: 'pointer',
               textAlign: 'left', display: 'flex', justifyContent: 'space-between', transition: 'all var(--transition)',
             }}>
@@ -329,14 +318,14 @@ const SettingsDialog: React.FC<SettingsDialogProps> = ({ onClose, previewBackgro
                 position: 'absolute', top: 'calc(100% + 4px)', left: 0, right: 0, zIndex: 10001,
                 background: 'var(--dropdown-bg)',
                 border: '1px solid var(--glass-border)', borderRadius: 'var(--radius-md)',
-                boxShadow: '0 12px 40px rgba(0,0,0,0.35)', overflow: 'hidden', animation: 'scaleIn 0.15s ease-out',
+                boxShadow: '0 12px 40px rgba(0,0,0,0.35)', padding: '6px 10px', overflow: 'hidden', animation: 'scaleIn 0.15s ease-out',
               }}>
                 {FONT_LIST.map((f) => (
                   <button key={f.family} onClick={() => { handleChange('fontFamily', f.family); setFontOpen(false); }} className="hover-ring-light" style={{
                     width: '100%', padding: `${fs(9, gfs)} ${fs(14, gfs)}`,
                     background: localSettings.fontFamily === f.family ? 'var(--glass-bg-hover)' : 'transparent',
-                    border: 'none', color: localSettings.fontFamily === f.family ? 'var(--text-primary)' : 'var(--text-secondary)',
-                    fontSize: fs(13, gfs), fontFamily: f.family, cursor: 'pointer', textAlign: 'left', transition: 'background 0.1s',
+                    border: 'none', borderRadius: 'var(--radius-sm)', color: localSettings.fontFamily === f.family ? 'var(--text-primary)' : 'var(--text-secondary)',
+                    fontSize: fs(13, gfs), fontFamily: f.family, cursor: 'pointer', textAlign: 'left',
                   }}>{f.name}</button>
                 ))}
               </div>
@@ -424,8 +413,7 @@ const SettingsDialog: React.FC<SettingsDialogProps> = ({ onClose, previewBackgro
                   background: hoverEdit === c ? '#2196F3' : 'rgba(120,120,120,0.7)',
                   alignItems: 'center', justifyContent: 'center', lineHeight: 1,
                 }}>✎</button>
-                {/* Delete X — top-right */}
-                <button onClick={(e) => {
+                <IconAction className="swatch-remove" label="移除自定义颜色" danger onClick={(e) => {
                   e.stopPropagation();
                   const newCustom = (localSettings.customNoteColors || []).filter(x => x !== c);
                   handleChange('customNoteColors', newCustom);
@@ -439,7 +427,7 @@ const SettingsDialog: React.FC<SettingsDialogProps> = ({ onClose, previewBackgro
                   opacity: hoverSwatch === c ? 1 : 0,
                   background: hoverDelete === c ? 'var(--danger)' : 'rgba(120,120,120,0.7)',
                   alignItems: 'center', justifyContent: 'center', lineHeight: 1,
-                }}>x</button>
+                }} />
               </div>
             ))}
             {/* + button to open color picker */}
@@ -474,7 +462,7 @@ const SettingsDialog: React.FC<SettingsDialogProps> = ({ onClose, previewBackgro
           ))}
         </div>
 
-        <div className="dialog-actions">
+        <div className="dialog-actions settings-actions">
           <button className="glass-btn" onClick={onClose} style={{ fontSize: fs(13, gfs), padding: `${fs(8, gfs)} ${fs(16, gfs)}` }}>取消</button>
           <button onClick={handleSave} className="btn-accent" style={{
             padding: `${fs(9, gfs)} ${fs(22, gfs)}`,

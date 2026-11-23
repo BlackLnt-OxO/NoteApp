@@ -1,11 +1,13 @@
 import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { notifyInkStrokeStart, setPointerHold } from '../../inkInputActivity';
+import { useNoteStore } from '../../../store';
+import { DEFAULT_INK_TOOLBAR_POSITION } from '../../../inkToolbarPosition';
 import ToolbarShell from '../ToolbarShell';
 import type { InkToolbarControls } from '../InkToolbarOptions';
 import { useCanvasStore } from '../useCanvasStore';
 
-function mountToolbar() {
+function mountToolbar(allowLeftDock = true) {
   const controls: InkToolbarControls = {
     tool: 'pen', brush: 'marker', settings: useCanvasStore.getState().brushSettings,
     alternatePen: 'fountain', setAlternatePen: vi.fn(), setTool: vi.fn(), setBrush: vi.fn(),
@@ -14,17 +16,53 @@ function mountToolbar() {
     showDotGrid: true, setShowDotGrid: vi.fn(), canUndo: true, canRedo: false,
     undo: vi.fn(), redo: vi.fn(), clearLabel: '清空画布', clear: vi.fn(),
   };
-  const view = (values: InkToolbarControls) => <div><ToolbarShell controls={values} /><div data-testid="viewport" /></div>;
+  const view = (values: InkToolbarControls, allowLeft = allowLeftDock) => <div>
+    <ToolbarShell controls={values} allowLeftDock={allowLeft} /><div data-testid="viewport" />
+  </div>;
   const { rerender } = render(view(controls));
   const grip = () => screen.getByRole('button', { name: '展开手写工具栏' });
   const row = () => screen.getByRole('toolbar');
   const advance = (ms: number) => act(() => vi.advanceTimersByTime(ms));
-  return { controls, grip, row, advance, updateControls: (patch: Partial<InkToolbarControls>) => rerender(view({ ...controls, ...patch })) };
+  return {
+    controls, grip, row, advance,
+    updateControls: (patch: Partial<InkToolbarControls>) => rerender(view({ ...controls, ...patch })),
+    setAllowLeftDock: (allowLeft: boolean) => rerender(view(controls, allowLeft)),
+  };
 }
 
 describe('ink toolbar', () => {
-  beforeEach(() => vi.useFakeTimers());
+  beforeEach(() => {
+    vi.useFakeTimers();
+    useNoteStore.getState().updateSettings({ inkToolbarPosition: DEFAULT_INK_TOOLBAR_POSITION });
+  });
   afterEach(() => vi.useRealTimers());
+
+  it('displays a saved left dock at bottom center only when left docking is unavailable', () => {
+    const saved = { edge: 'left', offset: .28 } as const;
+    useNoteStore.getState().updateSettings({ inkToolbarPosition: saved });
+    const { grip, setAllowLeftDock } = mountToolbar(false);
+    const band = grip().closest<HTMLElement>('[data-ink-toolbar]')!;
+    expect(band).toHaveAttribute('data-dock', 'bottom');
+    expect(band.style.getPropertyValue('--ink-dock-offset')).toBe('50%');
+    expect(useNoteStore.getState().settings.inkToolbarPosition).toEqual(saved);
+    setAllowLeftDock(true);
+    expect(band).toHaveAttribute('data-dock', 'left');
+    expect(parseFloat(band.style.getPropertyValue('--ink-dock-offset'))).toBeCloseTo(28);
+  });
+
+  it('constrains the drag preview and saved position to supported edges', () => {
+    const { grip, advance } = mountToolbar(false);
+    const handle = grip();
+    const band = handle.closest<HTMLElement>('[data-ink-toolbar]')!;
+    vi.spyOn(band, 'getBoundingClientRect').mockReturnValue(new DOMRect(0, 0, 400, 240));
+    fireEvent.pointerDown(handle, { pointerId: 1, button: 0, clientX: 200, clientY: 238 });
+    fireEvent.pointerMove(handle, { pointerId: 1, clientX: 2, clientY: 60 });
+    advance(32);
+    expect(band).toHaveAttribute('data-dragging', 'true');
+    expect(band).toHaveAttribute('data-dock', 'top');
+    fireEvent.pointerUp(handle, { pointerId: 1, clientX: 2, clientY: 60 });
+    expect(useNoteStore.getState().settings.inkToolbarPosition).toEqual({ edge: 'top', offset: .005 });
+  });
 
   it('uses a 350 ms hold to open just the selected instrument settings', () => {
     const { grip, row, controls, advance } = mountToolbar();

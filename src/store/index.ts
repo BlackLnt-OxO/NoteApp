@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import { Note, Tag, AppSettings, MindMapState, ViewMode, DEFAULT_TAGS, DEFAULT_SETTINGS, DEFAULT_COLORS } from '../types';
 import { normalizeCardFrost } from '../workspaceBackground';
+import { normalizeInkToolbarPosition } from '../inkToolbarPosition';
 
 interface NoteStore {
   // Load state
@@ -103,8 +104,8 @@ export const useNoteStore = create<NoteStore>((set, get) => ({
       color: partial.color || get().settings.defaultNoteColor || DEFAULT_COLORS[0],
       tag: partial.tag || 'general',
       images: partial.images || [],
-      createdAt: Date.now(),
       ...(partial.attachments?.length ? { attachments: partial.attachments } : {}),
+      createdAt: Date.now(),
       updatedAt: Date.now(),
       gridX: partial.gridX ?? 0,
       gridY: partial.gridY ?? 0,
@@ -236,12 +237,14 @@ export const useNoteStore = create<NoteStore>((set, get) => ({
         // Clear isFloating on all notes (float windows don't persist across restarts)
         const notes = (data.notes || []).map((n: Note) => ({ ...n, isFloating: false, floatWindowId: undefined }));
         set({
+        const { inkToolbarDock, ...savedSettings } = data.settings ?? {};
           loaded: true,
           notes,
           tags: data.tags || DEFAULT_TAGS,
           settings: {
             ...DEFAULT_SETTINGS,
-            ...data.settings,
+            ...savedSettings,
+            inkToolbarPosition: normalizeInkToolbarPosition(savedSettings.inkToolbarPosition, inkToolbarDock),
             backgroundImage: data.settings?.backgroundImage || null,
             cardFrost: normalizeCardFrost(data.settings?.cardFrost),
           },

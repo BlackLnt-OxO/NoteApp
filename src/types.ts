@@ -1,3 +1,5 @@
+import { DEFAULT_INK_TOOLBAR_POSITION, type InkToolbarPosition } from './inkToolbarPosition';
+
 export interface NoteImage {
   id: string;
   dataUrl: string;
@@ -9,17 +11,17 @@ export interface NoteImage {
   _imgY?: number;
 }
 
-export interface Note {
-  id: string;
 export interface NoteAttachment { id: string; path: string }
 
+export interface Note {
+  id: string;
   content: string;
   color: string;
   tag: string;
   images: NoteImage[];
+  attachments?: NoteAttachment[];
   createdAt: number;
   updatedAt: number;
-  attachments?: NoteAttachment[];
   // Grid position (for main view)
   gridX: number;
   gridY: number;
@@ -44,7 +46,7 @@ export interface Tag {
 
 export interface AppSettings {
   theme: 'light' | 'dark';
-  inkToolbarDock: 'top' | 'bottom';
+  inkToolbarPosition: InkToolbarPosition;
   fontSize: number;
   fontFamily: string;
   backgroundImage: string | null;
@@ -132,7 +134,7 @@ export const DEFAULT_TAGS: Tag[] = [
 
 export const DEFAULT_SETTINGS: AppSettings = {
   theme: 'dark',
-  inkToolbarDock: 'bottom',
+  inkToolbarPosition: DEFAULT_INK_TOOLBAR_POSITION,
   fontSize: 15,
   fontFamily: 'Georgia, "Times New Roman", serif',
   backgroundImage: null,

@@ -1,3 +1,4 @@
+import IconAction from './IconAction';
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { readInkFrame, readFrameWindows, resetInkFrame, type FrameWindow, type InkFrameStats } from './InkFrameStats';
 import { INK_MEMORY_BUDGET } from './InkCanvasSurface';
@@ -367,10 +368,7 @@ const DiagnosticPanel: React.FC<DiagnosticPanelProps> = ({ onClose, visible }) =
           <span style={{ fontWeight: 600, fontSize: fs(15, gfs) }}>
             🔬 长截图诊断面板
           </span>
-          <button className="glass-btn" onClick={onClose}
-            style={{ fontSize: fs(13, gfs), padding: `${fs(4, gfs)} ${fs(10, gfs)}` }}>
-            ✕
-          </button>
+          <IconAction label="关闭诊断面板" onClick={onClose} />
         </div>
 
         <div style={{ display: 'flex', gap: fsn(12, gfs), flexDirection: 'column' }}>
