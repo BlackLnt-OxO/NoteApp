@@ -45,6 +45,7 @@ import TextNode from './TextNode';
 import ImageObject from './ImageObject';
 import AssetObject from '../FileLibrary/AssetObject';
 import { assetDropTarget, makeAssetPlacement, useAssetDrop } from '../FileLibrary/assetDrop';
+import { externalFileTarget, placeDroppedItems, receiveExternalFiles } from '../FileLibrary/externalFiles';
 import TextObject from './TextObject';
 import Toolbar from './Toolbar';
 import { useNoteStore } from '../../store';
@@ -1395,6 +1396,17 @@ const InfiniteInkCanvas: React.FC = () => {
   return (
     <div ref={containerRef} tabIndex={-1}
       {...assetDropTarget}
+      {...externalFileTarget(event => {
+        const state = useCanvasStore.getState();
+        const id = state.currentCanvasId;
+        if (!id || !state.loaded) return;
+        const bounds = event.currentTarget.getBoundingClientRect();
+        const origin = screenToWorld(event.clientX - bounds.left, event.clientY - bounds.top, state.camera);
+        receiveExternalFiles(event.dataTransfer, items => {
+          const current = useCanvasStore.getState();
+          if (containerRef.current && current.currentCanvasId === id && current.loaded) current.addDroppedObjects(placeDroppedItems(items, origin));
+        });
+      })}
       {...selectionEvents}
       onGotPointerCaptureCapture={event => { const id = (event.target as HTMLElement).closest('[data-ink-object-id]')?.getAttribute('data-ink-object-id'); if (id) manipulatedIdsRef.current.add(id); }}
       onLostPointerCaptureCapture={event => { const id = (event.target as HTMLElement).closest('[data-ink-object-id]')?.getAttribute('data-ink-object-id'); if (id) manipulatedIdsRef.current.delete(id); }}
@@ -1408,6 +1420,7 @@ const InfiniteInkCanvas: React.FC = () => {
         [...selectedIds, ...manipulatedIdsRef.current]) ? <AssetObject key={object.id} object={object} camera={camera}
           interactive={activeTool === 'select'} selected={selectedIds.includes(object.id)}
           onDelete={() => useCanvasStore.getState().deleteObject(object.id)}
+          onRelink={(previous, path) => useCanvasStore.getState().relinkLocalObject(object.id, previous, path)}
           startResize={() => useCanvasStore.getState().pushHistory()}
           resize={(width, height) => useCanvasStore.getState().resizeAssetObject(object.id, width, height)} /> : null)}
       <canvas ref={canvasRef} style={{ position: 'absolute', inset: 0, touchAction: 'none', userSelect: 'none', cursor: cursorStyle }}

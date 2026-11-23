@@ -18,7 +18,10 @@ import PdfToolbar from './PdfToolbar';
 import PdfSidebar from './PdfSidebar';
 import LibraryHome from './LibraryHome';
 import { useFileWorkspace } from '../FileLibrary/useFileWorkspace';
+import { FileDialog } from '../FileLibrary/FileDialogs';
 import { useAssetLibrary } from '../FileLibrary/assetLibrary';
+import IconAction from '../IconAction';
+import './pdfNav.css';
 
 // ---- Anchor badge (one per anchored page) -------------------------------------
 
@@ -28,44 +31,11 @@ const AnchorBadge: React.FC<{
   onJump: () => void;
   onRemove: () => void;
 }> = ({ page, current, onJump, onRemove }) => {
-  const gfs = useNoteStore((s) => s.settings.fontSize);
-  const [hover, setHover] = useState(false);
-  return (
-    <div
-      onClick={onJump}
-      data-tooltip={current ? `当前就在标记的第 ${page} 页` : `回到标记的第 ${page} 页（渲染已缓存，秒回）`}
-      onMouseEnter={() => setHover(true)}
-      onMouseLeave={() => setHover(false)}
-      style={{
-        position: 'relative',
-        display: 'flex', alignItems: 'center', justifyContent: 'center',
-        minWidth: 26, padding: '5px 8px', borderRadius: '6px',
-        cursor: current ? 'default' : 'pointer',
-        border: '1px solid var(--accent)',
-        background: hover ? 'rgba(107,92,231,0.22)' : 'rgba(107,92,231,0.12)',
-        color: 'var(--accent)', fontSize: fs(12, gfs), fontWeight: 600,
-        userSelect: 'none', transition: 'background 0.12s',
-      }}
-    >
-      <span>{page}</span>
-      <span
-        onClick={(e) => { e.stopPropagation(); onRemove(); }}
-        data-tooltip="删除标记"
-        style={{
-          position: 'absolute', top: -6, right: -6,
-          width: 15, height: 15, borderRadius: '50%',
-          background: '#444', color: '#eee',
-          border: '1px solid var(--glass-border)',
-          display: 'flex', alignItems: 'center', justifyContent: 'center',
-          fontSize: fs(10, gfs), cursor: 'pointer', lineHeight: 1,
-          opacity: hover ? 1 : 0, pointerEvents: hover ? 'auto' : 'none',
-          transition: 'opacity 0.12s',
-        }}
-      >
-        ×
-      </span>
-    </div>
-  );
+  return <div className="pdf-nav-marker">
+    <button type="button" className="pdf-nav-button pdf-nav-mark" aria-current={current ? 'page' : undefined}
+      onClick={onJump} data-tooltip={`回到标记的第 ${page} 页`}>{page}</button>
+    <IconAction className="pdf-nav-marker-remove" label={`删除第 ${page} 页标记`} danger onClick={onRemove} />
+  </div>;
 };
 
 // ---- Navigation bar -----------------------------------------------------------
@@ -100,38 +70,24 @@ const NavBar: React.FC<{
     else setPageInput(String(currentPage));
   };
 
-  const btnStyle: React.CSSProperties = {
-    padding: '5px 12px', borderRadius: '6px', cursor: 'pointer', fontFamily: 'inherit',
-    fontSize: fs(12, gfs), border: '1px solid var(--glass-border)',
-    background: 'var(--glass-bg-light)', color: 'var(--text-secondary)',
-    transition: 'all var(--transition)',
-  };
-
   return (
-    <div style={{
+    <div className="pdf-nav-bar" style={{
       position: 'absolute', top: 0, left: 0, right: 0, height: INK_EDITOR_NAV_HEIGHT, zIndex: 95,
-      display: 'flex', alignItems: 'center', gap: '8px', padding: '0 12px',
-      background: 'var(--chrome-bg)', borderBottom: '1px solid var(--glass-border)',
-      backdropFilter: 'blur(10px)', WebkitBackdropFilter: 'blur(10px)',
+      display: 'flex', alignItems: 'center', gap: '8px', padding: '0 12px', fontSize: fs(12, gfs),
     }}>
-      <button className="glass-btn" onClick={prevPage} disabled={currentPage <= 1} style={{ ...btnStyle, opacity: currentPage <= 1 ? 0.35 : 1 }}>
+      <button className="pdf-nav-button" onClick={prevPage} disabled={currentPage <= 1}>
         ‹ 上一页
       </button>
       <div style={{ display: 'flex', alignItems: 'center', gap: 6, color: 'var(--text-secondary)', fontSize: fs(12, gfs) }}>
-        <input
+        <input aria-label="页码" className="pdf-nav-input"
           value={pageInput}
           onChange={(e) => setPageInput(e.target.value.replace(/\D/g, ''))}
           onBlur={commitPage}
           onKeyDown={(e) => { if (e.key === 'Enter') commitPage(); }}
-          style={{
-            width: 48, padding: '4px 6px', textAlign: 'center', fontFamily: 'inherit', fontSize: fs(12, gfs),
-            background: 'var(--glass-bg-light)', color: 'var(--text-primary)',
-            border: '1px solid var(--glass-border)', borderRadius: '6px', outline: 'none',
-          }}
         />
         <span>/ {numPages}</span>
       </div>
-      <button className="glass-btn" onClick={nextPage} disabled={currentPage >= numPages} style={{ ...btnStyle, opacity: currentPage >= numPages ? 0.35 : 1 }}>
+      <button className="pdf-nav-button" onClick={nextPage} disabled={currentPage >= numPages}>
         下一页 ›
       </button>
 
@@ -150,17 +106,9 @@ const NavBar: React.FC<{
         const already = anchorPages.includes(currentPage);
         return (
           <button
-            onClick={() => addAnchorPage(currentPage)}
+            className="pdf-nav-button pdf-nav-add" aria-label="添加当前页标记" onClick={() => addAnchorPage(currentPage)}
             disabled={already || atCap}
             data-tooltip={already ? '当前页已在标记中' : atCap ? `已达标记上限（${MAX_ANCHOR_PAGES} 个）` : '把当前页添加为标记（回跳目标，保留渲染缓存）'}
-            style={{
-              width: 28, padding: 0, lineHeight: '24px', textAlign: 'center',
-              borderRadius: '6px', cursor: (already || atCap) ? 'default' : 'pointer',
-              fontFamily: 'inherit', fontSize: fs(16, gfs), fontWeight: 600,
-              border: '1px solid var(--glass-border)',
-              background: 'var(--glass-bg-light)', color: 'var(--text-secondary)',
-              opacity: (already || atCap) ? 0.35 : 1,
-            }}
           >
             +
           </button>
@@ -174,17 +122,17 @@ const NavBar: React.FC<{
         {fileName}
       </span>
 
-      {unplacedCount > 0 && <button className="glass-btn" style={btnStyle} onClick={onPairPending}>待配对 {unplacedCount} 页</button>}
-      <button className="glass-btn" onClick={onImport} style={btnStyle} data-tooltip="导入其它文件">
+      {unplacedCount > 0 && <button className="pdf-nav-button" onClick={onPairPending}>待配对 {unplacedCount} 页</button>}
+      <button className="pdf-nav-button" onClick={onImport} data-tooltip="导入其它文件">
         导入
       </button>
-      <button className="glass-btn" onClick={onSave} style={btnStyle} data-tooltip="保存批注 (Ctrl+S)">
+      <button className="pdf-nav-button" onClick={onSave} data-tooltip="保存批注 (Ctrl+S)">
         保存
       </button>
       {savedFlash && (
         <span style={{ fontSize: fs(11, gfs), color: '#51cf66', fontWeight: 600 }}>已保存</span>
       )}
-      <button className="glass-btn" onClick={onClose} style={{ ...btnStyle, color: dirty ? 'var(--danger, #e74c3c)' : 'var(--text-secondary)' }} data-tooltip="返回文件库">
+      <button className="pdf-nav-button" onClick={onClose} data-dirty={dirty || undefined} data-tooltip="返回文件库">
         关闭
       </button>
     </div>
@@ -199,6 +147,8 @@ const PdfView: React.FC = () => {
   const documentKey = useRef<{ doc: typeof pdfDoc; key: number }>({ doc: null, key: 0 });
   if (documentKey.current.doc !== pdfDoc) documentKey.current = { doc: pdfDoc, key: documentKey.current.key + 1 };
   const workspace = useFileWorkspace();
+  const pageError = usePdfStore(state => state.error);
+  const pageLoading = usePdfStore(state => state.loading ? state.loadingPhase : null);
   const requestedPath = useAssetLibrary(s => s.requestedPath);
   useEffect(() => {
     if (!requestedPath || workspace.busy) return;
@@ -320,6 +270,11 @@ const PdfView: React.FC = () => {
       )}
       </div>
       {workspace.overlays}
+      {fileName && (pageLoading || workspace.indexProgress)
+        && <span role="status" className="pdf-index-progress">{pageLoading || workspace.indexProgress}</span>}
+      {fileName && pageError && <FileDialog title="PDF 页面显示失败" onClose={() => usePdfStore.setState({ error: null })}>
+        <p role="alert" className="file-library-error">{pageError}</p>
+      </FileDialog>}
     </div>
   );
 };

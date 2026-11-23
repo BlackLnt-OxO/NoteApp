@@ -116,6 +116,9 @@ const PdfSidebar: React.FC = () => {
   const toggleSidebar = usePdfStore((s) => s.toggleSidebar);
 
   const scrollRef = useRef<HTMLDivElement>(null);
+  const latestTop = useRef(0);
+  const scrollFrame = useRef<number>();
+  const rememberTimer = useRef<number>();
   const [scrollTop, setScrollTop] = useState(0);
   const [viewportH, setViewportH] = useState(0);
 
@@ -129,25 +132,51 @@ const PdfSidebar: React.FC = () => {
   const itemH = thumbH + THUMB_GAP;
   const totalH = numPages * itemH;
 
-  // Compute the visible page range
-  const firstIndex = Math.max(0, Math.floor((scrollTop - OVERSCAN) / itemH));
-  const lastIndex = Math.min(numPages - 1, Math.ceil((scrollTop + viewportH + OVERSCAN) / itemH));
+  const first = (top: number) => Math.max(0, Math.floor((top - OVERSCAN) / itemH));
+  const last = (top: number) => Math.min(numPages - 1, Math.ceil((top + viewportH + OVERSCAN) / itemH));
+  const firstIndex = first(scrollTop);
+  const lastIndex = last(scrollTop);
 
   const pages: number[] = [];
   for (let i = firstIndex; i <= lastIndex; i++) pages.push(i + 1);
 
-  // Wheel scroll only scrolls the rail — page changes come exclusively from
-  // clicking a thumbnail (or the page input / anchor button). Persist the scroll
-  // position so it survives collapse/expand (and reopening).
-  const onScroll = useCallback((e: React.UIEvent<HTMLDivElement>) => {
-    setScrollTop(e.currentTarget.scrollTop);
-    usePdfStore.getState().setRailScrollTop(e.currentTarget.scrollTop);
-  }, []);
+  const remember = useCallback(() => {
+    clearTimeout(rememberTimer.current);
+    const store = usePdfStore.getState();
+    if (pdfDoc && store.pdfDoc === pdfDoc && store.railScrollTop !== latestTop.current) {
+      store.setRailScrollTop(latestTop.current);
+    }
+  }, [pdfDoc]);
+
+  const onScroll = (event: React.UIEvent<HTMLDivElement>) => {
+    latestTop.current = event.currentTarget.scrollTop;
+    if (scrollFrame.current === undefined) scrollFrame.current = requestAnimationFrame(() => {
+      scrollFrame.current = undefined;
+      const top = latestTop.current;
+      if (first(top) !== firstIndex || last(top) !== lastIndex) setScrollTop(top);
+    });
+    clearTimeout(rememberTimer.current);
+    rememberTimer.current = window.setTimeout(remember, 120);
+  };
+
+  useEffect(() => () => {
+    if (scrollFrame.current !== undefined) cancelAnimationFrame(scrollFrame.current);
+    scrollFrame.current = undefined;
+    remember();
+  }, [remember]);
 
   useEffect(() => {
     const el = scrollRef.current;
-    if (el) setViewportH(el.clientHeight);
-  }, [sidebarOpen]);
+    if (!el) return;
+    const measure = () => {
+      setViewportH(el.clientHeight);
+      setScrollTop(el.scrollTop);
+    };
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [pdfDoc, sidebarOpen]);
 
   // Scroll the rail to the anchor page when the "back to current page" button
   // fires (one-shot store signal). Pure scroll — it never changes the page.
@@ -172,19 +201,26 @@ const PdfSidebar: React.FC = () => {
     const idx = Math.max(0, Math.min(numPages - 1, usePdfStore.getState().currentPage - 1));
     const target = Math.max(0, idx * itemH - 10);
     el.scrollTop = target;
+    latestTop.current = el.scrollTop;
+    setScrollTop(el.scrollTop);
     // Sync the rail's remembered scroll too, so the "reopen restores scroll"
     // effect below doesn't overwrite this with a stale value from a prior doc.
-    usePdfStore.getState().setRailScrollTop(target);
+    usePdfStore.getState().setRailScrollTop(el.scrollTop);
   }, [pdfDoc, itemH, numPages]);
 
   // When the rail is re-opened (collapse → expand), restore the previous scroll
   // position instead of jumping to page 1 / showing a blank rail.
   useEffect(() => {
-    if (!sidebarOpen) return;
+    if (!sidebarOpen) {
+      remember();
+      return;
+    }
     const el = scrollRef.current;
     if (!el) return;
     el.scrollTop = Math.max(0, usePdfStore.getState().railScrollTop);
-  }, [sidebarOpen, itemH]);
+    latestTop.current = el.scrollTop;
+    setScrollTop(el.scrollTop);
+  }, [sidebarOpen, itemH, remember]);
 
   if (!pdfDoc) return null;
 

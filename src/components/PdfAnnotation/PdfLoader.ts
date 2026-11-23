@@ -104,8 +104,10 @@ export async function renderPageToCanvas(
   pageNumber: number,
   canvas: HTMLCanvasElement,
   scale: number,
+  signal?: AbortSignal,
 ): Promise<void> {
-  const page = await (doc as any).getPage(pageNumber);
+  const page = await doc.getPage(pageNumber);
+  signal?.throwIfAborted();
   const vp = page.getViewport({ scale });
   if (canvas.width !== Math.round(vp.width) || canvas.height !== Math.round(vp.height)) {
     canvas.width = Math.round(vp.width);
@@ -113,7 +115,11 @@ export async function renderPageToCanvas(
   }
   const ctx = canvas.getContext('2d');
   if (!ctx) return;
-  await page.render({ canvasContext: ctx, viewport: vp }).promise;
+  const render = page.render({ canvasContext: ctx, viewport: vp });
+  const cancel = () => render.cancel();
+  signal?.addEventListener('abort', cancel, { once: true });
+  try { await render.promise; }
+  finally { signal?.removeEventListener('abort', cancel); }
 }
 
 /** Get the world size (scale 1 viewport) of a page. */

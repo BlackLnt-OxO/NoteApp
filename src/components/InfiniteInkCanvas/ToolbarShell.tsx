@@ -1,9 +1,11 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react';
 import { isInkPointerActive, INK_STROKE_START } from '../inkInputActivity';
+import { DEFAULT_INK_TOOLBAR_POSITION, nearestInkToolbarPosition, type InkToolbarPosition } from '../../inkToolbarPosition';
 import InkToolButton from './InkToolButton';
 import InkToolbarOptions, { toolLabel, type InkToolbarControls, type ToolSlot } from './InkToolbarOptions';
-import { INK_TOOLBAR_LAYOUT, useInkToolbarDock } from './inkToolbarLayout';
+import { INK_TOOLBAR_LAYOUT, saveInkToolbarPosition, useInkToolbarPosition } from './inkToolbarLayout';
 import type { AlternatePen } from './useToolbarStore';
+import IconAction from '../IconAction';
 import './inkToolbar.css';
 
 const LEAVE_DELAY = 650;
@@ -20,7 +22,6 @@ const iconPaths = {
   undo: 'M9 5l-5 5 5 5M4 10h10a5 5 0 0 1 0 10h-3',
   redo: 'M15 5l5 5-5 5m5-5H10a5 5 0 0 0 0 10h3',
   trash: 'M5 7h14m-12 0 1 13h8l1-13M9 7V4h6v3m-4 4v5m2-5v5',
-  close: 'm7 7 10 10M17 7 7 17',
 } as const;
 
 function Icon({ name }: { name: keyof typeof iconPaths | 'more' | 'laser' }) {
@@ -52,9 +53,17 @@ function nearDockEdge(handle: HTMLButtonElement | null, x: number, y: number) {
     && y >= edge.top - 14 && y <= edge.bottom + 14;
 }
 
-export default function ToolbarShell({ controls }: { controls: InkToolbarControls }) {
-  const dock = useInkToolbarDock();
+export default function ToolbarShell({ controls, allowLeftDock = true }: {
+  controls: InkToolbarControls;
+  allowLeftDock?: boolean;
+}) {
+  const savedPosition = useInkToolbarPosition();
+  const restingPosition = !allowLeftDock && savedPosition.edge === 'left' ? DEFAULT_INK_TOOLBAR_POSITION : savedPosition;
+  const [previewPosition, setPreviewPosition] = useState<InkToolbarPosition | null>(null);
+  const { edge: dock, offset } = previewPosition ?? restingPosition;
+  const vertical = dock === 'left' || dock === 'right';
   const band = useRef<HTMLDivElement>(null);
+  const rowRef = useRef<HTMLDivElement>(null);
   const handle = useRef<HTMLButtonElement>(null);
   const popupRef = useRef<HTMLElement>(null);
   const previousPanelHeight = useRef<number>();
@@ -66,6 +75,9 @@ export default function ToolbarShell({ controls }: { controls: InkToolbarControl
   const [writing, setWriting] = useState(false);
   const [panel, setPanel] = useState<Panel | null>(null);
   const [panelOpen, setPanelOpen] = useState(false);
+  const drag = useRef<{ id: number; x: number; y: number; element: HTMLButtonElement; moved: boolean }>();
+  const dragFrame = useRef<number>();
+  const ignoreGripClick = useRef(false);
 
   const stopTimer = useCallback(() => { clearTimeout(timer.current); timer.current = undefined; }, []);
   const closePanel = useCallback(() => setPanelOpen(false), []);
@@ -84,13 +96,35 @@ export default function ToolbarShell({ controls }: { controls: InkToolbarControl
   }, [stopTimer]);
 
   const hideLater = useCallback(() => {
-    if (!expandedRef.current || timer.current !== undefined) return;
+    if (drag.current?.moved || !expandedRef.current || timer.current !== undefined) return;
     timer.current = setTimeout(collapse, LEAVE_DELAY);
   }, [collapse]);
+
+  const finishDockDrag = useCallback((position?: InkToolbarPosition) => {
+    const gesture = drag.current;
+    if (!gesture) return;
+    drag.current = undefined;
+    if (dragFrame.current !== undefined) cancelAnimationFrame(dragFrame.current);
+    dragFrame.current = undefined;
+    if (gesture.element.hasPointerCapture?.(gesture.id)) gesture.element.releasePointerCapture(gesture.id);
+    if (!gesture.moved) return;
+    ignoreGripClick.current = true;
+    setPreviewPosition(null);
+    if (position) saveInkToolbarPosition(position);
+    hideLater();
+  }, [hideLater]);
 
   useEffect(() => {
     const shortcut = (event: KeyboardEvent) => {
       const target = event.target;
+      if (drag.current) {
+        if (event.key === 'Escape') {
+          event.preventDefault();
+          event.stopImmediatePropagation();
+          finishDockDrag();
+        }
+        return;
+      }
       if (document.querySelector('[data-file-dialog], .dialog-overlay')) return;
       if (target instanceof HTMLElement && (target.matches('input, textarea, select') || target.isContentEditable)) return;
       if (event.key === 'Escape' && popupRef.current?.dataset.open === 'true') {
@@ -107,6 +141,7 @@ export default function ToolbarShell({ controls }: { controls: InkToolbarControl
       if (event.target instanceof Node && !band.current?.contains(event.target)) closePanel();
     };
     const startWriting = (event: Event) => {
+      finishDockDrag();
       writingPointer.current = (event as CustomEvent<number>).detail;
       setWriting(true);
       collapse();
@@ -115,6 +150,7 @@ export default function ToolbarShell({ controls }: { controls: InkToolbarControl
       writingPointer.current = null;
       setWriting(false);
     };
+    const blur = () => { stopWriting(); finishDockDrag(); };
     const release = (event: PointerEvent) => {
       if (writingPointer.current !== event.pointerId) return;
       if (event.type !== 'lostpointercapture' || event.target instanceof HTMLCanvasElement) stopWriting();
@@ -123,20 +159,21 @@ export default function ToolbarShell({ controls }: { controls: InkToolbarControl
     window.addEventListener('pointerup', release, true);
     window.addEventListener('pointercancel', release, true);
     window.addEventListener('lostpointercapture', release, true);
-    window.addEventListener('blur', stopWriting);
+    window.addEventListener('blur', blur);
     window.addEventListener('keydown', shortcut, true);
     document.addEventListener('pointerdown', outside, true);
     return () => {
       stopTimer();
+      if (dragFrame.current !== undefined) cancelAnimationFrame(dragFrame.current);
       window.removeEventListener(INK_STROKE_START, startWriting);
       window.removeEventListener('pointerup', release, true);
       window.removeEventListener('pointercancel', release, true);
       window.removeEventListener('lostpointercapture', release, true);
-      window.removeEventListener('blur', stopWriting);
+      window.removeEventListener('blur', blur);
       window.removeEventListener('keydown', shortcut, true);
       document.removeEventListener('pointerdown', outside, true);
     };
-  }, [collapse, closePanel, expand, stopTimer]);
+  }, [collapse, closePanel, expand, finishDockDrag, stopTimer]);
 
   useEffect(() => { closePanel(); }, [dock, closePanel]);
   useLayoutEffect(() => {
@@ -160,9 +197,18 @@ export default function ToolbarShell({ controls }: { controls: InkToolbarControl
     const element = band.current;
     const parent = element?.parentElement;
     if (!element || !parent) return;
-    const update = () => element.style.setProperty('--ink-panel-height', Math.max(106, parent.clientHeight - 82) + 'px');
+    const rail = parent.querySelector<HTMLElement>('[data-pdf-page-sidebar]');
+    const update = () => {
+      element.style.setProperty('--ink-editor-height', parent.clientHeight + 'px');
+      element.style.setProperty('--ink-panel-height', Math.max(48, parent.clientHeight - (vertical ? 16 : 82)) + 'px');
+      element.style.setProperty('--ink-rail-width', (rail?.offsetWidth ?? 0) + 'px');
+      element.style.setProperty('--ink-left-start', rail && !rail.offsetWidth ? '50px' : '8px');
+      element.style.setProperty('--ink-row-length', (vertical ? rowRef.current?.offsetHeight : rowRef.current?.offsetWidth) + 'px');
+      element.style.setProperty('--ink-popup-height', (popupRef.current?.offsetHeight ?? 0) + 'px');
+      notifyLayout();
+    };
     const approach = (event: PointerEvent) => {
-      if (event.pointerType === 'touch' || event.buttons !== 0 || isInkPointerActive()) return;
+      if (drag.current || event.pointerType === 'touch' || event.buttons !== 0 || isInkPointerActive()) return;
       if (expandedRef.current && event.target instanceof Node && element.contains(event.target)) {
         stopTimer();
         return;
@@ -176,15 +222,52 @@ export default function ToolbarShell({ controls }: { controls: InkToolbarControl
     update();
     const observer = new ResizeObserver(update);
     observer.observe(parent);
+    if (rail) observer.observe(rail);
+    if (rowRef.current) observer.observe(rowRef.current);
+    if (popupRef.current) observer.observe(popupRef.current);
     parent.addEventListener('pointermove', approach, { passive: true });
     return () => {
       observer.disconnect();
       parent.removeEventListener('pointermove', approach);
     };
-  }, [expand, hideLater, stopTimer]);
+  }, [expand, hideLater, stopTimer, vertical, panel]);
   useEffect(() => {
     notifyLayout();
-  }, [dock, expanded, panelOpen, panel]);
+  }, [dock, offset, expanded, panelOpen, panel]);
+
+  const dragHandlers = {
+    onPointerDown(event: ReactPointerEvent<HTMLButtonElement>) {
+      ignoreGripClick.current = false;
+      if (event.button !== 0 || drag.current || writing || isInkPointerActive()) return;
+      event.stopPropagation();
+      drag.current = { id: event.pointerId, x: event.clientX, y: event.clientY, element: event.currentTarget, moved: false };
+      event.currentTarget.setPointerCapture?.(event.pointerId);
+    },
+    onPointerMove(event: ReactPointerEvent<HTMLButtonElement>) {
+      const gesture = drag.current;
+      if (!gesture || gesture.id !== event.pointerId || !band.current) return;
+      if (!gesture.moved) {
+        if (Math.hypot(event.clientX - gesture.x, event.clientY - gesture.y) < 5) return;
+        gesture.moved = true;
+        stopTimer();
+        closePanel();
+      }
+      const next = nearestInkToolbarPosition(band.current.getBoundingClientRect(), event.clientX, event.clientY, dock, allowLeftDock);
+      if (dragFrame.current !== undefined) cancelAnimationFrame(dragFrame.current);
+      dragFrame.current = requestAnimationFrame(() => { dragFrame.current = undefined; setPreviewPosition(next); });
+    },
+    onPointerUp(event: ReactPointerEvent<HTMLButtonElement>) {
+      if (drag.current?.id !== event.pointerId) return;
+      const rect = band.current?.getBoundingClientRect();
+      finishDockDrag(rect ? nearestInkToolbarPosition(rect, event.clientX, event.clientY, dock, allowLeftDock) : undefined);
+    },
+    onPointerCancel(event: ReactPointerEvent<HTMLButtonElement>) {
+      if (drag.current?.id === event.pointerId) finishDockDrag();
+    },
+    onLostPointerCapture(event: ReactPointerEvent<HTMLButtonElement>) {
+      if (drag.current?.id === event.pointerId) finishDockDrag();
+    },
+  };
 
   function activate(slot: ToolSlot) {
     if (slot === 'select' || slot === 'insert' || slot === 'eraser') {
@@ -233,7 +316,8 @@ export default function ToolbarShell({ controls }: { controls: InkToolbarControl
   </>;
 
   return <div className="ink-toolbar-band" data-ink-toolbar data-dock={dock}
-    data-expanded={expanded} data-writing={writing}
+    data-expanded={expanded} data-writing={writing} data-dragging={previewPosition !== null}
+    style={{ '--ink-dock-offset': offset * 100 + '%' } as CSSProperties}
     ref={band}
     onTransitionEnd={event => { if (event.propertyName === 'transform' || event.propertyName === 'grid-template-rows') notifyLayout(); }}
     onPointerLeave={event => {
@@ -243,8 +327,11 @@ export default function ToolbarShell({ controls }: { controls: InkToolbarControl
       hideLater();
     }}>
     <div className="ink-toolbar-dock">
-      <div className="ink-toolbar-row" role="toolbar" aria-label="手写工具栏" aria-hidden={!expanded}
+      <div ref={rowRef} className="ink-toolbar-row" role="toolbar" aria-label="手写工具栏"
+        aria-orientation={vertical ? 'vertical' : 'horizontal'} aria-hidden={!expanded}
         onPointerEnter={stopTimer} onPointerMove={stopTimer}>
+        <button type="button" className="ink-toolbar-drag-grip" aria-label="拖动手写工具栏" data-tooltip="拖动手写工具栏"
+          disabled={!expanded || writing} {...dragHandlers}>⠿</button>
         <div className="ink-toolbar-instruments">{instruments.map(button)}</div>
         <span className="ink-toolbar-divider" />
         <div className="ink-toolbar-aux">{button('select')}{button('insert')}{history()}</div>
@@ -254,7 +341,8 @@ export default function ToolbarShell({ controls }: { controls: InkToolbarControl
         </InkToolButton>
       </div>
       <button type="button" ref={handle} className="ink-toolbar-handle" aria-label="展开手写工具栏" data-tooltip="展开手写工具栏（N）"
-        disabled={expanded || writing} aria-expanded={expanded} onClick={expand} />
+        disabled={writing} aria-expanded={expanded} {...dragHandlers}
+        onClick={() => { if (!expanded && !ignoreGripClick.current) expand(); ignoreGripClick.current = false; }} />
     </div>
     {panel && <section ref={popupRef} className="ink-toolbar-popover"
       data-ink-tool-popover data-open={panelOpen} aria-hidden={!panelOpen} role="dialog"
@@ -264,7 +352,7 @@ export default function ToolbarShell({ controls }: { controls: InkToolbarControl
         <strong>{panel === 'more' ? '更多工具' : panel === 'alternate'
           ? <PenVariants pen={controls.alternatePen} render={variant => toolLabel('alternate', variant)} />
           : toolLabel(panel, controls.alternatePen)}</strong>
-        <InkToolButton label="关闭工具盘" onPress={closePanel}><Icon name="close" /></InkToolButton>
+        <IconAction label="关闭工具盘" onClick={closePanel} />
       </header>
       <div className="ink-toolbar-panel-content" key={panel}>{panel === 'more'
         ? <>

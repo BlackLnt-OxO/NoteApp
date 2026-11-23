@@ -1,4 +1,5 @@
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
+import { useShallow } from 'zustand/react/shallow';
 import { useNoteStore } from '../store';
 import { DEFAULT_COLORS } from '../types';
 import { askConfirm } from './ConfirmDialog';
@@ -11,20 +12,22 @@ interface SidebarProps {
 }
 
 const Sidebar: React.FC<SidebarProps> = ({ onCreateNote }) => {
-  const { notes, tags, activeTag, setActiveTag, addTag, deleteTag, updateTag, settings } = useNoteStore();
-  const fs = settings.fontSize;
+  const { notes, tags, activeTag, setActiveTag, addTag, deleteTag, updateTag, fs } = useNoteStore(useShallow(state => ({
+    notes: state.notes, tags: state.tags, activeTag: state.activeTag, setActiveTag: state.setActiveTag,
+    addTag: state.addTag, deleteTag: state.deleteTag, updateTag: state.updateTag, fs: state.settings.fontSize,
+  })));
   const [editingTag, setEditingTag] = useState<string | null>(null);
   const [hoverTag, setHoverTag] = useState<string | null>(null);
   const [newTagName, setNewTagName] = useState('');
   const [showAddTag, setShowAddTag] = useState(false);
   const [tagColorIndex, setTagColorIndex] = useState(0);
 
-  const filteredCounts: Record<string, number> = {};
-  tags.forEach((tag) => {
-    filteredCounts[tag.id] = tag.id === 'all'
-      ? notes.length
-      : notes.filter((n) => n.tag === tag.id).length;
-  });
+  const filteredCounts = useMemo(() => {
+    const counts: Record<string, number> = Object.create(null);
+    for (const note of notes) counts[note.tag] = (counts[note.tag] ?? 0) + 1;
+    counts.all = notes.length;
+    return counts;
+  }, [notes]);
 
   const handleAddTag = () => {
     if (!newTagName.trim()) return;
@@ -64,7 +67,7 @@ const Sidebar: React.FC<SidebarProps> = ({ onCreateNote }) => {
       position: 'relative',
       zIndex: 1,
       overflow: 'hidden',
-      background: 'rgba(var(--sidebar-tint), var(--workspace-surface-opacity, var(--sidebar-base-opacity)))',
+      background: 'rgba(var(--sidebar-tint), var(--workspace-sidebar-opacity, var(--sidebar-base-opacity)))',
     }}>
       <WorkspaceModeSwitch />
 
@@ -121,6 +124,7 @@ const Sidebar: React.FC<SidebarProps> = ({ onCreateNote }) => {
           return (
           <div
             key={tag.id}
+            data-pointer-button
             onClick={() => setActiveTag(tag.id)}
             onMouseEnter={() => setHoverTag(tag.id)}
             onMouseLeave={() => setHoverTag(null)}

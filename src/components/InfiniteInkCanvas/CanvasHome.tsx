@@ -1,3 +1,4 @@
+import IconAction from '../IconAction';
 /**
  * CanvasHome — multi-canvas home screen (mirrors the PDF library home).
  *
@@ -194,11 +195,15 @@ const CanvasHome: React.FC<{ onOpen: (id: string) => void; onNew: () => void }> 
       {filtered.length > 0 && (
         <FlowGrid
           items={filtered}
+          category={selectedCategory}
           itemWidth={CARD_W}
           itemHeight={CARD_H}
           gap={14}
           getId={(c) => c.id}
-          onReorder={reorderCanvases}
+          onReorder={(from, to) => reorderCanvases(
+            canvases.findIndex(canvas => canvas.id === filtered[from].id),
+            canvases.findIndex(canvas => canvas.id === filtered[to].id),
+          )}
           onCardClick={(c) => onOpen(c.id)}
           renderCard={(c, _idx, hovered, dragState) => (
             <LiquidGlassCard radius={12} dragState={dragState}
@@ -229,8 +234,7 @@ const CanvasHome: React.FC<{ onOpen: (id: string) => void; onNew: () => void }> 
                       <path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z" />
                     </svg>
                   </button>
-                  <button
-                    aria-label="删除"
+                  <IconAction danger label="删除画布"
                     onClick={(e) => {
                       e.stopPropagation();
                       askConfirm({
@@ -240,13 +244,9 @@ const CanvasHome: React.FC<{ onOpen: (id: string) => void; onNew: () => void }> 
                       });
                     }}
                     style={{
-                      width: 22, height: 22, borderRadius: '50%', border: 'none', cursor: 'pointer',
-                      background: 'rgba(231,76,60,0.8)', color: '#fff', fontSize: fs(12, gfs), lineHeight: 1,
-                      display: 'flex', alignItems: 'center', justifyContent: 'center',
+                      width: 22, height: 22,
                     }}
-                  >
-                    ×
-                  </button>
+                  />
                 </div>
               )}
 

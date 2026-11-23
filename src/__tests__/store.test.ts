@@ -15,6 +15,7 @@ const initialState = {
   tags: DEFAULT_TAGS,
   settings: DEFAULT_SETTINGS,
   viewMode: 'notes' as const,
+  sidebarCollapsed: false,
   mindMap: {
     offsetX: 0,
     offsetY: 0,
@@ -406,10 +407,22 @@ describe('NoteStore', () => {
   // =========================================================================
 
   describe('setViewMode', () => {
-    it('switches between notes and inkcanvas', () => {
-      useNoteStore.getState().setViewMode('inkcanvas');
-      expect(useNoteStore.getState().viewMode).toBe('inkcanvas');
-      useNoteStore.getState().setViewMode('notes');
+    it.each([
+      ['notes', 'inkcanvas', true, true],
+      ['notes', 'pdf', true, true],
+      ['notes', 'inkcanvas', false, false],
+      ['notes', 'pdf', false, false],
+      ['inkcanvas', 'pdf', true, true],
+      ['pdf', 'inkcanvas', true, true],
+      ['inkcanvas', 'pdf', false, false],
+      ['pdf', 'inkcanvas', false, false],
+      ['inkcanvas', 'notes', true, false],
+      ['pdf', 'notes', true, false],
+      ['notes', 'notes', true, true],
+    ] as const)('switches from %s to %s with sidebarCollapsed %s → %s', (from, to, collapsed, expected) => {
+      useNoteStore.setState({ viewMode: from, sidebarCollapsed: collapsed });
+      useNoteStore.getState().setViewMode(to);
+      expect(useNoteStore.getState()).toMatchObject({ viewMode: to, sidebarCollapsed: expected });
     });
   });
 
@@ -538,6 +551,18 @@ describe('NoteStore', () => {
       expect(useNoteStore.getState().settings.cardFrost).toBe(expected);
     });
 
+    it.each([
+      [{ inkToolbarDock: 'top' }, { edge: 'top', offset: .5 }],
+      [{ inkToolbarDock: 'bottom' }, { edge: 'bottom', offset: .5 }],
+      [{ inkToolbarPosition: { edge: 'left', offset: .24 } }, { edge: 'left', offset: .24 }],
+      [{ inkToolbarPosition: { edge: 'right', offset: 1.2 } }, { edge: 'right', offset: 1 }],
+    ])('loads the toolbar placement from %j', async (settings, expected) => {
+      vi.mocked(window.electronAPI!.loadStore).mockResolvedValueOnce({ settings });
+      await useNoteStore.getState().loadData();
+      expect(useNoteStore.getState().settings.inkToolbarPosition).toEqual(expected);
+      expect(useNoteStore.getState().settings).not.toHaveProperty('inkToolbarDock');
+    });
+
     it('falls back to localStorage when electronAPI is absent', async () => {
       const original = window.electronAPI;
       delete (window as any).electronAPI;
@@ -579,6 +604,24 @@ describe('NoteStore', () => {
       expect(s.notes[0].id).toBe('welcome_1');
       expect(s.notes[1].id).toBe('welcome_2');
       expect(s.notes[2].id).toBe('welcome_3');
+    });
+
+    it.each([
+      [null, 'bundled-wallpaper', true],
+      [{ settings: {} }, 'bundled-wallpaper', true],
+      [{ settings: { backgroundImage: null } }, null, false],
+      [{ settings: { backgroundImage: 'custom-wallpaper' } }, 'custom-wallpaper', false],
+    ] as const)('preserves the wallpaper preference from %j', async (saved, expected, needsDefault) => {
+      const api = window.electronAPI!;
+      vi.mocked(api.loadStore).mockResolvedValueOnce(saved);
+      const getDefault = vi.mocked(api.getDefaultBackground);
+      getDefault.mockClear();
+      if (needsDefault) getDefault.mockResolvedValueOnce('bundled-wallpaper');
+
+      await useNoteStore.getState().loadData();
+
+      expect(useNoteStore.getState().settings.backgroundImage).toBe(expected);
+      expect(getDefault).toHaveBeenCalledTimes(needsDefault ? 1 : 0);
     });
 
     it('handles empty data object gracefully (no welcome notes — empty object is truthy)', async () => {

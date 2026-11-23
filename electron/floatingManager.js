@@ -1,8 +1,59 @@
 const { BrowserWindow, screen, app } = require('electron');
 const path = require('path');
 const fs = require('fs');
+const { BUTTON, closeVisibility } = require('./floatingCloseVisibility');
 
 const floatingWindows = new Map();
+const closeGlyph = '<svg aria-hidden="true" viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.55" stroke-linecap="round"><path d="m4 4 8 8m0-8-8 8"/></svg>';
+const inlineData = value => JSON.stringify(value).replace(/</g, '\\u003c');
+const closeOpacities = new WeakMap();
+let transparent = false;
+let penetrate = false;
+let cursorTimer;
+
+function canSample(win) {
+  return !win.isDestroyed() && win.isVisible() && !win.isMinimized()
+    && !win.webContents.isLoadingMainFrame();
+}
+
+function sampleCloseButtons() {
+  const visible = transparent && !penetrate ? Array.from(floatingWindows.values()).filter(canSample) : [];
+  if (!visible.length) {
+    clearInterval(cursorTimer);
+    cursorTimer = undefined;
+    return;
+  }
+  const cursor = screen.getCursorScreenPoint();
+  for (const win of visible) {
+    const opacity = Math.round(closeVisibility(cursor, win.getContentBounds()) * 100) / 100;
+    if (closeOpacities.get(win) === opacity) continue;
+    closeOpacities.set(win, opacity);
+    win.webContents.send('float:closeVisibility', opacity);
+  }
+  cursorTimer ??= setInterval(sampleCloseButtons, 1000 / 30);
+}
+
+function applyInteraction(win) {
+  if (win.isDestroyed()) return;
+  if (penetrate) win.setIgnoreMouseEvents(true, { forward: true });
+  else win.setIgnoreMouseEvents(false);
+  if (win.webContents.isLoadingMainFrame()) return;
+  win.webContents.send('float:penetrateChanged', penetrate);
+  win.webContents.send('float:transparentChanged', transparent);
+  closeOpacities.delete(win);
+}
+
+function togglePenetrate() {
+  penetrate = !penetrate;
+  for (const win of floatingWindows.values()) applyInteraction(win);
+  sampleCloseButtons();
+}
+
+function toggleTransparency() {
+  transparent = !transparent;
+  for (const win of floatingWindows.values()) applyInteraction(win);
+  sampleCloseButtons();
+}
 
 function createFloatingNote(noteData, isDev) {
   const noteId = noteData.id || `float-${Date.now()}`;
@@ -24,6 +75,7 @@ function createFloatingNote(noteData, isDev) {
       color: noteData.color || '#2d2d44',
       fontSize: noteData.fontSize || 14,
       images: noteData.images || [],
+      attachments: noteData.attachments || [],
       settingsBgOpacity: noteData.settingsBgOpacity || 0.3,
     }), 'utf-8');
   } else {
@@ -32,6 +84,7 @@ function createFloatingNote(noteData, isDev) {
       saved.content = noteData.content;
       saved.color = noteData.color;
       saved.fontSize = noteData.fontSize;
+      mergeMedia(saved, noteData);
       fs.writeFileSync(floatStateFile, JSON.stringify(saved), 'utf-8');
     } catch(e) {}
   }
@@ -95,6 +148,14 @@ function createFloatingNote(noteData, isDev) {
 
   floatWin.setAlwaysOnTop(true, 'floating');
   floatWin.setVisibleOnAllWorkspaces(true);
+  if (penetrate) floatWin.setIgnoreMouseEvents(true, { forward: true });
+  floatWin.webContents.on('did-stop-loading', () => {
+    applyInteraction(floatWin);
+    sampleCloseButtons();
+  });
+  for (const event of ['show', 'hide', 'minimize', 'restore']) {
+    floatWin.on(event, sampleCloseButtons);
+  }
 
   // Generate lightweight HTML
   const html = generateFloatHTML(noteId, savedState, noteData);
@@ -127,6 +188,7 @@ function createFloatingNote(noteData, isDev) {
   floatWin.on('closed', () => {
     clearTimeout(saveBoundsTimer);
     floatingWindows.delete(noteId);
+    sampleCloseButtons();
     try { fs.unlinkSync(tempFile); } catch(e) {}
   });
 
@@ -147,7 +209,7 @@ function generateFloatHTML(noteId, state, noteData) {
       const y = img._imgY != null ? img._imgY : 10 + i * (h + 8);
       return `<div class="fi" data-idx="${i}" style="left:${x}px;top:${y}px">
         <img src="${img.dataUrl}" style="height:${h}px" draggable="false" />
-        <button class="fidel">x</button>
+        <button class="fidel" aria-label="移除图片" title="移除图片">${closeGlyph}</button>
         <div class="firesizetl"></div>
         <div class="firesize"></div>
       </div>`;
@@ -162,6 +224,13 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI','Microsoft YaHei',s
 .root.transparent .glass-bg{background:transparent;backdrop-filter:none;-webkit-backdrop-filter:none;border-color:transparent;box-shadow:none}
 .drag-strip{height:14px;min-height:14px;flex-shrink:0;z-index:2;cursor:grab;-webkit-app-region:drag;transition:background 0.3s}
 .drag-strip:hover{background:rgba(255,255,255,0.06)}
+.float-window-close{position:absolute;z-index:3;top:${BUTTON.top}px;right:${BUTTON.right}px;width:${BUTTON.size}px;height:${BUTTON.size}px;display:grid;place-items:center;
+  padding:0;border:1px solid transparent;border-radius:5px;background:rgba(0,0,0,.24);color:#ddd;cursor:pointer;-webkit-app-region:no-drag}
+.float-window-close:hover:not(:disabled){background:rgba(255,255,255,.16);border-color:rgba(255,255,255,.24);color:#fff}
+.root.transparent .float-window-close{opacity:var(--close-visibility,0);transition:opacity 60ms linear}
+.root.transparent .float-window-close:hover:not(:disabled){opacity:1}
+.float-window-close:disabled{display:none}
+@media (prefers-reduced-motion:reduce){.root.transparent .float-window-close{transition:none}}
 .scroll-area{flex:1;overflow-y:auto;overflow-x:hidden;position:relative;z-index:1;--sb-alpha:0;transition:--sb-alpha 0.45s ease;-webkit-app-region:no-drag;border-radius:0 0 16px 16px}
 .scroll-area:hover{--sb-alpha:0.2}
 .scroll-area::-webkit-scrollbar{width:5px}
@@ -170,54 +239,134 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI','Microsoft YaHei',s
 .content{padding:14px;min-height:100%;color:rgba(255,255,255,0.95);font-size:${fontSize}px;line-height:1.5;outline:none;white-space:pre-wrap;word-break:break-word}
 .content[contenteditable="true"]{user-select:text;-webkit-user-select:text}
 .content[contenteditable="false"]{user-select:none;pointer-events:none}
+.root.drop-ready{outline:2px dashed #9182ff;outline-offset:-3px}
+.float-attachments{position:relative;z-index:1;max-height:35%;overflow:auto;padding:3px 10px 8px;-webkit-app-region:no-drag}
+.float-attachments:empty{display:none}
+.float-attachment{display:flex;align-items:center;gap:3px;padding:2px;margin-bottom:3px;border-radius:5px;background:rgba(255,255,255,.10)}
+.float-attachment button{color:#fff;border:0;background:transparent;cursor:pointer;font:inherit}
+.float-attachment button:first-child{flex:1;min-width:0;text-overflow:ellipsis;white-space:nowrap;overflow:hidden;text-align:left}
+.float-attachment button:last-child{display:grid;place-items:center;width:22px;height:22px;border-radius:5px}
+.float-attachment button:last-child:hover,.fi .fidel:hover{background:rgba(232,90,111,.28);color:#ffd1de}
 .fi{position:absolute;z-index:5;line-height:0;-webkit-app-region:no-drag}
 .fi img{border-radius:5px;display:block;cursor:grab}
-.fidel{position:absolute;top:2px;right:2px;width:18px;height:18px;border-radius:50%;background:rgba(0,0,0,0.6);border:none;color:#fff;font-size:10px;cursor:pointer;opacity:0;transition:opacity 0.15s;display:flex;align-items:center;justify-content:center}
-.fi:hover .fidel{opacity:1}
+.fidel{position:absolute;top:2px;right:2px;width:22px;height:22px;border-radius:6px;background:rgba(0,0,0,.55);border:none;color:#fff;cursor:pointer;opacity:0;transition:opacity .15s,background-color .15s;display:grid;place-items:center}
+.fi:is(:hover,:focus-within) .fidel{opacity:1}
 .firesizetl{position:absolute;top:0;left:0;width:14px;height:14px;cursor:nwse-resize;opacity:0;transition:opacity 0.15s;background:linear-gradient(135deg,rgba(255,255,255,0.4) 50%,transparent 50%)}
 .firesize{position:absolute;bottom:1px;right:1px;width:14px;height:14px;cursor:nwse-resize;opacity:0;transition:opacity 0.15s;background:linear-gradient(135deg,transparent 50%,rgba(255,255,255,0.4) 50%)}
 .fi:hover .firesize{opacity:1}
 </style></head><body>
-<div class="root" id="root">
+<div class="root${transparent ? ' transparent' : ''}" id="root">
 <div class="glass-bg"></div>
 <div class="drag-strip"></div>
+<button class="float-window-close" aria-label="关闭磁贴" title="关闭磁贴"${penetrate ? ' disabled' : ''}>${closeGlyph}</button>
 <div class="scroll-area">
-<div class="content" id="content" contenteditable="true">${content}</div>
+<div class="content" id="content" contenteditable="${!penetrate}">${content}</div>
 ${imgsHTML}
 </div>
+<div class="float-attachments"></div>
 </div>
 <script>
-let penetrate = false;
-let transparent = false;
+let penetrate = ${penetrate};
 const root = document.getElementById('root');
 const scrollArea = document.querySelector('.scroll-area');
 const content = document.getElementById('content');
-let imgData = ${JSON.stringify(images)};
+let imgData = ${inlineData(images)};
+const closeGlyph = ${inlineData(closeGlyph)};
+const noteId = ${inlineData(noteId)};
+const attachments = document.querySelector('.float-attachments');
+const closeButton = document.querySelector('.float-window-close');
+closeButton.onclick = () => { if (!penetrate) window.electronAPI.closeFloatingNote(noteId); };
+window.electronAPI.onFloatCloseVisibility(opacity => closeButton.style.setProperty('--close-visibility', String(opacity)));
+
+function renderAttachments(items) {
+  attachments.replaceChildren();
+  for (const item of items) {
+    const row = document.createElement('div');
+    row.className = 'float-attachment';
+    const open = document.createElement('button');
+    open.textContent = item.path.split(/[\\\\/]/).pop();
+    open.title = item.path;
+    open.onclick = () => window.electronAPI.openFloatingAttachment(noteId, item.id);
+    const remove = document.createElement('button');
+    remove.innerHTML = closeGlyph;
+    remove.setAttribute('aria-label', '移除附件');
+    remove.onclick = () => window.electronAPI.removeFloatingMedia(noteId, item.id, 'attachment');
+    row.append(open, remove);
+    attachments.appendChild(row);
+  }
+}
+renderAttachments(${inlineData(state.attachments || [])});
+
+root.addEventListener('dragover', event => {
+  if (penetrate || !Array.from(event.dataTransfer.types).includes('Files')) return;
+  event.preventDefault();
+  event.dataTransfer.dropEffect = 'copy';
+  root.classList.add('drop-ready');
+});
+root.addEventListener('dragleave', event => {
+  if (!event.relatedTarget || !root.contains(event.relatedTarget)) root.classList.remove('drop-ready');
+});
+root.addEventListener('drop', event => {
+  if (!Array.from(event.dataTransfer.types).includes('Files')) return;
+  event.preventDefault();
+  root.classList.remove('drop-ready');
+  if (penetrate) return;
+  const paths = Array.from(event.dataTransfer.files, file => {
+    try { return window.electronAPI.getDroppedFilePath(file); } catch { return ''; }
+  });
+  void window.electronAPI.dropOnFloatingNote(noteId, paths);
+});
+window.electronAPI.onFloatingMedia(({ images, attachments }) => {
+  const focusImage = document.activeElement?.closest('.fi');
+  for (const item of scrollArea.querySelectorAll('.fi')) item.remove();
+  imgData = images;
+  images.forEach((item, index) => {
+    const wrap = document.createElement('div');
+    const image = document.createElement('img');
+    const height = item._previewH || 100;
+    wrap.className = 'fi';
+    wrap.style.left = (item._imgX ?? 10) + 'px';
+    wrap.style.top = (item._imgY ?? (10 + index * (height + 8))) + 'px';
+    image.src = item.dataUrl;
+    image.style.height = height + 'px';
+    image.draggable = false;
+    wrap.appendChild(image);
+    wrap.insertAdjacentHTML('beforeend', '<button class="fidel" aria-label="移除图片" title="移除图片">' + closeGlyph +
+      '</button><div class="firesizetl"></div><div class="firesize"></div>');
+    scrollArea.appendChild(wrap);
+    bindImage(wrap, index);
+  });
+  renderAttachments(attachments);
+  if (focusImage) content.focus({preventScroll:true});
+});
 
 // Listen for global penetrate changes from main process
 window.electronAPI.onFloatPenetrateChanged((enabled) => {
   penetrate = enabled;
+  closeButton.disabled = enabled;
+  if (enabled) closeButton.style.removeProperty('--close-visibility');
   content.contentEditable = enabled ? 'false' : 'true';
 });
 // Listen for transparency toggle
 window.electronAPI.onFloatTransparentChanged((enabled) => {
-  transparent = enabled;
-  if (enabled) root.classList.add('transparent');
-  else root.classList.remove('transparent');
+  if (!enabled) closeButton.style.removeProperty('--close-visibility');
+  root.classList.toggle('transparent', enabled);
 });
 // Sync text edits
 content.addEventListener('input', () => {
   window.electronAPI.updateFloatContent('${noteId}', content.innerText);
 });
 // Image drag
-document.querySelectorAll('.fi').forEach((wrap, idx) => {
+document.querySelectorAll('.fi').forEach(bindImage);
+function bindImage(wrap, idx) {
   const img = wrap.querySelector('img');
   const del = wrap.querySelector('.fidel');
   const res = wrap.querySelector('.firesize');
   const restl = wrap.querySelector('.firesizetl');
-  del.onclick = (e) => { e.stopPropagation(); imgData.splice(idx,1); saveState(); wrap.remove(); };
+  del.onclick = (e) => { e.stopPropagation(); void window.electronAPI.removeFloatingMedia(noteId, imgData[idx].id, 'image'); };
   // Top-left resize (anchor bottom-right)
   restl.onpointerdown = (e) => {
+    if (e.button !== 0) return;
     e.preventDefault(); e.stopPropagation();
     const startX = e.clientX, startY = e.clientY, startH = imgData[idx]._previewH || 100;
     const startImgX = imgData[idx]._imgX != null ? imgData[idx]._imgX : 10;
@@ -233,11 +382,15 @@ document.querySelectorAll('.fi').forEach((wrap, idx) => {
       imgData[idx]._imgX = startImgX + startW - nw; wrap.style.left = (startImgX + startW - nw) + 'px';
       imgData[idx]._imgY = startImgY + startH - nh; wrap.style.top = (startImgY + startH - nh) + 'px';
     };
-    const mu = () => { document.body.style.cursor=''; window.removeEventListener('pointermove',mm); window.removeEventListener('pointerup',mu); saveState(); };
-    window.addEventListener('pointermove', mm); window.addEventListener('pointerup', mu);
+    followImagePointer(e, mm, saveState, () => {
+      imgData[idx]._previewH = startH; img.style.height = startH+'px';
+      imgData[idx]._imgX = startImgX; wrap.style.left = startImgX+'px';
+      imgData[idx]._imgY = startImgY; wrap.style.top = startImgY+'px';
+    });
   };
   // Bottom-right resize
   res.onpointerdown = (e) => {
+    if (e.button !== 0) return;
     e.preventDefault(); e.stopPropagation();
     const startX = e.clientX, startY = e.clientY, startH = imgData[idx]._previewH || 100;
     document.body.style.cursor = 'nwse-resize';
@@ -246,12 +399,11 @@ document.querySelectorAll('.fi').forEach((wrap, idx) => {
       const nh = Math.max(30, startH + d);
       imgData[idx]._previewH = nh; img.style.height = nh + 'px';
     };
-    const mu = () => { document.body.style.cursor=''; window.removeEventListener('pointermove',mm); window.removeEventListener('pointerup',mu); saveState(); };
-    window.addEventListener('pointermove', mm); window.addEventListener('pointerup', mu);
+    followImagePointer(e, mm, saveState, () => { imgData[idx]._previewH = startH; img.style.height = startH+'px'; });
   };
   // Drag
   img.onpointerdown = (e) => {
-    if (penetrate) return;
+    if (penetrate || e.button !== 0) return;
     e.preventDefault(); e.stopPropagation();
     const ih = imgData[idx]._previewH || 100;
     const ghostH = ih * 0.92;
@@ -260,29 +412,60 @@ document.querySelectorAll('.fi').forEach((wrap, idx) => {
     const sr = ghostH / ih;
     const ghost = document.createElement('img');
     ghost.src = img.src;
-    ghost.style.cssText = 'position:fixed;z-index:10000;pointer-events:none;opacity:0.8;border-radius:6px;box-shadow:0 8px 24px rgba(0,0,0,0.4);';
+    ghost.style.cssText = 'position:fixed;z-index:10000;pointer-events:none;opacity:0.8;border-radius:6px;box-shadow:0 8px 24px rgba(0,0,0,0.4);will-change:transform;';
     ghost.style.height = ghostH+'px'; ghost.style.width = 'auto';
     ghost.style.left = (e.clientX - offX*sr)+'px'; ghost.style.top = (e.clientY - offY*sr)+'px';
     document.body.appendChild(ghost);
-    let moved = false;
-    const mm = (ev) => {
-      moved = true;
-      ghost.style.left = (ev.clientX - offX*sr)+'px'; ghost.style.top = (ev.clientY - offY*sr)+'px';
-    };
-    const mu = (ev) => {
+    followImagePointer(e, (ev) => {
+      ghost.style.transform = 'translate3d('+(ev.clientX-e.clientX)+'px,'+(ev.clientY-e.clientY)+'px,0)';
+    }, (ev) => {
       ghost.remove();
-      window.removeEventListener('pointermove',mm); window.removeEventListener('pointerup',mu);
-      if (!moved) return;
       const srect = scrollArea.getBoundingClientRect();
       imgData[idx]._imgX = ev.clientX - srect.left - offX;
       imgData[idx]._imgY = ev.clientY - srect.top - offY;
       wrap.style.left = imgData[idx]._imgX + 'px';
       wrap.style.top = imgData[idx]._imgY + 'px';
       saveState();
-    };
-    window.addEventListener('pointermove', mm); window.addEventListener('pointerup', mu);
+    }, () => ghost.remove());
   };
-});
+}
+
+function followImagePointer(start, paint, commit, reset) {
+  const handle = start.currentTarget;
+  const pointer = start.pointerId;
+  let latest;
+  let frame;
+  handle.setPointerCapture(pointer);
+  const clear = () => {
+    if (frame !== undefined) cancelAnimationFrame(frame);
+    window.removeEventListener('pointermove', move, true);
+    window.removeEventListener('pointerup', finish, true);
+    window.removeEventListener('pointercancel', cancel, true);
+    window.removeEventListener('blur', abort);
+    handle.removeEventListener('lostpointercapture', cancel);
+    if (handle.hasPointerCapture(pointer)) handle.releasePointerCapture(pointer);
+    document.body.style.cursor = '';
+  };
+  const abort = () => { clear(); reset(); };
+  const cancel = event => { if (event.pointerId === pointer) abort(); };
+  const move = event => {
+    if (event.pointerId !== pointer) return;
+    latest = event;
+    if (frame === undefined) frame = requestAnimationFrame(() => { frame = undefined; paint(latest); });
+  };
+  const finish = event => {
+    if (event.pointerId !== pointer) return;
+    clear();
+    if (!latest && event.clientX === start.clientX && event.clientY === start.clientY) { reset(); return; }
+    paint(event);
+    commit(event);
+  };
+  window.addEventListener('pointermove', move, { capture: true, passive: true });
+  window.addEventListener('pointerup', finish, true);
+  window.addEventListener('pointercancel', cancel, true);
+  window.addEventListener('blur', abort);
+  handle.addEventListener('lostpointercapture', cancel);
+}
 
 function saveState() {
   window.electronAPI.saveFloatState('${noteId}', { images: imgData });
@@ -297,6 +480,27 @@ function closeFloatingNote(noteId) {
   return true;
 }
 
+function mergeMedia(saved, data) {
+  if (Array.isArray(data.images)) {
+    const current = new Map((saved.images || []).map(image => [image.id, image]));
+    saved.images = data.images.map(image => {
+      const old = current.get(image.id);
+      return old ? { ...image, _imgX: old._imgX ?? image._imgX, _imgY: old._imgY ?? image._imgY, _previewH: old._previewH ?? image._previewH } : image;
+    });
+  }
+  if (Array.isArray(data.attachments)) saved.attachments = data.attachments;
+}
+
+function syncFloatingMedia(noteId, media) {
+  const win = getWindow(noteId);
+  if (!win) return;
+  const file = path.join(app.getPath('userData'), 'floating-notes', `${noteId}.json`);
+  const saved = JSON.parse(fs.readFileSync(file, 'utf-8'));
+  mergeMedia(saved, media);
+  fs.writeFileSync(file, JSON.stringify(saved), 'utf-8');
+  win.webContents.send('floating:media', { images: saved.images || [], attachments: saved.attachments || [] });
+}
+
 function updateFloatingNote(noteId, noteData) {
   // Update saved state with new content/color/font/images from main note
   const userDataPath = app.getPath('userData');
@@ -309,6 +513,7 @@ function updateFloatingNote(noteId, noteData) {
       if (noteData.color !== undefined) saved.color = noteData.color;
       if (noteData.fontSize !== undefined) saved.fontSize = noteData.fontSize;
       if (noteData.images !== undefined) saved.images = noteData.images;
+      if (noteData.attachments !== undefined) saved.attachments = noteData.attachments;
       if (noteData.settingsBgOpacity !== undefined) saved.settingsBgOpacity = noteData.settingsBgOpacity;
       fs.writeFileSync(floatStateFile, JSON.stringify(saved), 'utf-8');
       // Regenerate + reload the float window so content/images stay in sync
@@ -398,7 +603,7 @@ function generateFloatingNoteHTML(noteData) {
 </head>
 <body>
 <div class="float-note">
-  <button class="float-close" onclick="window.electronAPI.closeFloatingNote('${noteDataId}')" aria-label="关闭">x</button>
+  <button class="float-close" onclick="window.electronAPI.closeFloatingNote('${noteDataId}')" aria-label="关闭">${closeGlyph}</button>
   <div class="float-content" contenteditable="true">${escapedContent}</div>
   ${imagesHTML ? `<div class="float-images">${imagesHTML}</div>` : ''}
 </div>
@@ -423,4 +628,5 @@ function getWindow(noteId) {
   return floatingWindows.get(noteId);
 }
 
-module.exports = { createFloatingNote, closeFloatingNote, updateFloatingNote, closeAll, updateAllFontSize, getWindow, floatingWindows };
+module.exports = { createFloatingNote, closeFloatingNote, updateFloatingNote, syncFloatingMedia, closeAll, updateAllFontSize,
+  getWindow, floatingWindows, togglePenetrate, toggleTransparency };

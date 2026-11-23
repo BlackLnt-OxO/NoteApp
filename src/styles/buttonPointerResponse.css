@@ -1,0 +1,133 @@
+:where(button, [role="button"], [data-pointer-button], .color-swatch, .color-dot):where([data-pointer-scope], [data-pointer-scope] *) {
+  position: relative;
+  transition: background-color var(--transition), border-color var(--transition), color var(--transition);
+}
+
+@property --card-pointer-light-strength {
+  syntax: '<percentage>';
+  inherits: false;
+  initial-value: 0%;
+}
+
+.liquid-glass-card:where([data-pointer-scope] *)::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  padding: 2px;
+  border-radius: inherit;
+  pointer-events: none;
+  transition: --card-pointer-light-strength 200ms ease-out;
+  background: radial-gradient(
+    circle 85px at var(--pointer-light-x, 50%) var(--pointer-light-y, 50%),
+    color-mix(in srgb, var(--pointer-light-color, rgb(255 255 255 / .8)) var(--card-pointer-light-strength), transparent),
+    color-mix(in srgb, var(--pointer-light-falloff, rgb(255 255 255 / .16)) var(--card-pointer-light-strength), transparent) 68%, transparent
+  );
+  mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+  mask-composite: exclude;
+}
+
+:where(button, [role="button"], [data-pointer-button], .color-swatch, .color-dot):where([data-pointer-scope], [data-pointer-scope] *):not(.workspace-corner-button, .asset-row, .icon-action, .pdf-nav-button)::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  scale: var(--btn-scale);
+  transition: box-shadow 200ms ease-out;
+  box-shadow: inset 0 0 0 1px transparent, inset 0 3px 12px transparent;
+}
+
+:where(button, [role="button"], [data-pointer-button], .color-swatch, .color-dot):where([data-pointer-scope], [data-pointer-scope] *):not(.workspace-corner-button, .asset-row, .icon-action, .pdf-nav-button, :disabled, [aria-disabled="true"], :has(> :disabled)):hover::after {
+  box-shadow: inset 0 0 0 1px var(--button-hover-ring, var(--ring-on-light)), inset var(--button-hover-glow, var(--glow-soft));
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .liquid-glass-card:where([data-pointer-scope] *)::before {
+    transition: none;
+  }
+
+  :where(button, [role="button"], [data-pointer-button], .color-swatch, .color-dot):where([data-pointer-scope], [data-pointer-scope] *):not(.workspace-corner-button)::after {
+    scale: 1;
+  }
+}
+
+[data-theme="light"] :where(button, [role="button"], [data-pointer-button], .liquid-glass-card):where([data-pointer-scope], [data-pointer-scope] *) {
+  --glass-border: rgb(60 49 89 / .24);
+  --glass-border-active: rgb(60 49 89 / .33);
+}
+
+[data-theme="light"] .liquid-glass-card:not(.liquid-glass-card--note),
+.liquid-glass-card[data-pointer-surface="light"] {
+  --pointer-light-color: rgb(54 41 74 / .86);
+  --pointer-light-falloff: rgb(54 41 74 / .18);
+}
+
+:is(.btn-accent, .btn-danger, .hover-ring-dark, .color-swatch, .color-dot, [aria-current="page"], [data-pointer-fill="solid"], .title-btn.close):where([data-pointer-scope], [data-pointer-scope] *),
+.liquid-glass-card--note :where(button, [data-pointer-button]) {
+  --button-hover-ring: var(--ring-on-dark);
+  --button-hover-glow: var(--glow-on-color);
+}
+
+[data-theme="light"] {
+  --light-button-ring: rgb(55 42 77 / .48);
+  --light-button-inset: 0 2px 10px rgb(33 23 53 / .32);
+}
+
+[data-theme="light"] :is(button, [role="button"], [data-pointer-button], .color-swatch, .color-dot):where([data-pointer-scope], [data-pointer-scope] *) {
+  --button-hover-ring: var(--light-button-ring);
+  --button-hover-glow: var(--light-button-inset);
+}
+
+[data-theme="light"] :where(button, [role="button"], [data-pointer-button], .color-swatch, .color-dot):where([data-pointer-scope], [data-pointer-scope] *):not(.workspace-corner-button, .asset-row, .icon-action, .pdf-nav-button)::after {
+  scale: none;
+}
+
+[data-theme="light"] :is(.glass-btn, .btn-accent, .btn-danger, .hover-ring-light, .hover-ring-dark):hover:not(:disabled, [aria-disabled="true"], .workspace-corner-button, :where([data-pointer-scope] *)) {
+  box-shadow: inset 0 0 0 1px var(--light-button-ring), inset var(--light-button-inset) !important;
+  transform: none;
+}
+
+.liquid-glass-card[data-pointer-glow]::before {
+  --card-pointer-light-strength: 100%;
+}
+
+.settings-dialog .settings-font-trigger {
+  border-color: var(--glass-border);
+}
+
+.settings-dialog .settings-font-trigger:hover {
+  border-color: var(--glass-border-active);
+}
+
+.settings-dialog .settings-font-trigger::after {
+  scale: none;
+  box-shadow: inset 0 0 10px transparent;
+}
+
+.settings-dialog .settings-font-trigger:hover::after {
+  box-shadow: inset 0 0 10px color-mix(in srgb, var(--button-hover-ring, var(--ring-on-light)) 26%, transparent);
+}
+
+[data-theme="light"] .settings-dialog .settings-font-trigger:hover::after {
+  box-shadow: inset var(--light-button-inset);
+}
+
+[data-theme="light"] .asset-row:hover:not(:disabled) {
+  box-shadow: inset 0 0 0 1px var(--light-button-ring), inset var(--light-button-inset);
+}
+
+[data-theme="light"] .pdf-nav-button:hover:not(:disabled) {
+  box-shadow: inset var(--light-button-inset);
+}
+
+:where(button, [role="button"], [data-pointer-button]):where([data-pointer-scope], [data-pointer-scope] *):focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+@supports not (mask-composite: exclude) {
+  .liquid-glass-card:where([data-pointer-scope] *)::before {
+    background: none;
+    box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--pointer-light-color, rgb(255 255 255 / .8)) var(--card-pointer-light-strength), transparent);
+  }
+}

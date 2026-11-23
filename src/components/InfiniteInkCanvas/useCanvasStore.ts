@@ -71,6 +71,8 @@ export interface CanvasStore {
    *  (used by multi-image import so a single import = a single undo). */
   addImageObject: (data: { dataUrl: string; x: number; y: number; width: number; height: number }, recordHistory?: boolean) => void;
   addAssetObject: (data: import('../FileLibrary/fileTypes').AssetPlacement) => void;
+  addDroppedObjects: (objects: (ImageObject | import('../FileLibrary/fileTypes').LinkedAssetObject)[]) => void;
+  relinkLocalObject: (id: string, previous: string, path: string) => boolean;
   addComment: (frame: CommentFrame) => void;
   updateComment: (previous: CommentFrame, next: CommentFrame) => void;
   resizeAssetObject: (id: string, width: number, height: number) => void;
@@ -263,6 +265,22 @@ export const useCanvasStore = create<CanvasStore>((set, get) => ({
       objects: [...state.objects, { ...data, id, type: 'asset', createdAt: Date.now() }],
       activeTool: 'select', selectedIds: [id], redoStack: [],
     }));
+  },
+
+  addDroppedObjects: objects => {
+    if (!objects.length) return;
+    get().pushHistory();
+    set(state => ({ objects: [...state.objects, ...objects], activeTool: 'select',
+      selectedIds: objects.map(object => object.id), redoStack: [] }));
+  },
+
+  relinkLocalObject: (id, previous, path) => {
+    const found = get().objects.find(object => object.type === 'asset' && object.id === id && object.sourcePath === previous);
+    if (!found) return false;
+    get().pushHistory();
+    set(state => ({ objects: state.objects.map(object => object.type === 'asset' && object === found
+      ? { ...object, assetId: undefined, sourcePath: path } : object) }));
+    return true;
   },
 
   resizeAssetObject: (id, width, height) => set(state => ({

@@ -564,6 +564,24 @@ function setupIPC() {
   });
 
   // Floating note management
+  const isFloatingSender = (event, noteId) => floatingManager.getWindow(noteId)?.webContents === event.sender;
+  ipcMain.handle('floating:drop-files', (event, noteId, paths) => {
+    if (!isFloatingSender(event, noteId) || !Array.isArray(paths) || !paths.every(file => typeof file === 'string')) return;
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('floating:file-drop', { noteId, paths });
+  });
+  ipcMain.handle('floating:open-attachment', (event, noteId, attachmentId) => {
+    if (!isFloatingSender(event, noteId) || !mainWindow || mainWindow.isDestroyed()) return;
+    mainWindow.show();
+    mainWindow.focus();
+    mainWindow.webContents.send('floating:attachment-open', { noteId, attachmentId });
+  });
+  ipcMain.handle('floating:remove-media', (event, noteId, itemId, kind) => {
+    if (!isFloatingSender(event, noteId) || !['image', 'attachment'].includes(kind)) return;
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('floating:media-removed', { noteId, itemId, kind });
+  });
+  ipcMain.handle('floating:sync-media', (event, noteId, media) => {
+    if (event.sender === mainWindow?.webContents) floatingManager.syncFloatingMedia(noteId, media);
+  });
   ipcMain.handle('floating:create', (event, noteData) => {
     return floatingManager.createFloatingNote(noteData, isDev);
   });
@@ -890,25 +908,12 @@ document.addEventListener('keydown',function(e){if(e.key==='Escape')ipcRenderer.
 
   // Default background image
   ipcMain.handle('app:getDefaultBackground', async () => {
-    // Check for default background image in app directory
-    const possiblePaths = [
-      path.join(__dirname, '..', 'LS_Camera.1184.png'),
-      path.join(__dirname, '..', '..', 'LS_Camera.1184.png'),
-      path.join(app.getAppPath(), 'LS_Camera.1184.png'),
-    ];
-
-    for (const bgPath of possiblePaths) {
-      if (fs.existsSync(bgPath)) {
-        try {
-          const data = fs.readFileSync(bgPath);
-          const dataUrl = `data:image/png;base64,${data.toString('base64')}`;
-          return dataUrl;
-        } catch (e) {
-          // continue
-        }
-      }
+    try {
+      const data = await fs.promises.readFile(path.join(__dirname, 'assets', 'default-stripes.png'));
+      return `data:image/png;base64,${data.toString('base64')}`;
+    } catch {
+      return null;
     }
-    return null;
   });
 
   // Sync data loading (for initial render, no flash)
@@ -1045,7 +1050,7 @@ window.addEventListener('mouseup',function(){
 });
 document.addEventListener('keydown',function(e){if(e.key==='Escape'){window.__capture={action:'cancel'}}});
 if(isLong){cb.textContent='开始';lb.style.display='none';}
-lb.onclick=function(){capturing=true;sel.style.outlineColor='#0f8';cb.textContent='✓ 保存';lb.style.display='none';xb.textContent='✕ 取消';document.body.style.cursor='default';window.__capture={action:'long-start',x:Math.round(selSX),y:Math.round(selSY),w:Math.round(selSW),h:Math.round(selSH)}};
+lb.onclick=function(){capturing=true;sel.style.outlineColor='#0f8';cb.textContent='✓ 保存';lb.style.display='none';xb.innerHTML='<svg aria-hidden="true" viewBox="0 0 16 16" width="12" height="12" style="vertical-align:-1px" fill="none" stroke="currentColor" stroke-width="1.55" stroke-linecap="round"><path d="m4 4 8 8m0-8-8 8"/></svg> 取消';document.body.style.cursor='default';window.__capture={action:'long-start',x:Math.round(selSX),y:Math.round(selSY),w:Math.round(selSW),h:Math.round(selSH)}};
 cb.onclick=function(){if(capturing||isLong){window.__capture={action:capturing?'long-finish':'long-start',x:Math.round(selSX),y:Math.round(selSY),w:Math.round(selSW),h:Math.round(selSH)}}else{window.__capture={action:'capture',x:Math.round(selSX),y:Math.round(selSY),w:Math.round(selSW),h:Math.round(selSH)}}};
 xb.onclick=function(){if(capturing||isLong){capturing=false;window.__capture={action:'cancel'}}else window.close()};
 </script></body></html>`;
@@ -2055,10 +2060,6 @@ function toAccelerator(shortcut) {
     .replace(/\bMeta\b/g, 'Super');
 }
 
-// Toggle states (persist across re-registrations)
-let allPenetrate = false;
-let allTransparent = false;
-
 function getShortcutActions(settings) {
   return [
     {
@@ -2071,20 +2072,7 @@ function getShortcutActions(settings) {
     },
     {
       shortcut: settings?.shortcutPenetrate || 'Ctrl+P',
-      action: () => {
-        allPenetrate = !allPenetrate;
-        for (const [id, win] of floatingManager.floatingWindows) {
-          if (win && !win.isDestroyed()) {
-            if (allPenetrate) {
-              win.setIgnoreMouseEvents(true, { forward: true });
-              win.webContents.send('float:penetrateChanged', true);
-            } else {
-              win.setIgnoreMouseEvents(false);
-              win.webContents.send('float:penetrateChanged', false);
-            }
-          }
-        }
-      },
+      action: floatingManager.togglePenetrate,
     },
     {
       shortcut: settings?.shortcutCloseAll || 'Ctrl+Shift+W',
@@ -2097,14 +2085,7 @@ function getShortcutActions(settings) {
     },
     {
       shortcut: settings?.shortcutTransparent || 'Ctrl+Shift+T',
-      action: () => {
-        allTransparent = !allTransparent;
-        for (const [id, win] of floatingManager.floatingWindows) {
-          if (win && !win.isDestroyed()) {
-            win.webContents.send('float:transparentChanged', allTransparent);
-          }
-        }
-      },
+      action: floatingManager.toggleTransparency,
     },
   ];
 }

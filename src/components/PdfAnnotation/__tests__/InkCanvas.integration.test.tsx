@@ -451,9 +451,12 @@ describe('canvas input integration', () => {
     const element = root.container.querySelector<HTMLElement>('[data-ink-object-id="photo"]')!;
     element.setPointerCapture = vi.fn();
     pointer(element, 'pointerdown', 105, 110);
+    pointer(element, 'pointermove', 175, 130);
     pointer(element, 'pointermove', 215, 140);
     expect(useCanvasStore.getState().objects[0]).toBe(image);
     expect(useCanvasStore.getState().history).toHaveLength(0);
+    expect(element.style.translate).toBe('');
+    frame();
     const [x, y] = element.style.translate.split(' ').map(Number.parseFloat);
     const scale = useNoteStore.getState().uiScale;
     expect(x).toBeCloseTo(110 / scale);

@@ -19,21 +19,17 @@ export function fileTypeLabel(kind: string): string {
   return kind === 'sequence' ? '图片序列' : (kind || '文件').toUpperCase();
 }
 
-export interface LinkedAssetObject {
+export type AssetSource = { assetId: string; sourcePath?: never } | { sourcePath: string; assetId?: never };
+
+export type LinkedAssetObject = AssetPlacement & {
   id: string;
   type: 'asset';
-  assetId: string;
-  x: number;
-  y: number;
-  width: number;
-  height: number;
   createdAt: number;
-}
+};
 
-export interface AssetPlacement {
-  assetId: string;
+export type AssetPlacement = AssetSource & {
   x: number;
   y: number;
   width: number;
   height: number;
-}
+};

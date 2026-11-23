@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import { Note, Tag, AppSettings, MindMapState, ViewMode, DEFAULT_TAGS, DEFAULT_SETTINGS, DEFAULT_COLORS } from '../types';
 import { normalizeCardFrost } from '../workspaceBackground';
+import { normalizeInkToolbarPosition } from '../inkToolbarPosition';
 
 interface NoteStore {
   // Load state
@@ -103,6 +104,7 @@ export const useNoteStore = create<NoteStore>((set, get) => ({
       color: partial.color || get().settings.defaultNoteColor || DEFAULT_COLORS[0],
       tag: partial.tag || 'general',
       images: partial.images || [],
+      ...(partial.attachments?.length ? { attachments: partial.attachments } : {}),
       createdAt: Date.now(),
       updatedAt: Date.now(),
       gridX: partial.gridX ?? 0,
@@ -190,7 +192,10 @@ export const useNoteStore = create<NoteStore>((set, get) => ({
     set((state) => ({ settings: { ...state.settings, ...data } }));
   },
 
-  setViewMode: (mode) => set({ viewMode: mode }),
+  setViewMode: (mode) => set((state) => {
+    if (mode === state.viewMode) return state;
+    return { viewMode: mode, sidebarCollapsed: mode !== 'notes' && state.sidebarCollapsed };
+  }),
 
   toggleSidebar: () => set((s) => ({ sidebarCollapsed: !s.sidebarCollapsed })),
   setSidebarCollapsed: (collapsed) => set({ sidebarCollapsed: collapsed }),
@@ -231,7 +236,14 @@ export const useNoteStore = create<NoteStore>((set, get) => ({
         if (raw) data = JSON.parse(raw);
       }
 
+      // A stored null means the user cleared the wallpaper.
+      const savedBackground = data?.settings?.backgroundImage;
+      const backgroundImage = savedBackground === undefined
+        ? (await window.electronAPI?.getDefaultBackground().catch(() => null)) ?? null
+        : savedBackground;
+
       if (data) {
+        const { inkToolbarDock, ...savedSettings } = data.settings ?? {};
         // Clear isFloating on all notes (float windows don't persist across restarts)
         const notes = (data.notes || []).map((n: Note) => ({ ...n, isFloating: false, floatWindowId: undefined }));
         set({
@@ -240,8 +252,9 @@ export const useNoteStore = create<NoteStore>((set, get) => ({
           tags: data.tags || DEFAULT_TAGS,
           settings: {
             ...DEFAULT_SETTINGS,
-            ...data.settings,
-            backgroundImage: data.settings?.backgroundImage || null,
+            ...savedSettings,
+            inkToolbarPosition: normalizeInkToolbarPosition(savedSettings.inkToolbarPosition, inkToolbarDock),
+            backgroundImage,
             cardFrost: normalizeCardFrost(data.settings?.cardFrost),
           },
           mindMap: data.mindMap || {
@@ -310,7 +323,7 @@ export const useNoteStore = create<NoteStore>((set, get) => ({
           notes: welcomeNotes,
           settings: {
             ...DEFAULT_SETTINGS,
-            backgroundImage: null,
+            backgroundImage,
           },
         });
       }
@@ -319,15 +332,6 @@ export const useNoteStore = create<NoteStore>((set, get) => ({
       set({ loaded: true });
     }
 
-    // Load default background asynchronously (slow, don't block UI)
-    if (window.electronAPI) {
-      const s = get();
-      if (!s.settings.backgroundImage) {
-        window.electronAPI.getDefaultBackground().then(bg => {
-          if (bg) set((st) => ({ settings: { ...st.settings, backgroundImage: bg } }));
-        }).catch(() => {});
-      }
-    }
   },
 }));
 

@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect, useLayoutEffect } from 'react';
+import React, { useCallback, useState, useRef, useEffect, useLayoutEffect } from 'react';
 import { useNoteStore } from '../store';
 import { fs, fsn } from '../utils';
 import { DEFAULT_COLORS } from '../types';
@@ -6,15 +6,22 @@ import { backgroundShade, cardFrostRadius } from '../workspaceBackground';
 import ColorPicker from './ColorPicker';
 import { askConfirm } from './ConfirmDialog';
 import LiquidGlassCard from './LiquidGlassCard';
+import SettingsBackdrop from './SettingsBackdrop';
+import IconAction from './IconAction';
 import { setGlassBlur } from './liquidGlassSurface';
 
-interface SettingsDialogProps { onClose: () => void; }
+interface SettingsDialogProps {
+  onClose: () => void;
+  previewBackgroundShade: (shade: number | null) => void;
+}
+
+type LiveRange = 'fontSize' | 'backgroundOpacity';
 
 const ShortcutInput: React.FC<{ value: string; onSet: (v: string) => void; gfs: number }> = ({ value, onSet, gfs }) => {
   const [capture, setCapture] = useState(false);
   return (
     <div style={{ display: 'inline-flex', alignItems: 'center', gap: fs(4, gfs), position: 'relative' }}>
-      <button className="glass-btn" onClick={() => setCapture(!capture)}
+      <button className="glass-btn" data-pointer-fill={capture ? 'solid' : undefined} onClick={() => setCapture(!capture)}
         style={{ fontSize: fs(11, gfs), padding: `${fs(3, gfs)} ${fs(8, gfs)}`, fontFamily: 'monospace', minWidth: fsn(90, gfs), textAlign: 'center',
           background: capture ? 'var(--accent)' : 'var(--glass-bg-light)', color: capture ? '#fff' : 'var(--text-primary)' }}>
         {capture ? '...' : value}
@@ -49,15 +56,50 @@ const FONT_LIST = [
   { family: '"Courier New", "Source Code Pro", monospace', name: '等宽字体' },
 ];
 
-const SettingsDialog: React.FC<SettingsDialogProps> = ({ onClose }) => {
-  const { settings, updateSettings, saveData } = useNoteStore();
-  const gfs = settings.fontSize;
+const SettingsDialog: React.FC<SettingsDialogProps> = ({ onClose, previewBackgroundShade }) => {
+  const settings = useNoteStore(s => s.settings);
+  const updateSettings = useNoteStore(s => s.updateSettings);
+  const saveData = useNoteStore(s => s.saveData);
   const [localSettings, setLocalSettings] = useState({ ...settings });
+  const gfs = localSettings.fontSize;
   const [draftCardFrost, setDraftCardFrost] = useState(settings.cardFrost);
   const previewRadius = cardFrostRadius(draftCardFrost);
   useLayoutEffect(() => { setGlassBlur(previewRadius, 'preview'); }, [previewRadius]);
-  // Sync external settings changes (e.g. font size shortcut) into local state
-  useEffect(() => { setLocalSettings(prev => ({ ...prev, ...settings })); }, [settings]);
+  const activeRange = useRef<{ key: LiveRange; pointerId: number; value: number }>();
+  const shadeFrame = useRef<number>();
+  const nextShade = useRef(0);
+  useEffect(() => {
+    if (activeRange.current?.key === 'fontSize') return;
+    setLocalSettings(previous => previous.fontSize === settings.fontSize
+      ? previous : { ...previous, fontSize: settings.fontSize });
+  }, [settings.fontSize]);
+  useLayoutEffect(() => () => {
+    if (shadeFrame.current !== undefined) cancelAnimationFrame(shadeFrame.current);
+    previewBackgroundShade(null);
+  }, [previewBackgroundShade]);
+  const commitRange = useCallback((key: LiveRange, value: number) => {
+    if (useNoteStore.getState().settings[key] !== value) updateSettings({ [key]: value });
+    if (key !== 'backgroundOpacity') return;
+    if (shadeFrame.current !== undefined) cancelAnimationFrame(shadeFrame.current);
+    shadeFrame.current = undefined;
+    previewBackgroundShade(null);
+  }, [previewBackgroundShade, updateSettings]);
+  const finishRange = useCallback((pointerId: number) => {
+    const range = activeRange.current;
+    if (!range || range.pointerId !== pointerId) return;
+    activeRange.current = undefined;
+    commitRange(range.key, range.value);
+  }, [commitRange]);
+  useEffect(() => {
+    // Preserve the browser's own capture of the slider thumb.
+    const finish = (event: PointerEvent) => finishRange(event.pointerId);
+    document.addEventListener('pointerup', finish);
+    document.addEventListener('pointercancel', finish);
+    return () => {
+      document.removeEventListener('pointerup', finish);
+      document.removeEventListener('pointercancel', finish);
+    };
+  }, [finishRange]);
   const [fontOpen, setFontOpen] = useState(false);
   const [showPicker, setShowPicker] = useState(false);
   const [pickerColor, setPickerColor] = useState('#ffffff');
@@ -89,6 +131,38 @@ const SettingsDialog: React.FC<SettingsDialogProps> = ({ onClose }) => {
   }, [fontOpen]);
 
   const handleChange = (key: string, value: any) => setLocalSettings((prev) => ({ ...prev, [key]: value }));
+
+  const liveRange = (key: LiveRange): React.InputHTMLAttributes<HTMLInputElement> => {
+    const settingValue = (input: HTMLInputElement) => key === 'fontSize'
+      ? input.valueAsNumber : (100 - input.valueAsNumber) / 100;
+    return {
+      onPointerDown(event) {
+        if (event.button !== 0 || !event.isPrimary) return;
+        activeRange.current = { key, pointerId: event.pointerId, value: settingValue(event.currentTarget) };
+      },
+      onChange(event) {
+        const value = settingValue(event.currentTarget);
+        handleChange(key, value);
+        const range = activeRange.current;
+        if (range?.key !== key) {
+          commitRange(key, value);
+          return;
+        }
+        range.value = value;
+        if (key !== 'backgroundOpacity') return;
+        nextShade.current = backgroundShade(value);
+        if (shadeFrame.current !== undefined) return;
+        shadeFrame.current = requestAnimationFrame(() => {
+          shadeFrame.current = undefined;
+          previewBackgroundShade(nextShade.current);
+        });
+      },
+      onBlur() {
+        const range = activeRange.current;
+        if (range?.key === key) finishRange(range.pointerId);
+      },
+    };
+  };
 
   const handleSave = () => {
     const nextSettings = { ...localSettings, cardFrost: draftCardFrost };
@@ -170,16 +244,19 @@ const SettingsDialog: React.FC<SettingsDialogProps> = ({ onClose }) => {
 
   const currentFontName = FONT_LIST.find(f => f.family === localSettings.fontFamily)?.name || '系统默认';
 
-  const dw = fsn(480, gfs);
+  const dw = fsn(480, settings.fontSize);
 
   return (
-    <div className="dialog-overlay"
+    <div className="dialog-overlay settings-overlay" data-pointer-scope
       onMouseDown={(e) => { (e.currentTarget as HTMLElement).dataset.mdTarget = e.target === e.currentTarget ? '1' : '0'; }}
       onMouseUp={(e) => {
         if (e.target === e.currentTarget && (e.currentTarget as HTMLElement).dataset.mdTarget === '1') onClose();
       }}>
-      <div className="dialog animate-scale-in" onClick={(e) => e.stopPropagation()} style={{ minWidth: dw, maxHeight: '85vh' }}>
-        <h3 style={{ fontSize: fs(18, gfs), marginBottom: fs(20, gfs) }}>设置</h3>
+      <div className="dialog settings-dialog frosted-dialog-shell" role="dialog" aria-modal="true" aria-labelledby="settings-heading"
+        onClick={(e) => e.stopPropagation()} style={{ width: dw, fontSize: gfs }}>
+        <SettingsBackdrop wallpaper={settings.backgroundImage} />
+        <div className="settings-scroll" data-glass-scroll-container>
+        <h3 id="settings-heading" style={{ fontSize: fs(18, gfs), marginBottom: fs(20, gfs) }}>设置</h3>
 
         <div style={sectionStyle}>
           <label style={labelStyle(gfs)}>主题模式</label>
@@ -191,7 +268,8 @@ const SettingsDialog: React.FC<SettingsDialogProps> = ({ onClose }) => {
                 setLocalSettings(prev => ({ ...prev, theme: t }));
                 updateSettings({ theme: t });
                 saveData();
-              }} className={localSettings.theme === t ? 'hover-ring-dark' : 'hover-ring-light'} style={{
+              }} data-pointer-fill={localSettings.theme === t ? 'solid' : undefined}
+                className={localSettings.theme === t ? 'hover-ring-dark' : 'hover-ring-light'} style={{
                 flex: 1, padding: `${fs(9, gfs)} ${fs(14, gfs)}`, border: '1px solid',
                 borderRadius: 'var(--radius-md)', cursor: 'pointer', fontSize: fs(13, gfs), fontFamily: 'inherit',
                 transition: 'all var(--transition)',
@@ -201,16 +279,6 @@ const SettingsDialog: React.FC<SettingsDialogProps> = ({ onClose }) => {
               }}>{t === 'dark' ? '深色' : '浅色'}</button>
             ))}
           </div>
-        </div>
-
-        <div style={sectionStyle}>
-          <label htmlFor="ink-toolbar-dock" style={labelStyle(gfs)}>手写工具栏位置</label>
-          <select id="ink-toolbar-dock" className="glass-btn" value={localSettings.inkToolbarDock}
-            onChange={event => handleChange('inkToolbarDock', event.target.value)}
-            style={{ fontSize: fs(13, gfs), colorScheme: localSettings.theme }}>
-            <option value="bottom">底部</option>
-            <option value="top">顶部</option>
-          </select>
         </div>
 
         <div style={sectionStyle}>
@@ -235,10 +303,10 @@ const SettingsDialog: React.FC<SettingsDialogProps> = ({ onClose }) => {
         <div style={sectionStyle} ref={fontDropdownRef}>
           <label style={labelStyle(gfs)}>字体</label>
           <div style={{ position: 'relative' }}>
-            <button onClick={() => setFontOpen(!fontOpen)} className="hover-ring-light" style={{
+            <button onClick={() => setFontOpen(!fontOpen)} className="settings-font-trigger" style={{
               width: '100%', padding: `${fs(10, gfs)} ${fs(14, gfs)}`,
-              background: 'var(--glass-bg-light)', backdropFilter: 'blur(10px)',
-              border: '1px solid var(--glass-border)', borderRadius: 'var(--radius-md)',
+              background: 'var(--glass-bg-light)',
+              borderWidth: 1, borderStyle: 'solid', borderRadius: 'var(--radius-md)',
               color: 'var(--text-primary)', fontSize: fs(13, gfs), fontFamily: 'inherit', cursor: 'pointer',
               textAlign: 'left', display: 'flex', justifyContent: 'space-between', transition: 'all var(--transition)',
             }}>
@@ -248,16 +316,16 @@ const SettingsDialog: React.FC<SettingsDialogProps> = ({ onClose }) => {
             {fontOpen && (
               <div style={{
                 position: 'absolute', top: 'calc(100% + 4px)', left: 0, right: 0, zIndex: 10001,
-                background: 'var(--dropdown-bg)', backdropFilter: 'blur(24px)', WebkitBackdropFilter: 'blur(24px)',
+                background: 'var(--dropdown-bg)',
                 border: '1px solid var(--glass-border)', borderRadius: 'var(--radius-md)',
-                boxShadow: '0 12px 40px rgba(0,0,0,0.35)', overflow: 'hidden', animation: 'scaleIn 0.15s ease-out',
+                boxShadow: '0 12px 40px rgba(0,0,0,0.35)', padding: '6px 10px', overflow: 'hidden', animation: 'scaleIn 0.15s ease-out',
               }}>
                 {FONT_LIST.map((f) => (
                   <button key={f.family} onClick={() => { handleChange('fontFamily', f.family); setFontOpen(false); }} className="hover-ring-light" style={{
                     width: '100%', padding: `${fs(9, gfs)} ${fs(14, gfs)}`,
                     background: localSettings.fontFamily === f.family ? 'var(--glass-bg-hover)' : 'transparent',
-                    border: 'none', color: localSettings.fontFamily === f.family ? 'var(--text-primary)' : 'var(--text-secondary)',
-                    fontSize: fs(13, gfs), fontFamily: f.family, cursor: 'pointer', textAlign: 'left', transition: 'background 0.1s',
+                    border: 'none', borderRadius: 'var(--radius-sm)', color: localSettings.fontFamily === f.family ? 'var(--text-primary)' : 'var(--text-secondary)',
+                    fontSize: fs(13, gfs), fontFamily: f.family, cursor: 'pointer', textAlign: 'left',
                   }}>{f.name}</button>
                 ))}
               </div>
@@ -266,9 +334,9 @@ const SettingsDialog: React.FC<SettingsDialogProps> = ({ onClose }) => {
         </div>
 
         <div style={sectionStyle}>
-          <label style={labelStyle(gfs)}>字体大小: <strong>{localSettings.fontSize}px</strong></label>
-          <input type="range" min="11" max="28" value={localSettings.fontSize}
-            onChange={(e) => { const v = parseInt(e.target.value); handleChange('fontSize', v); updateSettings({ fontSize: v }); }} style={rangeStyle} />
+          <label htmlFor="settings-font-size" style={labelStyle(gfs)}>字体大小: <strong>{gfs}px</strong></label>
+          <input id="settings-font-size" type="range" min="11" max="28" value={gfs}
+            {...liveRange('fontSize')} style={rangeStyle} />
         </div>
 
         <div style={sectionStyle}>
@@ -295,11 +363,7 @@ const SettingsDialog: React.FC<SettingsDialogProps> = ({ onClose }) => {
         <div style={sectionStyle}>
           <label htmlFor="background-shade" style={labelStyle(gfs)}>背景不透明度 <strong>{Math.round(backgroundShade(localSettings.backgroundOpacity) * 100)}%</strong></label>
           <input id="background-shade" type="range" min="0" max="100" value={Math.round(backgroundShade(localSettings.backgroundOpacity) * 100)}
-            onChange={event => {
-              const opacity = (100 - Number(event.target.value)) / 100;
-              handleChange('backgroundOpacity', opacity);
-              updateSettings({ backgroundOpacity: opacity });
-            }} style={rangeStyle} />
+            {...liveRange('backgroundOpacity')} style={rangeStyle} />
         </div>
 
         <div style={sectionStyle}>
@@ -349,8 +413,7 @@ const SettingsDialog: React.FC<SettingsDialogProps> = ({ onClose }) => {
                   background: hoverEdit === c ? '#2196F3' : 'rgba(120,120,120,0.7)',
                   alignItems: 'center', justifyContent: 'center', lineHeight: 1,
                 }}>✎</button>
-                {/* Delete X — top-right */}
-                <button onClick={(e) => {
+                <IconAction className="swatch-remove" label="移除自定义颜色" danger onClick={(e) => {
                   e.stopPropagation();
                   const newCustom = (localSettings.customNoteColors || []).filter(x => x !== c);
                   handleChange('customNoteColors', newCustom);
@@ -364,7 +427,7 @@ const SettingsDialog: React.FC<SettingsDialogProps> = ({ onClose }) => {
                   opacity: hoverSwatch === c ? 1 : 0,
                   background: hoverDelete === c ? 'var(--danger)' : 'rgba(120,120,120,0.7)',
                   alignItems: 'center', justifyContent: 'center', lineHeight: 1,
-                }}>x</button>
+                }} />
               </div>
             ))}
             {/* + button to open color picker */}
@@ -379,34 +442,6 @@ const SettingsDialog: React.FC<SettingsDialogProps> = ({ onClose }) => {
             </div>
           </div>
 
-          {/* Color picker overlay */}
-          {showPicker && (
-            <div className="dialog-overlay" style={{ zIndex: 10002 }}
-              onMouseDown={(e) => { (e.currentTarget as HTMLElement).dataset.mdTarget = e.target === e.currentTarget ? '1' : '0'; }}
-              onMouseUp={(e) => {
-                if (e.target === e.currentTarget && (e.currentTarget as HTMLElement).dataset.mdTarget === '1') {
-                  const custom = localSettings.customNoteColors || [];
-                  if (editingColor) {
-                    // Editing existing color — replace old with new
-                    const replaced = custom.map(x => x === editingColor ? pickerColor : x);
-                    handleChange('customNoteColors', replaced);
-                    if (localSettings.defaultNoteColor === editingColor) handleChange('defaultNoteColor', pickerColor);
-                  } else {
-                    // Adding new color
-                    if (!custom.includes(pickerColor)) {
-                      handleChange('customNoteColors', [...custom, pickerColor]);
-                    }
-                  }
-                  setShowPicker(false);
-                }
-              }}>
-              <ColorPicker
-                color={editingColor || '#ffffff'}
-                onChange={setPickerColor}
-                gfs={gfs}
-              />
-            </div>
-          )}
         </div>
 
         {/* Configurable shortcuts */}
@@ -427,7 +462,7 @@ const SettingsDialog: React.FC<SettingsDialogProps> = ({ onClose }) => {
           ))}
         </div>
 
-        <div className="dialog-actions">
+        <div className="dialog-actions settings-actions">
           <button className="glass-btn" onClick={onClose} style={{ fontSize: fs(13, gfs), padding: `${fs(8, gfs)} ${fs(16, gfs)}` }}>取消</button>
           <button onClick={handleSave} className="btn-accent" style={{
             padding: `${fs(9, gfs)} ${fs(22, gfs)}`,
@@ -435,7 +470,25 @@ const SettingsDialog: React.FC<SettingsDialogProps> = ({ onClose }) => {
             fontWeight: 500, cursor: 'pointer', fontFamily: 'inherit',
           }}>保存设置</button>
         </div>
+        </div>
       </div>
+      {showPicker && (
+        <div className="dialog-overlay" style={{ zIndex: 10002 }}
+          onMouseDown={e => { e.currentTarget.dataset.mdTarget = e.target === e.currentTarget ? '1' : '0'; }}
+          onMouseUp={e => {
+            if (e.target !== e.currentTarget || e.currentTarget.dataset.mdTarget !== '1') return;
+            const custom = localSettings.customNoteColors || [];
+            if (editingColor) {
+              handleChange('customNoteColors', custom.map(color => color === editingColor ? pickerColor : color));
+              if (localSettings.defaultNoteColor === editingColor) handleChange('defaultNoteColor', pickerColor);
+            } else if (!custom.includes(pickerColor)) {
+              handleChange('customNoteColors', [...custom, pickerColor]);
+            }
+            setShowPicker(false);
+          }}>
+          <ColorPicker color={editingColor || '#ffffff'} onChange={setPickerColor} gfs={gfs} />
+        </div>
+      )}
     </div>
   );
 };

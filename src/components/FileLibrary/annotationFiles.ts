@@ -7,7 +7,7 @@ export interface FileBinding {
   name: string;
   sizeBytes: number;
   digest: string;
-  fingerprints: PageFingerprints;
+  fingerprints?: PageFingerprints;
 }
 
 export interface PageFingerprints {
@@ -28,9 +28,8 @@ export interface AnnotationFile {
 }
 
 let bindingWrite: Promise<void> | undefined;
-export function pendingAnnotationBinding() { return bindingWrite; }
 export async function commitAnnotationBinding(commit: () => Promise<void>) {
-  const operation = commit();
+  const operation = bindingWrite ? bindingWrite.catch(() => {}).then(commit) : commit();
   bindingWrite = operation;
   try { await operation; }
   finally { if (bindingWrite === operation) bindingWrite = undefined; }
@@ -52,7 +51,7 @@ export async function saveAnnotationFile(id: string, file: AnnotationFile) {
   }
 }
 
-export function createBinding(file: PreparedFile, fingerprints: PageFingerprints): FileBinding {
+export function createBinding(file: PreparedFile, fingerprints?: PageFingerprints): FileBinding {
   const { paths, kind, name, sizeBytes, digest } = file;
   return { paths, kind, name, sizeBytes, digest, fingerprints };
 }
