@@ -908,25 +908,12 @@ document.addEventListener('keydown',function(e){if(e.key==='Escape')ipcRenderer.
 
   // Default background image
   ipcMain.handle('app:getDefaultBackground', async () => {
-    // Check for default background image in app directory
-    const possiblePaths = [
-      path.join(__dirname, '..', 'LS_Camera.1184.png'),
-      path.join(__dirname, '..', '..', 'LS_Camera.1184.png'),
-      path.join(app.getAppPath(), 'LS_Camera.1184.png'),
-    ];
-
-    for (const bgPath of possiblePaths) {
-      if (fs.existsSync(bgPath)) {
-        try {
-          const data = fs.readFileSync(bgPath);
-          const dataUrl = `data:image/png;base64,${data.toString('base64')}`;
-          return dataUrl;
-        } catch (e) {
-          // continue
-        }
-      }
+    try {
+      const data = await fs.promises.readFile(path.join(__dirname, 'assets', 'default-stripes.png'));
+      return `data:image/png;base64,${data.toString('base64')}`;
+    } catch {
+      return null;
     }
-    return null;
   });
 
   // Sync data loading (for initial render, no flash)

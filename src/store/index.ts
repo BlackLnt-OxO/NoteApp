@@ -236,6 +236,12 @@ export const useNoteStore = create<NoteStore>((set, get) => ({
         if (raw) data = JSON.parse(raw);
       }
 
+      // A stored null means the user cleared the wallpaper.
+      const savedBackground = data?.settings?.backgroundImage;
+      const backgroundImage = savedBackground === undefined
+        ? (await window.electronAPI?.getDefaultBackground().catch(() => null)) ?? null
+        : savedBackground;
+
       if (data) {
         const { inkToolbarDock, ...savedSettings } = data.settings ?? {};
         // Clear isFloating on all notes (float windows don't persist across restarts)
@@ -248,7 +254,7 @@ export const useNoteStore = create<NoteStore>((set, get) => ({
             ...DEFAULT_SETTINGS,
             ...savedSettings,
             inkToolbarPosition: normalizeInkToolbarPosition(savedSettings.inkToolbarPosition, inkToolbarDock),
-            backgroundImage: data.settings?.backgroundImage || null,
+            backgroundImage,
             cardFrost: normalizeCardFrost(data.settings?.cardFrost),
           },
           mindMap: data.mindMap || {
@@ -317,7 +323,7 @@ export const useNoteStore = create<NoteStore>((set, get) => ({
           notes: welcomeNotes,
           settings: {
             ...DEFAULT_SETTINGS,
-            backgroundImage: null,
+            backgroundImage,
           },
         });
       }
@@ -326,15 +332,6 @@ export const useNoteStore = create<NoteStore>((set, get) => ({
       set({ loaded: true });
     }
 
-    // Load default background asynchronously (slow, don't block UI)
-    if (window.electronAPI) {
-      const s = get();
-      if (!s.settings.backgroundImage) {
-        window.electronAPI.getDefaultBackground().then(bg => {
-          if (bg) set((st) => ({ settings: { ...st.settings, backgroundImage: bg } }));
-        }).catch(() => {});
-      }
-    }
   },
 }));
 

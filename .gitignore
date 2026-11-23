@@ -8,6 +8,7 @@ __pycache__/
 *.pyc
 *.png
 *.jpg
+!/electron/assets/default-stripes.png
 
 # PDF annotation data (dev: project dir / packaged: userData)
 pdf-annotations/

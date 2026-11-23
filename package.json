@@ -51,8 +51,7 @@
     "files": [
       "dist/**/*",
       "electron/**/*",
-      "package.json",
-      "LS_Camera.1184.png"
+      "package.json"
     ],
     "extraResources": [
       {

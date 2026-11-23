@@ -606,6 +606,24 @@ describe('NoteStore', () => {
       expect(s.notes[2].id).toBe('welcome_3');
     });
 
+    it.each([
+      [null, 'bundled-wallpaper', true],
+      [{ settings: {} }, 'bundled-wallpaper', true],
+      [{ settings: { backgroundImage: null } }, null, false],
+      [{ settings: { backgroundImage: 'custom-wallpaper' } }, 'custom-wallpaper', false],
+    ] as const)('preserves the wallpaper preference from %j', async (saved, expected, needsDefault) => {
+      const api = window.electronAPI!;
+      vi.mocked(api.loadStore).mockResolvedValueOnce(saved);
+      const getDefault = vi.mocked(api.getDefaultBackground);
+      getDefault.mockClear();
+      if (needsDefault) getDefault.mockResolvedValueOnce('bundled-wallpaper');
+
+      await useNoteStore.getState().loadData();
+
+      expect(useNoteStore.getState().settings.backgroundImage).toBe(expected);
+      expect(getDefault).toHaveBeenCalledTimes(needsDefault ? 1 : 0);
+    });
+
     it('handles empty data object gracefully (no welcome notes — empty object is truthy)', async () => {
       const electronAPI = window.electronAPI!;
       vi.mocked(electronAPI.loadStore).mockResolvedValueOnce({});
