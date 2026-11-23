@@ -25,7 +25,7 @@ import { themeCanvasColors, isDefaultBrushColor } from './themeColors';
 import { fs, fsn } from './utils';
 import { backgroundShade, cardFrostRadius } from './workspaceBackground';
 import { setGlassBlur } from './components/liquidGlassSurface';
-import { HomeButtonResponse, useButtonPointerResponse } from './components/buttonPointerResponse';
+import { HomeButtonResponse, useCardPointerResponse } from './components/buttonPointerResponse';
 import './styles/buttonPointerResponse.css';
 
 // Round glass affordance shared by the collapsed-state screenshot buttons
@@ -71,7 +71,7 @@ const App: React.FC = () => {
   }, []);
   const [assetError, setAssetError] = useState('');
 
-  useButtonPointerResponse(uiScale);
+  useCardPointerResponse(uiScale);
   useLayoutEffect(() => { setGlassBlur(frostRadius); }, [frostRadius]);
 
   useEffect(() => {

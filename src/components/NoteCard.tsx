@@ -359,7 +359,7 @@ const NoteCard: React.FC<NoteCardProps> = ({ note, isDragGhost, isDragPlaceholde
 
   return (
     <>
-      <LiquidGlassCard className="liquid-glass-card--note" radius={14}
+      <LiquidGlassCard className="liquid-glass-card--note" radius={14} noteTint={note.color}
         data-selected={isSelected || undefined} dragState={isDragGhost ? 'preview' : isDragPlaceholder ? 'placeholder' : undefined}
         {...(!isDragGhost && !isDragPlaceholder && externalFileTarget(event => {
           const textBottom = contentRef.current?.offsetHeight ?? 0;
@@ -370,7 +370,6 @@ const NoteCard: React.FC<NoteCardProps> = ({ note, isDragGhost, isDragPlaceholde
         width: '100%',
         minHeight: '100%',
         height: '100%',
-        '--note-glass-tint': note.color,
         display: 'flex', flexDirection: 'column',
         transition: 'box-shadow 0.2s, border-color 0.2s',
         position: 'relative', userSelect: 'none', overflow: 'hidden',
