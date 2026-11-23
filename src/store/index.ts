@@ -192,7 +192,10 @@ export const useNoteStore = create<NoteStore>((set, get) => ({
     set((state) => ({ settings: { ...state.settings, ...data } }));
   },
 
-  setViewMode: (mode) => set({ viewMode: mode }),
+  setViewMode: (mode) => set((state) => {
+    if (mode === state.viewMode) return state;
+    return { viewMode: mode, sidebarCollapsed: mode !== 'notes' && state.sidebarCollapsed };
+  }),
 
   toggleSidebar: () => set((s) => ({ sidebarCollapsed: !s.sidebarCollapsed })),
   setSidebarCollapsed: (collapsed) => set({ sidebarCollapsed: collapsed }),
@@ -234,10 +237,10 @@ export const useNoteStore = create<NoteStore>((set, get) => ({
       }
 
       if (data) {
+        const { inkToolbarDock, ...savedSettings } = data.settings ?? {};
         // Clear isFloating on all notes (float windows don't persist across restarts)
         const notes = (data.notes || []).map((n: Note) => ({ ...n, isFloating: false, floatWindowId: undefined }));
         set({
-        const { inkToolbarDock, ...savedSettings } = data.settings ?? {};
           loaded: true,
           notes,
           tags: data.tags || DEFAULT_TAGS,

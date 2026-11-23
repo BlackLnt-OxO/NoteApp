@@ -13,6 +13,7 @@ import React, { useState, useRef, useCallback, useMemo, useLayoutEffect } from '
 import { useGlassEntrance } from './useGlassEntrance';
 import { useCardDrag } from './useCardDrag';
 import { useCardGridMotion } from './useCardGridMotion';
+import { useSharedGlass } from './useSharedGlass';
 
 const PAD = 28;
 
@@ -49,18 +50,19 @@ export function FlowGrid<T>({
   }, []);
 
   const positions = useMemo(() => {
-    const out: { x: number; y: number }[] = [];
+    const out: { x: number; y: number; row: number }[] = [];
     if (containerWidth === null) return out;
 
-    let rowY = PAD, rowH = 0, colX = PAD;
+    let rowY = PAD, rowH = 0, colX = PAD, row = 0;
     const maxRight = containerWidth - PAD;
     for (let i = 0; i < items.length; i++) {
       if (colX + itemWidth > maxRight && i > 0) {
+        row++;
         rowY += rowH + gap;
         colX = PAD;
         rowH = 0;
       }
-      out.push({ x: colX, y: rowY });
+      out.push({ x: colX, y: rowY, row });
       colX += itemWidth + gap;
       rowH = Math.max(rowH, itemHeight);
     }
@@ -93,12 +95,14 @@ export function FlowGrid<T>({
   const { preview, start, setGhost, landing, didDrag } = useCardDrag(containerRef, category ?? undefined, reorder);
   const cardPositions = useMemo(() => new Map(positions.map((pos, i) => [getId(items[i]), pos])), [positions, items, getId]);
   useCardGridMotion(containerRef, glassGridRef, category ?? undefined, cardPositions, preview?.id ?? null, landing);
+  const sharedGlass = useSharedGlass(containerRef, glassGridRef);
   const ghostIndex = preview ? items.findIndex(item => getId(item) === preview.id) : -1;
 
   return (
     <div style={{ position: 'relative', width: '100%', height: '100%', overflow: 'hidden' }}>
+      <canvas ref={sharedGlass} className="shared-glass-layer" hidden aria-hidden="true" />
       <div ref={containerRef} data-glass-scroll-container data-grid-dragging={preview ? '' : undefined}
-        style={{ position: 'relative', width: '100%', height: '100%', overflow: 'auto', scrollbarGutter: 'stable', touchAction: 'none' }}>
+        style={{ position: 'relative', zIndex: 1, width: '100%', height: '100%', overflow: 'auto', scrollbarGutter: 'stable', touchAction: 'none' }}>
         <div ref={glassGridRef} style={{ position: 'relative', minHeight: totalHeight }}>
         {positions.map((pos, idx) => {
           const item = items[idx];

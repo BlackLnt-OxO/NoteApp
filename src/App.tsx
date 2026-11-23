@@ -41,10 +41,10 @@ const shotBtnStyle: React.CSSProperties = {
 
 const App: React.FC = () => {
   const { settings, loadData, saveData, setNoteFloating, viewMode, setViewMode,
-    sidebarCollapsed, setSidebarCollapsed, toggleSidebar, setUiScale } = useNoteStore(useShallow(s => ({
+    sidebarCollapsed, toggleSidebar, setUiScale } = useNoteStore(useShallow(s => ({
     settings: s.settings, loadData: s.loadData, saveData: s.saveData, setNoteFloating: s.setNoteFloating,
     viewMode: s.viewMode, setViewMode: s.setViewMode, sidebarCollapsed: s.sidebarCollapsed,
-    setSidebarCollapsed: s.setSidebarCollapsed, toggleSidebar: s.toggleSidebar, setUiScale: s.setUiScale,
+    toggleSidebar: s.toggleSidebar, setUiScale: s.setUiScale,
   })));
   const uiScale = useNoteStore((s) => s.uiScale);
   const canvasOpen = useCanvasLibrary(s => s.canvases.some(canvas => canvas.id === s.currentCanvasId));
@@ -52,13 +52,15 @@ const App: React.FC = () => {
   const shade = backgroundShade(settings.backgroundOpacity);
   const frostRadius = cardFrostRadius(settings.cardFrost);
   const showBackground = viewMode === 'notes' || (viewMode === 'inkcanvas' ? !canvasOpen : !fileOpen);
-  const previousView = useRef(viewMode);
-  const switchingView = previousView.current !== viewMode;
   const gfs = settings.fontSize;
   const titleBarH = gfs >= 18 ? fsn(38, gfs) : 38;
   const [showCreateDialog, setShowCreateDialog] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const workspaceRef = useRef<HTMLDivElement>(null);
+  const lastWorkspaceMode = useRef({ viewMode, sidebarCollapsed });
+  const expandingIntoNotes = viewMode === 'notes' && lastWorkspaceMode.current.viewMode !== 'notes'
+    && lastWorkspaceMode.current.sidebarCollapsed;
+  useLayoutEffect(() => { lastWorkspaceMode.current = { viewMode, sidebarCollapsed }; }, [viewMode, sidebarCollapsed]);
   const setSidebarRail = useCallback((element: HTMLDivElement | null) => {
     if (element) element.inert = sidebarCollapsed;
   }, [sidebarCollapsed]);
@@ -70,7 +72,6 @@ const App: React.FC = () => {
   const [assetError, setAssetError] = useState('');
 
   useButtonPointerResponse(uiScale);
-  useLayoutEffect(() => { previousView.current = viewMode; }, [viewMode]);
   useLayoutEffect(() => { setGlassBlur(frostRadius); }, [frostRadius]);
 
   useEffect(() => {
@@ -117,7 +118,6 @@ const App: React.FC = () => {
 
   // First-run check: until a data directory is configured, show the setup prompt.
   useEffect(() => {
-  useEffect(() => {
     const api = window.electronAPI;
     if (!api?.onFloatingFileDrop) return;
     const drop = api.onFloatingFileDrop(({ noteId, paths }) => {
@@ -144,6 +144,7 @@ const App: React.FC = () => {
     return () => { drop(); open(); remove(); unsubscribe(); };
   }, []);
 
+  useEffect(() => {
     if (window.electronAPI) {
       window.electronAPI.getDataDirectory().then((info) => {
         setDataDirState(info.isConfigured ? 'ready' : 'prompt');
@@ -356,16 +357,16 @@ const App: React.FC = () => {
       {/* Background image via <img>, NOT CSS url(data:) — Chromium drops very large
           base64 data URLs in CSS, which is why the background never painted even
           though the renderer held the data. <img> renders any size reliably. */}
-      {settings.backgroundImage && showBackground && (
+      {settings.backgroundImage && (
         <img
           src={settings.backgroundImage}
           alt=""
-          data-workspace-background
+          data-workspace-background={showBackground ? '' : undefined}
           style={{
             position: 'absolute', inset: 0, zIndex: 0,
             width: '100%', height: '100%',
             objectFit: 'cover', objectPosition: 'center',
-            background: 'var(--page-bg)', pointerEvents: 'none',
+            background: 'var(--page-bg)', pointerEvents: 'none', visibility: showBackground ? undefined : 'hidden',
           }}
         />
       )}
@@ -402,14 +403,10 @@ const App: React.FC = () => {
         </div>
       </div>
 
-      <div data-ink-workspace style={{ position: 'relative', zIndex: 2, flex: 1, display: 'flex', overflow: 'hidden' }}>
-        <div style={{ width: sidebarCollapsed ? 0 : 220, flexShrink: 0 }}>
-          {/* Measure the workspace once at its final width. Only the rail slides. */}
-          <div ref={setSidebarRail} className="workspace-sidebar-rail" aria-hidden={sidebarCollapsed || undefined}
-            style={{
-              transform: sidebarCollapsed ? 'translateX(-100%)' : 'none',
-              transition: switchingView ? 'none' : undefined,
-            }}>
+      <div data-ink-workspace data-sidebar-collapsed={sidebarCollapsed}
+        style={{ position: 'relative', zIndex: 2, flex: 1, display: 'flex', overflow: 'hidden' }}>
+        <div className="workspace-sidebar-track">
+          <div ref={setSidebarRail} className="workspace-sidebar-rail" aria-hidden={sidebarCollapsed || undefined}>
             {viewMode === 'notes'
               ? <Sidebar onCreateNote={() => setShowCreateDialog(true)} />
               : <AssetSidebar />}
@@ -418,23 +415,26 @@ const App: React.FC = () => {
         <div style={{ flex: 1, position: 'relative', overflow: 'hidden', borderRadius: '0 0 12px 0', display: 'flex', flexDirection: 'column' }}>
           {/* When the left sidebar is collapsed, a slim top bar keeps the view
               switcher reachable (screenshots live in the bottom-left cluster). */}
-          {sidebarCollapsed && (
+          <div className="workspace-compact-nav" aria-hidden={!sidebarCollapsed || undefined}
+            ref={element => { if (element) element.inert = !sidebarCollapsed; }}>
+            <div className="workspace-compact-clip">
             <div style={{
-              flexShrink: 0, display: 'flex', alignItems: 'center', gap: 6,
+              display: 'flex', alignItems: 'center', gap: 6,
               padding: '6px 10px', background: 'var(--chrome-bg)',
               borderBottom: '1px solid var(--glass-border)', zIndex: 98,
             }}>
               {([{ id: 'notes' as const, label: '便笺' }, { id: 'inkcanvas' as const, label: '画布' }, { id: 'pdf' as const, label: '文件' }]).map((m) => (
-                <button key={m.id} onClick={() => { setViewMode(m.id); if (m.id !== viewMode) setSidebarCollapsed(false); }}
+                <button key={m.id} type="button" aria-current={viewMode === m.id ? 'page' : undefined} onClick={() => setViewMode(m.id)}
                   className={viewMode === m.id ? 'hover-ring-dark' : 'hover-ring-light'}
                   style={{ padding: '4px 10px', borderRadius: '6px', background: viewMode === m.id ? 'var(--accent)' : 'var(--glass-bg-light)',
-                    border: viewMode === m.id ? 'none' : '1px solid var(--glass-border)', color: viewMode === m.id ? '#fff' : 'var(--text-secondary)',
+                    border: viewMode === m.id ? '1px solid transparent' : '1px solid var(--glass-border)', color: viewMode === m.id ? '#fff' : 'var(--text-secondary)',
                     cursor: 'pointer', fontSize: 12, fontFamily: 'inherit' }}>
                   {m.label}
                 </button>
               ))}
             </div>
-          )}
+            </div>
+          </div>
           {/* Home grids animate their cards after the backdrop filters are ready. */}
           <div key={viewMode} className={showBackground ? undefined : 'animate-fade-in'} style={{ flex: 1, position: 'relative', minHeight: 0 }}>
             {viewMode === 'inkcanvas' ? (
@@ -442,7 +442,7 @@ const App: React.FC = () => {
             ) : viewMode === 'pdf' ? (
               <PdfView />
             ) : (
-              <NoteGrid />
+              <NoteGrid expandingSidebarOnEntry={expandingIntoNotes} />
             )}
           </div>
 

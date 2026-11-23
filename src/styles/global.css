@@ -205,8 +205,39 @@ body {
   transition: transform var(--transition-slow);
 }
 
+.workspace-sidebar-track {
+  width: 220px;
+  flex-shrink: 0;
+  transition: width var(--transition-slow);
+}
+
+[data-sidebar-collapsed="true"] > .workspace-sidebar-track {
+  width: 0;
+}
+
+[data-sidebar-collapsed="true"] > .workspace-sidebar-track > .workspace-sidebar-rail {
+  transform: translateX(-100%);
+}
+
+.workspace-compact-nav {
+  flex: none;
+  display: grid;
+  grid-template-rows: 0fr;
+  overflow: hidden;
+  transition: grid-template-rows var(--transition-slow);
+}
+
+.workspace-compact-clip {
+  min-height: 0;
+  overflow: hidden;
+}
+
+[data-sidebar-collapsed="true"] .workspace-compact-nav {
+  grid-template-rows: 1fr;
+}
+
 @media (prefers-reduced-motion: reduce) {
-  .workspace-sidebar-rail { transition: none; }
+  :is(.workspace-sidebar-rail, .workspace-sidebar-track, .workspace-compact-nav) { transition: none; }
 }
 
 .workspace-mode-switch [aria-current="page"] {
@@ -241,37 +272,6 @@ body {
   --text-primary: rgb(255 255 255 / .92);
 }
 
-.liquid-glass-card[data-selected="true"] {
-  --card-glass-rim: var(--card-glass-selected-rim);
-}
-
-.liquid-glass-card::after {
-  content: '';
-  position: absolute;
-  inset: 0;
-  padding: 2px;
-  border-radius: inherit;
-  pointer-events: none;
-  background-color: var(--card-glass-rim);
-  mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
-  mask-composite: exclude;
-}
-
-.liquid-glass-card[data-drag-preview="true"] {
-  box-shadow: 0 12px 32px var(--card-glass-shadow);
-}
-
-.liquid-glass-card--library:not(:where([data-pointer-scope] *)) {
-  transition: transform var(--transition), box-shadow var(--transition);
-}
-
-.liquid-glass-card--library:hover:not(:where([data-pointer-scope] *)) {
-  transform: scale(var(--btn-scale));
-}
-
-.liquid-glass-card--library:active:not(:where([data-pointer-scope] *)) {
-  transform: scale(.97);
-}
 .liquid-glass-card.liquid-glass-card--note { background: transparent; backdrop-filter: none; }
 .liquid-glass-card--note .note-glass-backplate {
   position: absolute;
@@ -383,24 +383,68 @@ body {
   cursor: nwse-resize;
 }
 
+.liquid-glass-card[data-selected="true"] {
+  --card-glass-rim: var(--card-glass-selected-rim);
+}
+
+.liquid-glass-card::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  padding: 2px;
+  border-radius: inherit;
+  pointer-events: none;
+  background-color: var(--card-glass-rim);
+  mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+  mask-composite: exclude;
+}
+
+.liquid-glass-card[data-drag-preview="true"] {
+  box-shadow: 0 12px 32px var(--card-glass-shadow);
+}
+
+.liquid-glass-card--library:not(:where([data-pointer-scope] *)) {
+  transition: transform var(--transition), box-shadow var(--transition);
+}
+
+.liquid-glass-card--library:hover:not(:where([data-pointer-scope] *)) {
+  transform: scale(var(--btn-scale));
+}
+
+.liquid-glass-card--library:active:not(:where([data-pointer-scope] *)) {
+  transform: scale(.97);
+}
 
 .liquid-glass-card[data-glass-optics="true"] {
   --glass-filter: var(--glass-rgb-filter);
+}
+
+.liquid-glass-card[data-glass-optics="true"]:not(.liquid-glass-card--note) {
   backdrop-filter: var(--glass-filter);
 }
 
-.liquid-glass-card[data-drag-preview="true"][data-glass-optics="true"],
-[data-grid-layout-moving] .liquid-glass-card[data-glass-optics="true"],
-:root[data-glass-scrolling="true"] .liquid-glass-card[data-glass-optics="true"]:not(:hover, :focus-within, [data-selected="true"], [data-drag-preview="true"]) {
+:root[data-glass-scrolling="true"] .liquid-glass-card[data-glass-optics="true"]:not(:hover, :focus-within, [data-selected="true"], [data-drag-preview="true"], [data-grid-dragging] *, [data-grid-resizing] *, [data-grid-settling] *, [data-glass-layout-pending] *) {
   --glass-filter: var(--glass-mono-filter);
 }
 
-/* The moving foreground still refracts the scene. A stationary card does not
-   need a second displacement pass while a gesture or modal covers it. */
-[data-grid-dragging] [data-grid-card-id] > .liquid-glass-card[data-glass-optics="true"],
-[data-grid-settling] [data-grid-card-id]:not([data-grid-layout-moving]) > .liquid-glass-card[data-glass-optics="true"],
-[data-settings-open] [data-grid-card-id] > .liquid-glass-card[data-glass-optics="true"] {
+[data-settings-open] [data-grid-card-id] > .liquid-glass-card[data-glass-optics="true"]:not(.liquid-glass-card--note) {
   backdrop-filter: var(--card-frost-filter, none);
+}
+
+.liquid-glass-card[data-glass-placeholder="true"][data-glass-optics="true"] {
+  backdrop-filter: none;
+}
+
+.liquid-glass-card[data-glass-gpu] {
+  backdrop-filter: none;
+}
+
+.shared-glass-layer {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
 }
 
 @supports not (mask-composite: exclude) {
@@ -529,7 +573,7 @@ body {
   transition: opacity var(--transition);
 }
 
-.workspace-corner-button:is([data-pointer-glow], :focus-visible)::before {
+.workspace-corner-button:is(:hover, :focus-visible)::before {
   opacity: 1;
 }
 
@@ -828,6 +872,13 @@ body {
 .frosted-dialog-shell {
   --settings-glass-tint: rgb(27 28 46 / .72);
   position: relative;
+  isolation: isolate;
+  overflow: hidden;
+  background: var(--dialog-bg);
+  animation: settings-enter 150ms ease-out;
+}
+
+.settings-dialog {
   display: flex;
   flex-direction: column;
   min-width: 0;
@@ -863,19 +914,13 @@ body {
 }
 
 .settings-scroll {
+  --settings-content-padding: 24px;
   position: relative;
   z-index: 1;
   min-height: 0;
   overflow: auto;
   overscroll-behavior: contain;
   scrollbar-gutter: stable;
-  isolation: isolate;
-  overflow: hidden;
-  background: var(--dialog-bg);
-  animation: settings-enter 150ms ease-out;
-}
-
-.settings-dialog {
   padding: var(--settings-content-padding);
 }
 
@@ -906,6 +951,17 @@ body {
   margin-top: 20px;
 }
 
+.settings-actions {
+  position: sticky;
+  bottom: 0;
+  z-index: 1;
+  pointer-events: none;
+}
+
+.settings-actions > button {
+  pointer-events: auto;
+}
+
 /* Toggle */
 .toggle {
   position: relative;
@@ -918,7 +974,6 @@ body {
   border: none;
 }
 
-  --settings-content-padding: 24px;
 .toggle.active {
   background: var(--accent);
 }

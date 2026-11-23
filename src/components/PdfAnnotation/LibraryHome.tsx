@@ -1,3 +1,4 @@
+import IconAction from '../IconAction';
 /**
  * File library home. The same ordered cards represent all paginated formats.
  */
@@ -199,8 +200,7 @@ const LibraryHome: React.FC<Props> = ({ onImport, onOpen, onReplace, importing }
             >
               <span className="file-type-corner">{fileTypeLabel(item.kind ?? 'pdf')}</span>
               {hovered && (
-                <button
-                  aria-label="删除"
+                <IconAction danger label="删除文件卡片"
                   onClick={(e) => {
                     e.stopPropagation();
                     askConfirm({
@@ -214,13 +214,9 @@ const LibraryHome: React.FC<Props> = ({ onImport, onOpen, onReplace, importing }
                   }}
                   style={{
                     position: 'absolute', bottom: 8, right: 8,
-                    width: 22, height: 22, borderRadius: '50%', border: 'none', cursor: 'pointer',
-                    background: 'rgba(231,76,60,0.8)', color: '#fff', fontSize: fs(12, gfs), lineHeight: 1,
-                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    width: 22, height: 22,
                   }}
-                >
-                  ×
-                </button>
+                />
               )}
               <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 7 }}>
                 <div style={{ color: 'var(--accent)' }}><PdfCardIcon /></div>

@@ -11,16 +11,19 @@ export default function LiquidGlassCard({
   radius, dragState, frostPreview, className, style, ...props
 }: Props) {
   const card = useRef<HTMLDivElement>(null);
+  const isPreview = dragState === 'preview';
+  const skipPointer = Boolean(dragState || frostPreview);
 
   useLayoutEffect(() => {
     const element = card.current;
-    if (!element || dragState === 'placeholder') return;
-    return watchGlassCard(element, radius, frostPreview ? 'preview' : 'workspace', dragState === 'preview');
-  }, [dragState, radius, frostPreview]);
+    if (!element) return;
+    return watchGlassCard(element, radius, frostPreview ? 'preview' : 'workspace', isPreview);
+  }, [isPreview, radius, frostPreview]);
 
   return <div {...props} ref={card}
     className={className ? `liquid-glass-card ${className}` : 'liquid-glass-card'}
     style={{ ...style, borderRadius: radius }}
-    data-drag-preview={dragState === 'preview' || undefined}
-    data-pointer-skip={Boolean(dragState || frostPreview) || undefined} />;
+    data-drag-preview={isPreview || undefined}
+    data-glass-placeholder={dragState === 'placeholder' || undefined}
+    data-pointer-skip={skipPointer || undefined} />;
 }

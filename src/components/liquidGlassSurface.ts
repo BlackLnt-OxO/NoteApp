@@ -1,4 +1,5 @@
 import { createGlassFilter, createGlassMap, glassSvg, updateGlassBlur, type GlassFilter, type GlassShape } from './liquidGlassFilters';
+import { finishNoteMeasure, startNoteMeasure } from './noteMotionMetrics';
 
 const RESIZE_SETTLE_MS = 80;
 const SCROLL_SETTLE_MS = 150;
@@ -11,11 +12,14 @@ interface Card {
   radius: number;
   visible: boolean;
   scope: GlassScope;
+  note: boolean;
   useFallback?: boolean;
   width: number;
   height: number;
   resizeTimer?: number;
   filters?: FilterPair;
+  displayed?: FilterPair;
+  resizeFilter?: GlassFilter;
 }
 
 interface FilterPair {
@@ -23,6 +27,8 @@ interface FilterPair {
   rgb: string;
   mono: string;
   scope: GlassScope;
+  shape: GlassShape;
+  mapUrl: string;
   nodes: GlassFilter[];
   cards: Set<Card>;
   loading?: Promise<void>;
@@ -62,11 +68,69 @@ function createController() {
   let definitions: SVGDefsElement | undefined;
   let nextId = 0;
   let scrollTimer: number | undefined;
+  const deferredNotes = new Set<Card>();
+  let workScheduled = false;
+
+  function noteIsMoving(card: Card) {
+    const grid = card.element.closest('[data-note-grid]');
+    return !!grid && (grid.hasAttribute('data-grid-settling') || grid.getAnimations().some(a => a.playState === 'running')
+      || !!grid.closest('[data-ink-workspace]')?.querySelector('.workspace-sidebar-track')?.getAnimations().length
+      || card.element.parentElement?.hasAttribute('data-note-edit-moving'));
+  }
+
+  function deferNote(card: Card) {
+    deferredNotes.add(card);
+    if (workScheduled) return;
+    workScheduled = true;
+    const run = () => {
+      workScheduled = false;
+      const ready = Array.from(deferredNotes).find(candidate => !noteIsMoving(candidate));
+      if (ready) {
+        deferredNotes.delete(ready);
+        if (ready.filters && !ready.filters.loading) activate(ready, ready.filters);
+        else refresh(ready, true);
+      }
+      const next = deferredNotes.values().next().value;
+      if (next) deferNote(next);
+    };
+    // Begin after the current paint. Allow only one new map in each idle slot.
+    window.setTimeout(() => {
+      if (window.requestIdleCallback) window.requestIdleCallback(run, { timeout: 90 });
+      else run();
+    }, 32);
+  }
 
   function activate(card: Card, pair: FilterPair) {
+    if (card.filters !== pair) return;
+    if (card.note && card.displayed && card.displayed !== pair && noteIsMoving(card)) {
+      deferNote(card);
+      return;
+    }
+    if (card.displayed !== pair) unlink(card, card.displayed);
+    card.displayed = pair;
     card.element.style.setProperty('--glass-rgb-filter', `url("#${pair.rgb}")`);
     card.element.style.setProperty('--glass-mono-filter', `url("#${pair.mono}")`);
     card.element.dataset.glassOptics = 'true';
+    removeResizeFilter(card);
+  }
+
+  function removeResizeFilter(card: Card) {
+    card.resizeFilter?.element.remove();
+    card.resizeFilter = undefined;
+  }
+
+  function stretchDisplayedFilter(card: Card) {
+    if (!card.displayed || !definitions) return;
+    if (!card.resizeFilter) {
+      // Keep the decoded map on a private filter so the shared cached filter stays immutable.
+      const id = `noteapp-glass-resize-${++nextId}-rgb`;
+      card.resizeFilter = createGlassFilter(id, card, card.displayed.mapUrl, true, blurByScope[card.scope]);
+      definitions.append(card.resizeFilter.element);
+      card.element.style.setProperty('--glass-rgb-filter', `url("#${id}")`);
+    } else {
+      card.resizeFilter.map.setAttribute('width', String(card.width));
+      card.resizeFilter.map.setAttribute('height', String(card.height));
+    }
   }
 
   function discard(pair: FilterPair) {
@@ -74,14 +138,8 @@ function createController() {
     for (const node of pair.nodes) node.element.remove();
   }
 
-  function release(card: Card) {
-    const pair = card.filters;
+  function unlink(card: Card, pair?: FilterPair) {
     if (!pair) return;
-
-    card.filters = undefined;
-    delete card.element.dataset.glassOptics;
-    card.element.style.removeProperty('--glass-rgb-filter');
-    card.element.style.removeProperty('--glass-mono-filter');
     pair.cards.delete(card);
 
     if (!pair.cards.size) {
@@ -93,13 +151,29 @@ function createController() {
     }
   }
 
-  function makeFilters(key: string, shape: GlassShape, scope: GlassScope): FilterPair | undefined {
+  function release(card: Card, keepDisplayed = false) {
+    deferredNotes.delete(card);
+    if (card.filters !== card.displayed) unlink(card, card.filters);
+    card.filters = undefined;
+    if (keepDisplayed || !card.displayed) return;
+
+    unlink(card, card.displayed);
+    card.displayed = undefined;
+    delete card.element.dataset.glassOptics;
+    card.element.style.removeProperty('--glass-rgb-filter');
+    card.element.style.removeProperty('--glass-mono-filter');
+    removeResizeFilter(card);
+  }
+
+  function makeFilters(key: string, shape: GlassShape, scope: GlassScope, note = false): FilterPair | undefined {
+    const measure = note ? startNoteMeasure() : undefined;
     let mapUrl: string | undefined;
     try { mapUrl = createGlassMap(shape); } catch { return; }
+    finally { finishNoteMeasure('note-filter-map', measure); }
     if (!mapUrl || mapUrl === 'data:,') return;
 
     const id = `noteapp-glass-${++nextId}`;
-    const pair: FilterPair = { key, rgb: id + '-rgb', mono: id + '-mono', scope, nodes: [], cards: new Set() };
+    const pair: FilterPair = { key, rgb: id + '-rgb', mono: id + '-mono', scope, shape, mapUrl, nodes: [], cards: new Set() };
     filters.set(key, pair);
 
     const map = new Image();
@@ -116,13 +190,18 @@ function createController() {
     pair.nodes = [createGlassFilter(pair.rgb, shape, mapUrl, true, blur), createGlassFilter(pair.mono, shape, mapUrl, false, blur)];
     // Start loading the SVG's image while the shared PNG is decoding.
     definitions.append(...pair.nodes.map(node => node.element));
+    const decodeMeasure = note ? startNoteMeasure() : undefined;
     pair.loading = map.decode().then(() => {
+      finishNoteMeasure('note-filter-decode', decodeMeasure);
       if (filters.get(key) !== pair) return;
       pair.loading = undefined;
       for (const card of pair.cards) activate(card, pair);
     }).catch(() => {
       if (filters.get(key) !== pair) return;
-      for (const card of pair.cards) card.filters = undefined;
+      for (const card of pair.cards) {
+        if (card.filters === pair) card.filters = undefined;
+        if (card.displayed === pair) release(card);
+      }
       pair.cards.clear();
       discard(pair);
     });
@@ -130,16 +209,43 @@ function createController() {
     return pair;
   }
 
-  function refresh(card: Card) {
+  function displayCachedMap(card: Card) {
+    if (card.displayed) return;
+    let closest: FilterPair | undefined;
+    let distance = .28;
+    for (const pair of filters.values()) {
+      if (pair.scope !== card.scope || pair.shape.radius !== card.radius || pair.loading) continue;
+      const gap = Math.abs(Math.log(pair.shape.width / card.width)) + Math.abs(Math.log(pair.shape.height / card.height));
+      if (gap < distance) { closest = pair; distance = gap; }
+    }
+    const seedKey = `${card.scope}:note-seed:${card.radius}`;
+    const starter = closest ?? filters.get(seedKey)
+      ?? makeFilters(seedKey, { width: 160, height: 120, radius: card.radius }, card.scope, true);
+    if (!starter) return;
+    card.displayed = starter;
+    starter.cards.add(card);
+    card.element.style.setProperty('--glass-mono-filter', `url("#${starter.mono}")`);
+    card.element.dataset.glassOptics = 'true';
+    stretchDisplayedFilter(card);
+  }
+
+  function refresh(card: Card, allowNoteMap = false) {
     if (!card.visible || card.useFallback || card.resizeTimer !== undefined || !card.width || !card.height || card.filters) return;
     const { width, height, radius, scope } = card;
     const key = `${scope}:${width}:${height}:${radius}`;
-    const pair = filters.get(key) ?? makeFilters(key, { width, height, radius }, scope);
+    const cached = filters.get(key);
+    if (card.note && !cached && !allowNoteMap) {
+      displayCachedMap(card);
+      deferNote(card);
+      return;
+    }
+    const pair = cached ?? makeFilters(key, { width, height, radius }, scope, card.note);
     if (!pair) return;
 
     pair.cards.add(card);
     card.filters = pair;
     if (!pair.loading) activate(card, pair);
+    else if (card.note) displayCachedMap(card);
   }
 
   function prepareEntrance(grid: HTMLElement, reveal: () => void) {
@@ -172,9 +278,13 @@ function createController() {
     const loading = new Set<Promise<void>>();
     for (const { card, width, height } of visible) {
       if (performance.now() >= deadline) break;
-      if (card.width !== width || card.height !== height) release(card);
+      const resized = card.width !== width || card.height !== height;
       card.width = width;
       card.height = height;
+      if (resized) {
+        release(card, true);
+        stretchDisplayedFilter(card);
+      }
       card.visible = true;
       clearTimeout(card.resizeTimer);
       card.resizeTimer = undefined;
@@ -220,7 +330,9 @@ function createController() {
       const needsSettle = card.width > 0 && card.height > 0;
       card.width = width;
       card.height = height;
-      release(card);
+      // Keep the current map sampling the live backdrop until the new one decodes.
+      release(card, true);
+      stretchDisplayedFilter(card);
       clearTimeout(card.resizeTimer);
       card.resizeTimer = undefined;
       if (!card.visible) continue;
@@ -266,9 +378,13 @@ function createController() {
         if (pair.scope !== scope) continue;
         for (const node of pair.nodes) updateGlassBlur(node, radius);
       }
+      for (const card of cards.values()) {
+        if (card.scope === scope && card.resizeFilter) updateGlassBlur(card.resizeFilter, radius);
+      }
     },
     watch(element: HTMLElement, radius: number, scope: GlassScope, immediate: boolean) {
-      const card: Card = { element, radius, scope, width: 0, height: 0, visible: false };
+      const card: Card = { element, radius, scope, width: 0, height: 0, visible: false,
+        note: !immediate && !!element.closest('[data-note-grid]') };
       cards.set(element, card);
       if (immediate) {
         card.width = element.offsetWidth;

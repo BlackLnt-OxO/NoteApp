@@ -1,19 +1,23 @@
 import { useLayoutEffect, useRef, type RefObject } from 'react';
 import { prepareGlassCards } from './liquidGlassSurface';
 import type { GridDrop } from './useCardDrag';
+import { GLASS_LAYOUT_START } from './useSharedGlass';
+import { finishNoteMeasure, startNoteMeasure } from './noteMotionMetrics';
 
 type Point = { x: number; y: number };
+type CardPosition = Point & { row?: number };
 type Move = { element: HTMLElement; from: Point };
 type PendingMoves = { arrivals: HTMLElement[]; moves: Move[]; cancel?: () => void };
 
-const MOVE_DURATION = 200;
+export const GRID_MOVE_DURATION = 200;
 
 export function useCardGridMotion(
   scrollRef: RefObject<HTMLDivElement>, gridRef: RefObject<HTMLDivElement>,
-  tag: string | undefined, positions: ReadonlyMap<string, Point>, draggingId: string | null,
+  tag: string | undefined, positions: ReadonlyMap<string, CardPosition>, draggingId: string | null,
   dropRef: { current: GridDrop | null },
+  mountedIds?: ReadonlySet<string>,
 ) {
-  const previous = useRef<{ tag: string | undefined; positions: ReadonlyMap<string, Point> }>();
+  const previous = useRef<{ tag: string | undefined; positions: ReadonlyMap<string, CardPosition>; mountedIds?: ReadonlySet<string> }>();
   const animations = useRef(new Map<HTMLElement, Animation>());
   const pending = useRef<PendingMoves>();
 
@@ -24,14 +28,17 @@ export function useCardGridMotion(
       pending.current = undefined;
       for (const animation of animations.current.values()) animation.cancel();
       animations.current.clear();
-      if (grid) delete grid.dataset.gridSettling;
+      if (grid) {
+        delete grid.dataset.gridSettling;
+        delete grid.dataset.glassLayoutPending;
+      }
     };
   }, [gridRef]);
 
   useLayoutEffect(() => {
     const last = previous.current;
     if (!last && !positions.size) return;
-    previous.current = { tag, positions };
+    previous.current = { tag, positions, mountedIds };
     const scroll = scrollRef.current;
     const grid = gridRef.current;
     if (!last || !scroll || !grid) return;
@@ -42,8 +49,11 @@ export function useCardGridMotion(
     const lastOrder = [...last.positions.keys()];
     const orderChanged = lastOrder.length !== positions.size
       || [...positions.keys()].some((id, index) => id !== lastOrder[index]);
-    if (!tagChanged && !orderChanged && !drop) return;
+    const sidebarReflow = !tagChanged && !orderChanged && !drop;
+    if (sidebarReflow && (!Array.from(positions).some(([id, point]) => point.row !== last.positions.get(id)?.row)
+      || !scroll.closest('[data-ink-workspace]')?.querySelector('.workspace-sidebar-track')?.getAnimations?.().length)) return;
 
+    const measure = mountedIds && startNoteMeasure();
     const waiting = pending.current;
     waiting?.cancel?.();
     pending.current = undefined;
@@ -62,7 +72,8 @@ export function useCardGridMotion(
     for (const element of elements) {
       const id = element.dataset.gridCardId!;
       const next = positions.get(id)!;
-      const old = last.positions.get(id);
+      const old = !last.mountedIds || last.mountedIds.has(id) ? last.positions.get(id) : undefined;
+      if (sidebarReflow && old?.row === next.row && !animations.current.has(element)) continue;
       const comesFromDrop = drop?.id === id;
       const from = comesFromDrop ? drop : old;
       const width = parseFloat(element.style.width);
@@ -70,14 +81,16 @@ export function useCardGridMotion(
       const visible = (point: Point) => point.x < maxX && point.x + width > minX
         && point.y < maxY && point.y + height > minY;
       const isVisible = visible(next);
+      const crossesViewport = isVisible || (from !== undefined && visible(from));
       const isArriving = ((tagChanged && !old) || stillArriving.has(element)) && isVisible;
-      if (tagChanged && isVisible && element.firstElementChild) surfaces.push(element.firstElementChild);
+      const surface = element.firstElementChild;
+      if (!mountedIds && surface && ((tagChanged && isVisible) || (drop && crossesViewport))) surfaces.push(surface);
       if (isArriving) {
         arrivals.push(element);
         if (!reduce) moves.push({ element, from: { x: 0, y: 8 } });
         continue;
       }
-      if (reduce || !from || (!isVisible && !visible(from))) continue;
+      if (reduce || !from || !crossesViewport) continue;
       const transform = !comesFromDrop && (animations.current.has(element) || element.style.transform)
         ? getComputedStyle(element).transform : 'none';
       const offset = transform === 'none' ? null : new DOMMatrixReadOnly(transform);
@@ -86,6 +99,8 @@ export function useCardGridMotion(
       if (Math.abs(x) >= .5 || Math.abs(y) >= .5) moves.push({ element, from: { x, y } });
     }
 
+    grid.toggleAttribute('data-glass-layout-pending', !mountedIds && moves.length > 0);
+    if (moves.length) grid.dispatchEvent(new Event(GLASS_LAYOUT_START));
     for (const [element, animation] of animations.current) {
       animation.cancel();
       delete element.dataset.gridLayoutMoving;
@@ -93,7 +108,7 @@ export function useCardGridMotion(
     animations.current.clear();
     for (const { element } of waiting?.moves ?? []) element.style.removeProperty('transform');
     for (const element of stillArriving) element.style.removeProperty('visibility');
-    for (const element of arrivals) element.style.visibility = 'hidden';
+    if (surfaces.length) for (const element of arrivals) element.style.visibility = 'hidden';
     for (const { element, from } of moves) {
       element.style.transform = `translate(${from.x}px, ${from.y}px)`;
     }
@@ -103,6 +118,7 @@ export function useCardGridMotion(
     const reveal = () => {
       if (pending.current !== batch) return;
       pending.current = undefined;
+      delete grid.dataset.glassLayoutPending;
       for (const element of arrivals) element.style.removeProperty('visibility');
       if (moves.length) grid.dataset.gridSettling = '';
       else delete grid.dataset.gridSettling;
@@ -110,7 +126,7 @@ export function useCardGridMotion(
         element.style.removeProperty('transform');
         const animation = element.animate(
           [{ transform: `translate(${from.x}px, ${from.y}px)` }, { transform: 'none' }],
-          { duration: MOVE_DURATION, easing: 'cubic-bezier(.2,.7,.25,1)' },
+          { duration: GRID_MOVE_DURATION, easing: 'cubic-bezier(.2,.7,.25,1)' },
         );
         element.dataset.gridLayoutMoving = '';
         animations.current.set(element, animation);
@@ -124,5 +140,6 @@ export function useCardGridMotion(
     };
     batch.cancel = surfaces.length ? prepareGlassCards(surfaces, reveal) : undefined;
     if (!surfaces.length) reveal();
-  }, [tag, positions, draggingId, dropRef, gridRef, scrollRef]);
+    finishNoteMeasure('note-grid-motion', measure);
+  }, [tag, positions, draggingId, dropRef, gridRef, scrollRef, mountedIds]);
 }

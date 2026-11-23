@@ -4,7 +4,10 @@ import type { Note, NoteImage } from '../types';
 import { useNoteStore } from '../store';
 import { fs, fsn } from '../utils';
 import LiquidGlassCard from './LiquidGlassCard';
-import { boxResizePreview, usePreviewGesture } from './usePreviewGesture';
+import { usePreviewGesture } from './usePreviewGesture';
+import IconAction from './IconAction';
+import { externalFileTarget, receiveExternalFiles } from './FileLibrary/externalFiles';
+import { appendNoteDrop, NoteAttachments, openNoteAttachment } from './FileLibrary/noteAttachments';
 
 const QUICK_COLORS = ['#2d2d44', '#6b5ce7', '#e8a0b4', '#95a5a6'];
 const ALL_COLORS = ['#2d2d44', '#6b5ce7', '#e74c3c', '#e67e22', '#2ecc71', '#3498db', '#1abc9c', '#e91e63', '#9b59b6', '#95a5a6', '#f39c12', '#34495e'];
@@ -15,11 +18,12 @@ interface NoteCardProps {
   isDragPlaceholder?: boolean;
   isExpanded?: boolean;
   onDragStart?: (e: React.PointerEvent, noteId: string) => void;
-  onEditStart?: () => void;
-  onEditEnd?: () => void;
+  onResizePreview?: (id: string, size: Pick<Note, 'width' | 'height'> | null) => void;
+  onEditStart?: (id: string) => void;
+  onEditEnd?: (id: string) => void;
 }
 
-const NoteCard: React.FC<NoteCardProps> = ({ note, isDragGhost, isDragPlaceholder, isExpanded, onDragStart, onEditStart, onEditEnd }) => {
+const NoteCard: React.FC<NoteCardProps> = ({ note, isDragGhost, isDragPlaceholder, isExpanded, onDragStart, onResizePreview, onEditStart, onEditEnd }) => {
   const updateNote = useNoteStore(s => s.updateNote);
   const deleteNote = useNoteStore(s => s.deleteNote);
   const selectNote = useNoteStore(s => s.selectNote);
@@ -31,7 +35,6 @@ const NoteCard: React.FC<NoteCardProps> = ({ note, isDragGhost, isDragPlaceholde
   const [imgSaveMenu, setImgSaveMenu] = useState<{
     x: number; y: number; dataUrl: string; fileName?: string;
   } | null>(null);
-  const [isEditing, setIsEditing] = useState(false);
   const [lightboxImg, setLightboxImg] = useState<string | null>(null);
   const [lightboxScale, setLightboxScale] = useState(1);
   const [lbPan, setLbPan] = useState({ x: 0, y: 0 });
@@ -48,31 +51,17 @@ const NoteCard: React.FC<NoteCardProps> = ({ note, isDragGhost, isDragPlaceholde
   const rightClickStart = useRef({ x: 0, y: 0 });
 
   const isSelected = useNoteStore(s => s.selectedNoteId === note.id);
-  const showExpanded = isExpanded || isEditing;
+  const showExpanded = Boolean(isExpanded);
   const tags = useNoteStore((s) => s.tags);
   const tag = tags.find((t) => t.id === note.tag);
   const gfs = useNoteStore((s) => s.settings.fontSize);
   const floatCloseKey = useNoteStore(s => s.settings.floatCloseKey);
   const floatPenetrateKey = useNoteStore(s => s.settings.floatPenetrateKey);
 
-  // Keep a floating window in sync when the note's images/color change
-  // (debounced — drag/resize update images frequently). Content edits are
-  // already pushed from the float window via updateFloatContent, so we don't
-  // echo content back here to avoid a reload loop while typing.
-  useEffect(() => {
-    const api = window.electronAPI;
-    if (!note.isFloating || !api) return;
-    const t = setTimeout(() => {
-      api.updateFloatingNote(note.id, note);
-    }, 400);
-    return () => clearTimeout(t);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [note.images, note.color]);
-
   useEffect(() => { setContent(note.content); }, [note.content]);
   useEffect(() => {
     if (showExpanded && contentRef.current) {
-      contentRef.current.focus();
+      contentRef.current.focus({ preventScroll: true });
       if (!undoStack.current.length || undoStack.current[undoStack.current.length - 1] !== note.content) {
         undoStack.current.push(note.content);
         if (undoStack.current.length > 50) undoStack.current.shift();
@@ -88,31 +77,6 @@ const NoteCard: React.FC<NoteCardProps> = ({ note, isDragGhost, isDragPlaceholde
     deleteNote(id);
   }, [deleteNote]);
 
-  // Auto-grow the card in edit mode so every image fits with breathing room —
-  // otherwise dragging an image past the right/bottom edge clips it and the
-  // user has to resize the card by hand.
-  useEffect(() => {
-    if (!isExpanded) return;
-    let maxR = 0, maxB = 0;
-    for (const im of note.images) {
-      const ih = im._previewH || 100;
-      const ratio = (im.width && im.height) ? im.width / im.height : 1.5;
-      const iw = ih * ratio;
-      const ix = im._imgX !== undefined ? im._imgX : fsn(10, gfs);
-      const iy = im._imgY !== undefined ? im._imgY : fsn(10, gfs);
-      maxR = Math.max(maxR, ix + iw);
-      maxB = Math.max(maxB, iy + ih);
-    }
-    const pad = fsn(24, gfs);
-    const needW = maxR + pad;
-    const needH = maxB + pad + fsn(36, gfs);
-    const curW = note.width || 260;
-    const curH = note.height || 200;
-    if (needW > curW || needH > curH) {
-      update(note.id, { width: Math.max(curW, needW), height: Math.max(curH, needH), customSize: true });
-    }
-  }, [note.images, isExpanded]);
-
   // Ctrl+Z undo
   // Save undo snapshot
   const saveUndo = useCallback((text: string) => {
@@ -123,6 +87,7 @@ const NoteCard: React.FC<NoteCardProps> = ({ note, isDragGhost, isDragPlaceholde
   }, []);
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
+    if (composing.current || e.nativeEvent.isComposing) return;
     if (e.ctrlKey && e.key === 'z') {
       e.preventDefault();
       if (undoStack.current.length > 1) {
@@ -141,8 +106,28 @@ const NoteCard: React.FC<NoteCardProps> = ({ note, isDragGhost, isDragPlaceholde
         }
       }
     }
-    if (e.key === 'Escape') (e.target as HTMLElement).blur();
   }, []);
+
+  useEffect(() => {
+    if (!showExpanded && !showMenu) return;
+    const onEscape = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape' || event.isComposing || composing.current ||
+        document.querySelector('.dialog-overlay, [data-file-dialog], [data-lightbox], .img-lightbox-overlay')) return;
+      if (showMenu) {
+        event.preventDefault();
+        event.stopPropagation();
+        setShowMenu(false);
+        contentRef.current?.focus({ preventScroll: true });
+      } else {
+        event.preventDefault();
+        const editor = contentRef.current;
+        if (document.activeElement === editor) editor?.blur();
+        else onEditEnd?.(note.id);
+      }
+    };
+    window.addEventListener('keydown', onEscape, true);
+    return () => window.removeEventListener('keydown', onEscape, true);
+  }, [showExpanded, showMenu, onEditEnd, note.id]);
 
   const handleCompositionStart = () => { composing.current = true; };
   const handleCompositionEnd = (e: React.CompositionEvent<HTMLDivElement>) => {
@@ -174,14 +159,13 @@ const NoteCard: React.FC<NoteCardProps> = ({ note, isDragGhost, isDragPlaceholde
     if (e.button !== 0) return;
     e.stopPropagation();
     selectNote(note.id);
-    setIsEditing(true);
-    if (onEditStart) onEditStart();
+    onEditStart?.(note.id);
   }, [note.id, onEditStart, selectNote]);
 
-  const handleContentBlur = () => {
-    setIsEditing(false);
-    if (content !== note.content) { update(note.id, { content }); saveUndo(content); }
-    if (onEditEnd) onEditEnd();
+  const handleContentBlur = (event: React.FocusEvent<HTMLDivElement>) => {
+    const text = event.currentTarget.innerText ?? content;
+    if (text !== note.content) { update(note.id, { content: text }); saveUndo(text); }
+    if (!showMenu && !event.relatedTarget?.closest('.note-editor-body')) onEditEnd?.(note.id);
   };
 
   // Image drag between notes (pointer-based, no browser DnD)
@@ -246,6 +230,7 @@ const NoteCard: React.FC<NoteCardProps> = ({ note, isDragGhost, isDragPlaceholde
     setMenuPos({ x: e.clientX, y: e.clientY });
     setShowMenu(true);
     selectNote(note.id);
+    onEditStart?.(note.id);
   };
 
   const floatClickTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -311,18 +296,23 @@ const NoteCard: React.FC<NoteCardProps> = ({ note, isDragGhost, isDragPlaceholde
   // Resize
   const handleResizeDown = (event: React.PointerEvent<HTMLDivElement>) => {
     const wrapper = event.currentTarget.closest<HTMLElement>('.note-card-wrapper');
-    if (!wrapper) return;
+    if (!wrapper || !onResizePreview) return;
     const scale = useNoteStore.getState().uiScale;
     const startW = wrapper.offsetWidth;
     const startH = wrapper.offsetHeight;
     const dimensions = (x: number, y: number) => ({
-      width: Math.max(180, startW + x / scale),
-      height: Math.max(120, startH + y / scale),
+      width: Math.max(180, Math.round(startW + x / scale)),
+      height: Math.max(120, Math.round(startH + y / scale)),
     });
-    startPreview(event, boxResizePreview(wrapper, dimensions, 1, (width, height) => {
-      selectNote(null);
-      update(note.id, { width, height, customSize: true });
-    }));
+    startPreview(event, {
+      paint: (dx, dy) => onResizePreview(note.id, dimensions(dx, dy)),
+      reset: () => onResizePreview(note.id, null),
+      finish(dx, dy) {
+        selectNote(null);
+        onEditEnd?.(note.id);
+        update(note.id, { ...dimensions(dx, dy), customSize: true });
+      },
+    });
   };
 
   const resizeImage = (event: React.PointerEvent<HTMLDivElement>, img: NoteImage, topLeft: boolean) => {
@@ -371,30 +361,37 @@ const NoteCard: React.FC<NoteCardProps> = ({ note, isDragGhost, isDragPlaceholde
     <>
       <LiquidGlassCard className="liquid-glass-card--note" radius={14}
         data-selected={isSelected || undefined} dragState={isDragGhost ? 'preview' : isDragPlaceholder ? 'placeholder' : undefined}
+        {...(!isDragGhost && !isDragPlaceholder && externalFileTarget(event => {
+          const textBottom = contentRef.current?.offsetHeight ?? 0;
+          receiveExternalFiles(event.dataTransfer, items => appendNoteDrop(note.id, items, textBottom));
+        }))}
         onContextMenu={handleContextMenu} style={{
         minWidth: '100%',
-        width: showExpanded ? 'auto' : '100%',
+        width: '100%',
         minHeight: '100%',
-        height: showExpanded ? 'auto' : '100%',
+        height: '100%',
         '--note-glass-tint': note.color,
         display: 'flex', flexDirection: 'column',
-        transition: 'box-shadow 0.2s, border 0.2s, width 0.2s, height 0.2s',
+        transition: 'box-shadow 0.2s, border-color 0.2s',
         position: 'relative', userSelect: 'none', overflow: 'hidden',
       } as React.CSSProperties}>
+        <div className="note-glass-backplate" aria-hidden="true" />
+        <div className="note-editor-body" data-note-editing={showExpanded || undefined}>
         {/* Header — fixed above scrollable area, always visible */}
         <div onPointerDown={handleHeaderPointerDown} style={{
           display: 'flex', alignItems: 'center', justifyContent: 'space-between',
           padding: `${fs(4, gfs)} ${fs(8, gfs)}`,
           background: 'rgba(0,0,0,0.1)', cursor: 'grab', flexShrink: 0, minHeight: fs(24, gfs),
         }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: fs(4, gfs) }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: fs(4, gfs), minWidth: 0 }}>
             <span style={{
               fontSize: fs(10, gfs), color: 'rgba(255,255,255,0.8)',
               background: 'rgba(255,255,255,0.12)', padding: `0 ${fs(6, gfs)}`, borderRadius: '8px', fontWeight: 500,
+              whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
             }}>{tag?.name || note.tag || '通用'}</span>
             {note.isFloating && <span style={{ width: fs(4, gfs), height: fs(4, gfs), borderRadius: '50%', background: 'rgba(255,255,255,0.7)' }} />}
           </div>
-          <div style={{ display: 'flex', gap: fs(1, gfs), alignItems: 'center' }}>
+          <div style={{ display: 'flex', gap: fs(1, gfs), alignItems: 'center', flexShrink: 0 }}>
             <div style={{ display: 'flex', gap: fs(2, gfs), marginRight: fs(4, gfs) }}>
               {QUICK_COLORS.map((c) => (
                 <div key={c} className="color-dot" onClick={(ev) => { ev.stopPropagation(); handleColorChange(c); }}
@@ -403,14 +400,9 @@ const NoteCard: React.FC<NoteCardProps> = ({ note, isDragGhost, isDragPlaceholde
                     transition: 'border-color 0.2s, transform 0.2s' }} />
               ))}
             </div>
-            <button onClick={(ev) => { ev.stopPropagation(); handlePinToScreen(); }}
-              style={{ background: 'none', border: 'none', color: note.isFloating ? '#fff' : 'rgba(255,255,255,0.5)',
-                cursor: 'pointer', fontSize: fs(11, gfs), padding: `0 ${fs(2, gfs)}`, fontFamily: 'inherit', lineHeight: 1 }}>o</button>
-            <button onClick={(ev) => { ev.stopPropagation(); handleDelete(); }}
-              style={{ background: 'none', border: 'none', color: 'rgba(255,255,255,0.45)', cursor: 'pointer',
-                fontSize: fs(14, gfs), padding: `0 ${fs(2, gfs)}`, fontFamily: 'inherit', lineHeight: 1 }}
-              onMouseEnter={(e2) => { e2.currentTarget.style.color = '#fff'; }}
-              onMouseLeave={(e2) => { e2.currentTarget.style.color = 'rgba(255,255,255,0.45)'; }}>x</button>
+            <IconAction className="note-action" icon="pin" aria-pressed={note.isFloating}
+              label={note.isFloating ? '取消固定' : '固定到屏幕'} onClick={ev => { ev.stopPropagation(); void handlePinToScreen(); }} />
+            <IconAction className="note-action" label="删除便笺" danger onClick={ev => { ev.stopPropagation(); handleDelete(); }} />
           </div>
         </div>
 
@@ -424,7 +416,7 @@ const NoteCard: React.FC<NoteCardProps> = ({ note, isDragGhost, isDragPlaceholde
             style={{
               padding: fs(8, gfs) + ' ' + fs(10, gfs),
               color: 'rgba(255,255,255,0.93)',
-              fontSize: (showExpanded ? gfs : gfs - 1) + 'px', lineHeight: 1.5,
+              fontSize: gfs + 'px', lineHeight: 1.5,
               outline: 'none', whiteSpace: 'pre-wrap', wordBreak: 'break-word',
               minHeight: fs(40, gfs),
               cursor: showExpanded ? 'text' : 'pointer',
@@ -448,14 +440,12 @@ const NoteCard: React.FC<NoteCardProps> = ({ note, isDragGhost, isDragPlaceholde
                   selectNote(note.id);
                   setImgSaveMenu({ x: ev.clientX, y: ev.clientY, dataUrl: img.dataUrl, fileName: img.fileName });
                 }}>
-                <img src={img.dataUrl} alt=""
+                <img src={img.dataUrl} alt="" loading={isDragGhost ? 'eager' : 'lazy'} decoding="async"
                   onPointerDown={handleImagePointerDown(img)}
                   onClick={(ev) => { ev.stopPropagation(); if (imgDragMoved.current) { imgDragMoved.current = false; return; } setLightboxImg(img.dataUrl); setLightboxScale(1); setLbPan({x:0,y:0}); lbScaleRef.current=1; lbPanRef.current={x:0,y:0}; }}
                   style={{ height: imgH, width: 'auto', borderRadius: '5px', cursor: 'grab', display: 'block' }} />
-                  <button onClick={(ev) => { ev.stopPropagation(); update(note.id, { images: note.images.filter((_, i) => i !== imgIdx) }); }}
-                    className="note-img-del" style={{ position: 'absolute', top: '2px', right: '2px', width: '18px', height: '18px',
-                      borderRadius: '50%', background: 'rgba(0,0,0,0.6)', border: 'none', color: '#fff', fontSize: '10px',
-                      cursor: 'pointer', opacity: 0, transition: 'opacity 0.15s', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>x</button>
+                  <IconAction label="移除图片" danger className="note-img-del"
+                    onClick={ev => { ev.stopPropagation(); update(note.id, { images: note.images.filter((_, i) => i !== imgIdx) }); }} />
                   <div className="note-img-size note-img-size-tl"
                     onPointerDown={event => resizeImage(event, img, true)}
                     style={{
@@ -476,6 +466,11 @@ const NoteCard: React.FC<NoteCardProps> = ({ note, isDragGhost, isDragPlaceholde
               );
             })}
         </div>
+        <NoteAttachments items={note.attachments ?? []} onOpen={id => openNoteAttachment(note.id, id)}
+          onRemove={showExpanded ? id => {
+            const latest = useNoteStore.getState().notes.find(item => item.id === note.id);
+            if (latest) update(note.id, { attachments: latest.attachments?.filter(item => item.id !== id) });
+          } : undefined} />
 
         {/* Add-image button — always at bottom, outside scroll area */}
         {showExpanded && (
@@ -505,7 +500,7 @@ const NoteCard: React.FC<NoteCardProps> = ({ note, isDragGhost, isDragPlaceholde
           background: 'linear-gradient(135deg, transparent 50%, rgba(255,255,255,0.25) 50%)',
           borderRadius: '0 0 14px 0',
         }} />
-
+        </div>
       </LiquidGlassCard>
 
       {/* Image lightbox with scroll zoom + drag pan */}
@@ -551,8 +546,8 @@ const NoteCard: React.FC<NoteCardProps> = ({ note, isDragGhost, isDragPlaceholde
       {/* Context menu */}
       {showMenu && createPortal(<>
         <div style={{ position: 'fixed', inset: 0, zIndex: 9998 }} onClick={() => setShowMenu(false)} onContextMenu={(ev) => { ev.preventDefault(); setShowMenu(false); }} />
-        <div className="context-menu" data-pointer-scope style={{ left: clampedMenuX, top: clampedMenuY }}>
-          <button className="context-menu-item" onClick={() => { setShowMenu(false); setIsEditing(true); onEditStart?.(); }} style={{ fontSize: fs(13, gfs) }}>编辑</button>
+        <div className="context-menu" data-pointer-scope style={{ left: clampedMenuX, top: clampedMenuY }}
+          onMouseDown={event => event.preventDefault()}>
           <button className="context-menu-item" onClick={handlePinToScreen} style={{ fontSize: fs(13, gfs) }}>{note.isFloating ? '取消固定' : '固定到屏幕'}</button>
           <div className="context-menu-divider" />
           <div style={{ padding: '4px 10px', display: 'flex', gap: '5px', flexWrap: 'wrap' }}>
