@@ -1,0 +1,57 @@
+.pdf-nav-bar::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: -1;
+  background: var(--chrome-bg);
+  border-bottom: 1px solid var(--glass-border);
+  backdrop-filter: blur(10px);
+}
+.pdf-nav-button, .pdf-nav-input {
+  height: 28px;
+  flex: none;
+  border: 1px solid var(--glass-border);
+  border-radius: 6px;
+  background-color: var(--glass-bg-light);
+  color: var(--text-secondary);
+  padding: 0 10px;
+  font: inherit;
+  white-space: nowrap;
+  transition: background-color 150ms, border-color 150ms;
+}
+.pdf-nav-input { width: 48px; text-align: center; padding: 0 3px; color: var(--text-primary); }
+.pdf-nav-button { cursor: pointer; }
+.pdf-nav-button:disabled { color: var(--text-muted); cursor: default; background-color: transparent; }
+.pdf-nav-button:hover:not(:disabled), .pdf-nav-input:hover {
+  background-color: var(--glass-bg-hover);
+  border-color: var(--glass-border-active);
+}
+.pdf-nav-button:focus-visible, .pdf-nav-input:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.pdf-nav-button[data-dirty] { color: var(--danger); }
+.pdf-nav-add { width: 28px; padding: 0; font-size: 1.25em; }
+.pdf-nav-marker { position: relative; flex: none; }
+.pdf-nav-mark {
+  min-width: 33px;
+  padding: 0 6px;
+  border-color: var(--accent);
+  color: var(--accent);
+  background-color: color-mix(in srgb, var(--accent) 12%, transparent);
+  font-weight: 600;
+}
+.pdf-nav-mark[aria-current], .pdf-nav-mark:hover:not(:disabled) {
+  background-color: color-mix(in srgb, var(--accent) 21%, transparent);
+  border-color: var(--accent);
+}
+.pdf-nav-marker .pdf-nav-marker-remove {
+  position: absolute;
+  top: -5px;
+  right: -5px;
+  width: 16px;
+  height: 16px;
+  opacity: 0;
+  pointer-events: none;
+  background-color: var(--dialog-bg);
+}
+.pdf-nav-marker-remove svg { width: 11px; height: 11px; }
+.pdf-nav-marker:is(:hover, :focus-within) .pdf-nav-marker-remove { opacity: 1; pointer-events: auto; }

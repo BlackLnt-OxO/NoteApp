@@ -9,8 +9,7 @@ export default function SettingsBackdrop({ wallpaper }: { wallpaper: string | nu
   useLayoutEffect(() => {
     const canvas = ref.current;
     if (!canvas) return;
-    const source = canvas.closest('.settings-overlay')?.parentElement
-      ?.querySelector<HTMLImageElement>('img[data-workspace-background]');
+    const source = document.querySelector<HTMLImageElement>('img[data-workspace-background]');
     if (!wallpaper || !source) {
       canvas.hidden = true;
       return;
@@ -19,16 +18,15 @@ export default function SettingsBackdrop({ wallpaper }: { wallpaper: string | nu
     let frame: number | undefined;
     const draw = () => {
       frame = undefined;
-      const width = canvas.clientWidth;
-      const height = canvas.clientHeight;
-      const viewWidth = source.offsetWidth;
-      const viewHeight = source.offsetHeight;
+      const target = canvas.getBoundingClientRect();
+      const sourceRect = source.getBoundingClientRect();
+      const { width, height } = target;
+      const { width: viewWidth, height: viewHeight } = sourceRect;
       if (!width || !height || !viewWidth || !viewHeight || !source.complete || !source.naturalWidth) return;
 
       const cover = Math.max(viewWidth / source.naturalWidth, viewHeight / source.naturalHeight);
-      // The settings shell is centered over the same object-fit: cover image.
-      const x = (source.naturalWidth - width / cover) / 2;
-      const y = (source.naturalHeight - height / cover) / 2;
+      const x = (target.left - sourceRect.left - (viewWidth - source.naturalWidth * cover) / 2) / cover;
+      const y = (target.top - sourceRect.top - (viewHeight - source.naturalHeight * cover) / 2) / cover;
       const padding = FROST_RADIUS * 3;
       const left = Math.max(0, x - padding / cover);
       const top = Math.max(0, y - padding / cover);
@@ -53,11 +51,16 @@ export default function SettingsBackdrop({ wallpaper }: { wallpaper: string | nu
     resize.observe(canvas);
     resize.observe(source);
     source.addEventListener('load', schedule);
+    const shell = canvas.parentElement;
+    shell?.addEventListener('animationend', schedule);
+    window.addEventListener('resize', schedule);
     schedule();
     return () => {
       if (frame !== undefined) cancelAnimationFrame(frame);
       resize.disconnect();
       source.removeEventListener('load', schedule);
+      shell?.removeEventListener('animationend', schedule);
+      window.removeEventListener('resize', schedule);
       delete canvas.dataset.ready;
     };
   }, [wallpaper]);

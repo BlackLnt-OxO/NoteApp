@@ -39,7 +39,7 @@ import type {
 } from './PdfTypes';
 import { loadPdfDocument, type PdfJsDocument, abortActivePdfLoad, resetPdfWorker } from './PdfLoader';
 import { PDF_ANNOTATION_BLUE } from '../../themeColors';
-import { loadAnnotationFile, pendingAnnotationBinding, saveAnnotationFile, type AnnotationFile } from '../FileLibrary/annotationFiles';
+import { commitAnnotationBinding, loadAnnotationFile, saveAnnotationFile, type AnnotationFile } from '../FileLibrary/annotationFiles';
 import type { OpenedPdf } from '../FileLibrary/inspectPdf';
 
 interface PdfResume {
@@ -222,6 +222,8 @@ export interface PdfStore {
   /** Place an empty text card at (x,y); opens it in its editor immediately. */
   addTextNode: (page: number, x: number, y: number) => string;
   addAssetObject: (page: number, data: import('../FileLibrary/fileTypes').AssetPlacement) => void;
+  addDroppedObjects: (page: number, objects: (PdfImageObject | import('../FileLibrary/fileTypes').LinkedAssetObject)[]) => void;
+  relinkLocalObject: (page: number, id: string, previous: string, path: string) => boolean;
   resizeAssetObject: (page: number, id: string, width: number, height: number) => void;
   /** Merge content/geometry into a text card. Caller pushes history first. */
   updateTextNode: (page: number, id: string, data: Partial<PdfTextObject>) => void;
@@ -601,6 +603,32 @@ export const usePdfStore = create<PdfStore>((set, get) => ({
     }));
   },
 
+  addDroppedObjects: (page, objects) => {
+    if (!objects.length) return;
+    set(state => {
+      const current = state.items[page] ?? [];
+      return {
+        items: { ...state.items, [page]: [...current, ...objects] },
+        history: pushHistoryEntry(state.history, page, current),
+        redoStack: { ...state.redoStack, [page]: [] }, dirty: true,
+        ...(state.currentPage === page ? { activeTool: 'select', selectedIds: objects.map(object => object.id) } : {}),
+      };
+    });
+  },
+
+  relinkLocalObject: (page, id, previous, path) => {
+    const items = get().items[page] ?? [];
+    const found = items.find(object => object.type === 'asset' && object.id === id && object.sourcePath === previous);
+    if (!found) return false;
+    set(state => ({
+      items: { ...state.items, [page]: items.map(object => object.type === 'asset' && object === found
+        ? { ...object, assetId: undefined, sourcePath: path } : object) },
+      history: pushHistoryEntry(state.history, page, items),
+      redoStack: { ...state.redoStack, [page]: [] }, dirty: true,
+    }));
+    return true;
+  },
+
   resizeAssetObject: (page, id, width, height) => set(state => ({
     items: { ...state.items, [page]: (state.items[page] ?? []).map(object =>
       object.type === 'asset' && object.id === id ? { ...object, width, height } : object) },
@@ -859,13 +887,15 @@ export const usePdfStore = create<PdfStore>((set, get) => ({
 
   saveAnnotations: async () => {
     window.dispatchEvent(new Event('ink:flush-gesture'));
-    const pending = pendingAnnotationBinding();
-    if (pending) await pending.catch(() => {});
-    const { currentItemId, items, binding, unplacedPages } = get();
+    const { currentItemId, pdfDoc } = get();
     if (!currentItemId) return { ok: !get().dirty };
     try {
-      await saveAnnotationFile(currentItemId, { items, binding, unplaced: unplacedPages });
-      if (get().currentItemId === currentItemId && get().items === items) set({ dirty: false });
+      await commitAnnotationBinding(async () => {
+        const { currentItemId: activeId, pdfDoc: activeDoc, items, binding, unplacedPages } = get();
+        if (activeId !== currentItemId || activeDoc !== pdfDoc) return;
+        await saveAnnotationFile(currentItemId, { items, binding, unplaced: unplacedPages });
+        if (get().pdfDoc === pdfDoc && get().currentItemId === currentItemId && get().items === items) set({ dirty: false });
+      });
       return { ok: true };
     } catch (e) {
       console.error('Save annotations failed:', e);

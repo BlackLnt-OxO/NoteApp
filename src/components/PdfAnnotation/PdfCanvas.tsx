@@ -68,6 +68,7 @@ import {
   drawLiveAnnotatedStroke,
 } from './PdfBrushRenderers';
 import { renderPageToCanvas, getPageSize, cleanupPage } from './PdfLoader';
+import { awaitPdfOperation, PDF_PAGE_READY } from '../FileLibrary/inspectPdf';
 import {
   createEraserPerf, addEraserScan, addEraserRestamp, logEraserPerf,
   type EraserPerf,
@@ -79,6 +80,7 @@ import PdfTextObject from './PdfTextObject';
 import PdfImageObject from './PdfImageObject';
 import AssetObject from '../FileLibrary/AssetObject';
 import { assetDropTarget, makeAssetPlacement, useAssetDrop } from '../FileLibrary/assetDrop';
+import { externalFileTarget, placeDroppedItems, receiveExternalFiles } from '../FileLibrary/externalFiles';
 
 /** Subset of page items that are ink strokes (the rest are DOM-only objects). */
 function strokesOnly(items: PdfItem[]): PdfStroke[] {
@@ -761,6 +763,7 @@ const PdfCanvas: React.FC = () => {
   useEffect(() => {
     if (!pdfDoc) return;
     const token = ++pageLoadTokenRef.current;
+    const abort = new AbortController();
     const pageNum = currentPage;
     const container = containerRef.current;
     // clientWidth is LAYOUT px; the canvas/user space is VISUAL px (layout × uiScale).
@@ -785,13 +788,19 @@ const PdfCanvas: React.FC = () => {
       scheduleRender();
       // Background is ready — drop the open/rendering overlay.
       usePdfStore.setState({ loading: false, loadingPhase: null });
+      requestAnimationFrame(() => {
+        if (token === pageLoadTokenRef.current && usePdfStore.getState().pdfDoc === pdfDoc) {
+          window.dispatchEvent(new CustomEvent(PDF_PAGE_READY, { detail: pdfDoc }));
+        }
+      });
       if (prevPageRef.current && prevPageRef.current !== pageNum) {
         cleanupPage(pdfDoc, prevPageRef.current);
       }
       prevPageRef.current = pageNum;
     };
 
-    (async () => {
+    usePdfStore.setState({ loading: true, loadingPhase: `渲染页面 ${pageNum}`, error: null });
+    void awaitPdfOperation((async () => {
       // Reuse the stored page size when available (loadPdfDocument already
       // measured page 1) to avoid a redundant getPage during first open.
       let size = usePdfStore.getState().pageSizes[pageNum];
@@ -802,8 +811,6 @@ const PdfCanvas: React.FC = () => {
       }
 
       // Show a brief "rendering page N" note while the bg bakes.
-      usePdfStore.setState({ loading: true, loadingPhase: `渲染页面 ${pageNum}` });
-
       // Cache hit (anchor page / recently visited) → instant switch, no wait.
       const cached = bgCacheRef.current.get(pageNum);
       if (cached) {
@@ -813,7 +820,7 @@ const PdfCanvas: React.FC = () => {
 
       // Miss → render into a scratch canvas, then atomically swap it in.
       const scratch = document.createElement('canvas');
-      await renderPageToCanvas(pdfDoc, pageNum, scratch, PDF_BAKE_SCALE);
+      await renderPageToCanvas(pdfDoc, pageNum, scratch, PDF_BAKE_SCALE, abort.signal);
       if (token !== pageLoadTokenRef.current) return;
 
       // Insert into cache (LRU; anchored pages are never evicted). Capacity
@@ -832,7 +839,12 @@ const PdfCanvas: React.FC = () => {
       }
 
       finish(scratch);
-    })();
+    })(), abort.signal, `第 ${pageNum} 页渲染超时。`).catch(error => {
+      if (abort.signal.aborted || token !== pageLoadTokenRef.current) return;
+      abort.abort();
+      usePdfStore.setState({ loading: false, loadingPhase: null, error: String(error?.message ?? error) });
+    });
+    return () => { pageLoadTokenRef.current++; abort.abort(); };
   }, [pdfDoc, currentPage, rebuildInk, scheduleRender]);
 
   // Drop the background cache when the document closes (in case this component
@@ -1636,6 +1648,18 @@ const PdfCanvas: React.FC = () => {
   return (
     <div ref={containerRef} tabIndex={-1}
       {...assetDropTarget}
+      {...externalFileTarget(event => {
+        const { pdfDoc: document, currentPage: page, camera: view, pageSizes } = usePdfStore.getState();
+        const size = pageSizes[page];
+        if (!document || !size) return;
+        const bounds = event.currentTarget.getBoundingClientRect();
+        const origin = screenToWorld(event.clientX - bounds.left, event.clientY - bounds.top, view);
+        if (origin.x < 0 || origin.y < 0 || origin.x > size.width || origin.y > size.height) return;
+        receiveExternalFiles(event.dataTransfer, items => {
+          const current = usePdfStore.getState();
+          if (containerRef.current && current.pdfDoc === document) current.addDroppedObjects(page, placeDroppedItems(items, origin, size));
+        });
+      })}
       {...selectionEvents}
       onGotPointerCaptureCapture={event => { const id = (event.target as HTMLElement).closest('[data-ink-object-id]')?.getAttribute('data-ink-object-id'); if (id) manipulatedIdsRef.current.add(id); }}
       onLostPointerCaptureCapture={event => { const id = (event.target as HTMLElement).closest('[data-ink-object-id]')?.getAttribute('data-ink-object-id'); if (id) manipulatedIdsRef.current.delete(id); }}
@@ -1686,6 +1710,8 @@ const PdfCanvas: React.FC = () => {
         if (o.type === 'asset') {
           return <AssetObject key={o.id} object={o} camera={camera} interactive={imageInteractive}
             selected={selectedIds.includes(o.id)} startResize={() => usePdfStore.getState().pushHistory(currentPage)}
+            onRelink={(previous, path) => usePdfStore.getState().pdfDoc === pdfDoc
+              && usePdfStore.getState().relinkLocalObject(currentPage, o.id, previous, path)}
             onDelete={() => usePdfStore.getState().deleteObject(currentPage, o.id)}
             resize={(width, height) => usePdfStore.getState().resizeAssetObject(currentPage, o.id, width, height)} />;
         }

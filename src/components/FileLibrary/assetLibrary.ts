@@ -2,21 +2,25 @@ import { create } from 'zustand';
 import { fileName, isImageFile, localPathKey } from './fileTypes';
 
 const KEY = 'stickynotes-asset-library';
-interface Asset { id: string; path: string }
+interface Asset { id: string; path: string; hidden?: boolean }
 interface Registry { assets: Asset[]; aliases: Record<string, string> }
+interface LocalPreview { path: string; relink: (previous: string, path: string) => boolean }
 interface AssetLibrary extends Registry {
   available: Record<string, boolean>;
   loaded: boolean;
   previewId: string | null;
+  localPreview: LocalPreview | null;
   requestedPath: string | null;
   load: () => void;
   refresh: () => Promise<void>;
-  add: (paths: string[]) => void;
+  add: (paths: string[], beforeId?: string) => void;
+  remove: (id: string) => void;
   relink: (id: string) => Promise<void>;
   setAvailable: (id: string, path: string, available: boolean) => void;
 }
 
-export function resolveAsset(registry: Registry, id: string): Asset | undefined {
+export function resolveAsset(registry: Registry, id: string | undefined): Asset | undefined {
+  if (!id) return;
   return registry.assets.find(asset => asset.id === (registry.aliases[id] ?? id));
 }
 
@@ -25,7 +29,7 @@ function persist(registry: Registry) {
 }
 
 export const useAssetLibrary = create<AssetLibrary>((set, get) => ({
-  assets: [], aliases: {}, available: {}, loaded: false, previewId: null, requestedPath: null,
+  assets: [], aliases: {}, available: {}, loaded: false, previewId: null, localPreview: null, requestedPath: null,
   load: () => {
     if (get().loaded) return;
     try {
@@ -55,19 +59,32 @@ export const useAssetLibrary = create<AssetLibrary>((set, get) => ({
     if (resolveAsset(get(), id)?.path !== path || get().available[id] === available) return;
     set(state => ({ available: { ...state.available, [id]: available } }));
   },
-  add: paths => {
+  add: (paths, beforeId) => {
     const { assets, aliases } = get();
     const next = [...assets];
-    const keys = new Set(assets.map(asset => localPathKey(asset.path)));
+    const byPath = new Map(assets.map(asset => [localPathKey(asset.path), asset]));
+    const inserted: Asset[] = [];
     for (const path of paths) {
       const key = localPathKey(path);
-      if (keys.has(key)) continue;
-      keys.add(key);
-      next.push({ id: crypto.randomUUID(), path });
+      const existing = byPath.get(key);
+      if (existing && !existing.hidden) continue;
+      const asset = existing ? { id: existing.id, path: existing.path } : { id: crypto.randomUUID(), path };
+      if (existing) next.splice(next.indexOf(existing), 1);
+      byPath.set(key, asset);
+      inserted.push(asset);
     }
+    if (!inserted.length) return;
+    const slot = beforeId ? next.findIndex(asset => asset.id === beforeId) : -1;
+    next.splice(slot < 0 ? next.length : slot, 0, ...inserted);
     persist({ assets: next, aliases });
     set({ assets: next });
     void get().refresh().catch(() => {});
+  },
+  remove: id => {
+    const { assets, aliases } = get();
+    const next = assets.map(asset => asset.id === id ? { ...asset, hidden: true } : asset);
+    persist({ assets: next, aliases });
+    set({ assets: next });
   },
   relink: async id => {
     const api = window.electronAPI;
@@ -81,6 +98,7 @@ export const useAssetLibrary = create<AssetLibrary>((set, get) => ({
     const { assets, aliases } = get();
     const duplicate = assets.find(asset => asset.id !== old.id && localPathKey(asset.path) === localPathKey(path));
     const next = duplicate ? assets.filter(asset => asset.id !== old.id)
+      .map(asset => asset.id === duplicate.id && !old.hidden && asset.hidden ? { ...asset, hidden: false } : asset)
       : assets.map(asset => asset.id === old.id ? { ...asset, path } : asset);
     const nextAliases = { ...aliases };
     if (duplicate) {
@@ -99,7 +117,11 @@ export const useAssetLibrary = create<AssetLibrary>((set, get) => ({
 
 export function showAssetPreview(id: string) {
   const asset = resolveAsset(useAssetLibrary.getState(), id);
-  if (asset) useAssetLibrary.setState({ previewId: id });
+  if (asset) useAssetLibrary.setState({ previewId: id, localPreview: null });
+}
+
+export function showLocalAssetPreview(path: string, relink: LocalPreview['relink']) {
+  useAssetLibrary.setState({ localPreview: { path, relink }, previewId: null });
 }
 
 export function rebindAsset(id: string) {

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { collectMigration, matchPages, saveAnnotationFile, type UnplacedPage } from '../annotationFiles';
+import { collectMigration, commitAnnotationBinding, matchPages, saveAnnotationFile, type UnplacedPage } from '../annotationFiles';
 import type { LinkedAssetObject } from '../fileTypes';
 import { resolveAsset, useAssetLibrary } from '../assetLibrary';
 
@@ -32,6 +32,20 @@ describe('whole page migration', () => {
     vi.stubGlobal('electronAPI', { savePdfAnnotation: vi.fn().mockResolvedValue({ ok: false, error: '写入失败' }) });
     try { await expect(saveAnnotationFile('file', { items: {} })).rejects.toThrow('写入失败'); }
     finally { vi.unstubAllGlobals(); }
+  });
+
+  it('serializes binding and ink writes and continues after a failed write', async () => {
+    let rejectFirst!: (error: Error) => void;
+    const second = vi.fn().mockResolvedValue(undefined);
+    const first = commitAnnotationBinding(() => new Promise((_, reject) => { rejectFirst = reject; }));
+    const checked = expect(first).rejects.toThrow('write failed');
+    const save = commitAnnotationBinding(second);
+    await Promise.resolve();
+    expect(second).not.toHaveBeenCalled();
+    rejectFirst(new Error('write failed'));
+    await checked;
+    await save;
+    expect(second).toHaveBeenCalledOnce();
   });
 });
 

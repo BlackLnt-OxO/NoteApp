@@ -7,6 +7,8 @@ import AssetSidebar from './components/FileLibrary/AssetSidebar';
 import AssetPreview from './components/FileLibrary/AssetPreview';
 import { FileDialog } from './components/FileLibrary/FileDialogs';
 import { useAssetLibrary } from './components/FileLibrary/assetLibrary';
+import { appendNoteDrop, openNoteAttachment } from './components/FileLibrary/noteAttachments';
+import { hasExternalFiles, loadDroppedItems, reportFileError } from './components/FileLibrary/externalFiles';
 import CreateNoteDialog from './components/CreateNoteDialog';
 import SettingsDialog from './components/SettingsDialog';
 import ConfirmHost from './components/ConfirmDialog';
@@ -115,6 +117,33 @@ const App: React.FC = () => {
 
   // First-run check: until a data directory is configured, show the setup prompt.
   useEffect(() => {
+  useEffect(() => {
+    const api = window.electronAPI;
+    if (!api?.onFloatingFileDrop) return;
+    const drop = api.onFloatingFileDrop(({ noteId, paths }) => {
+      void loadDroppedItems(paths).then(items => appendNoteDrop(noteId, items)).catch(reportFileError);
+    });
+    const open = api.onFloatingAttachmentOpen(({ noteId, attachmentId }) => openNoteAttachment(noteId, attachmentId));
+    const remove = api.onFloatingMediaRemoved(({ noteId, itemId, kind }) => {
+      const store = useNoteStore.getState();
+      const note = store.notes.find(item => item.id === noteId);
+      if (note) store.updateNote(noteId, kind === 'image'
+        ? { images: note.images.filter(item => item.id !== itemId) }
+        : { attachments: note.attachments?.filter(item => item.id !== itemId) });
+    });
+    const unsubscribe = useNoteStore.subscribe((state, previous) => {
+      if (state.notes === previous.notes) return;
+      for (const note of state.notes) {
+        if (!note.isFloating) continue;
+        const old = previous.notes.find(item => item.id === note.id);
+        if (old && (old.images !== note.images || old.attachments !== note.attachments)) {
+          void api.syncFloatingMedia(note.id, { images: note.images, attachments: note.attachments }).catch(reportFileError);
+        }
+      }
+    });
+    return () => { drop(); open(); remove(); unsubscribe(); };
+  }, []);
+
     if (window.electronAPI) {
       window.electronAPI.getDataDirectory().then((info) => {
         setDataDirState(info.isConfigured ? 'ready' : 'prompt');
@@ -303,7 +332,9 @@ const App: React.FC = () => {
   }
 
   const workspace = (
-    <div ref={workspaceRef} data-pointer-scope={showBackground || undefined} data-settings-open={showSettings ? '' : undefined} style={{
+    <div ref={workspaceRef} data-pointer-scope={showBackground || undefined} data-settings-open={showSettings ? '' : undefined}
+      onDragOver={event => { if (!event.defaultPrevented && hasExternalFiles(event.dataTransfer)) { event.preventDefault(); event.dataTransfer.dropEffect = 'none'; } }}
+      onDrop={event => { if (hasExternalFiles(event.dataTransfer)) event.preventDefault(); }} style={{
       '--workspace-shade': shade,
       '--workspace-current-shade': 'var(--workspace-shade-preview, var(--workspace-shade))',
       '--workspace-surface-opacity': 'min(1, calc(var(--workspace-current-shade) * 1.2))',

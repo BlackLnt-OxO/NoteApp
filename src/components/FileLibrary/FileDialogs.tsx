@@ -7,21 +7,30 @@ import { resolveAsset, useAssetLibrary } from './assetLibrary';
 import { useAssetImage } from './AssetObject';
 import { fileName } from './fileTypes';
 import { HomeButtonResponse } from '../buttonPointerResponse';
+import SettingsBackdrop from '../SettingsBackdrop';
+import { ActionIcon } from '../IconAction';
+import { useNoteStore } from '../../store';
+import { backgroundShade } from '../../workspaceBackground';
+import { awaitPdfOperation } from './inspectPdf';
 import './fileLibrary.css';
 
-export function FileDialog({ title, onClose, children }: { title: string; onClose: () => void; children: ReactNode }) {
+export function FileDialog({ title, onClose, children, closeLabel = '关闭', saving = false }: {
+  title: string; onClose: () => void; children: ReactNode; closeLabel?: string; saving?: boolean;
+}) {
   const pointerScope = useContext(HomeButtonResponse);
+  const wallpaper = useNoteStore(state => state.settings.backgroundImage);
+  const opacity = useNoteStore(state => state.settings.backgroundOpacity);
   const closeRef = useRef<HTMLButtonElement>(null);
   const section = useRef<HTMLElement>(null);
   useEffect(() => {
     const previous = document.activeElement;
-    closeRef.current?.focus();
     return () => { if (previous instanceof HTMLElement && previous.isConnected) previous.focus(); };
   }, []);
+  useEffect(() => { closeRef.current?.focus({ preventScroll: true }); }, [title]);
   return createPortal(<div className="file-dialog-backdrop" data-file-dialog data-pointer-scope={pointerScope || undefined}
     onKeyDown={event => {
       event.stopPropagation();
-      if (event.key === 'Escape') { event.preventDefault(); onClose(); }
+      if (event.key === 'Escape') { event.preventDefault(); if (!saving) onClose(); }
       if (event.key === 'Tab') {
         const focusable = section.current?.querySelectorAll<HTMLElement>('button:not(:disabled),input:not(:disabled),select:not(:disabled)');
         if (!focusable?.length) return;
@@ -31,11 +40,18 @@ export function FileDialog({ title, onClose, children }: { title: string; onClos
         else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
       }
     }}>
-    <section ref={section} role="dialog" aria-modal="true" aria-label={title} className="file-dialog">
+    <section ref={section} role="dialog" aria-modal="true" aria-label={title} className="file-dialog frosted-dialog-shell"
+      style={{ '--workspace-current-shade': backgroundShade(opacity) } as React.CSSProperties}>
+      <SettingsBackdrop wallpaper={wallpaper} />
+      <div className="file-dialog-scroll">
       <header className="file-dialog-header"><strong>{title}</strong>
-        <button ref={closeRef} className="glass-btn" onClick={onClose}>关闭</button>
+        {closeLabel === '关闭'
+          ? <button ref={closeRef} type="button" className="icon-action" aria-label={closeLabel} data-tooltip={closeLabel}
+            disabled={saving} onClick={onClose}><ActionIcon /></button>
+          : <button ref={closeRef} className="glass-btn" disabled={saving} onClick={onClose}>{closeLabel}</button>}
       </header>
       {children}
+      </div>
     </section>
   </div>, document.body);
 }
@@ -45,8 +61,10 @@ const NO_ITEMS: PdfItem[] = [];
 function PreviewAsset({ object, style }: { object: Extract<PdfItem, { type: 'asset' }>; style: React.CSSProperties }) {
   const asset = useAssetLibrary(state => resolveAsset(state, object.assetId));
   const image = useAssetImage(object.assetId, true);
-  return image ? <img className="file-preview-object" alt={asset ? fileName(asset.path) : ''} src={image} style={{ ...style, objectFit: 'contain' }} />
-    : <div className="file-preview-object" style={{ ...style, background: 'var(--chrome-bg)', border: '1px solid currentColor' }}>{asset ? fileName(asset.path) : '文件离线'}</div>;
+  return image ? <img className="file-preview-object" alt={asset ? fileName(asset.path) : ''} src={image} style={{ ...style, objectFit: 'fill' }} />
+    : <div className="file-preview-object" style={{ ...style, background: 'var(--chrome-bg)', border: '1px solid currentColor' }}>
+      {fileName(object.sourcePath ?? asset?.path ?? '') || '文件离线'}
+    </div>;
 }
 
 export function PreviewPage({ doc, page, items = NO_ITEMS, maxWidth }: {
@@ -58,10 +76,11 @@ export function PreviewPage({ doc, page, items = NO_ITEMS, maxWidth }: {
   const [error, setError] = useState('');
   useEffect(() => {
     let stopped = false;
+    const abort = new AbortController();
     let render: import('pdfjs-dist').RenderTask | undefined;
     const work = document.createElement('canvas');
     setError('');
-    void (async () => {
+    const preview = (async () => {
       const pdfPage = await doc.getPage(page);
       if (stopped) return;
       const base = pdfPage.getViewport({ scale: 1 });
@@ -80,8 +99,15 @@ export function PreviewPage({ doc, page, items = NO_ITEMS, maxWidth }: {
       paper.current.height = work.height;
       paper.current.getContext('2d')?.drawImage(work, 0, 0);
       setLayout({ width: viewport.width, height: viewport.height, scale, page });
-    })().catch(error => { if (!stopped) setError(String(error.message ?? error)); }).finally(() => { work.width = work.height = 1; });
-    return () => { stopped = true; render?.cancel(); };
+    })();
+    void awaitPdfOperation(preview, abort.signal, `预览第 ${page} 页超时。可切换页面或手动填写页码。`)
+      .catch(error => {
+        if (stopped) return;
+        stopped = true;
+        render?.cancel();
+        setError(String(error?.message ?? error));
+      }).finally(() => { work.width = work.height = 1; });
+    return () => { stopped = true; abort.abort(); render?.cancel(); };
   }, [doc, page, maxWidth]);
 
   useEffect(() => {

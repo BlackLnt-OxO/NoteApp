@@ -42,7 +42,7 @@ export default function FileMigrationDialog({ review, close }: { review: Migrati
       setSaving(false);
     }
   };
-  return <FileDialog title={'批注迁移预览 · ' + review.name} onClose={() => { if (!saving) close(); }}>
+  return <FileDialog title={'批注迁移预览 · ' + review.name} saving={saving} onClose={close}>
     <div className="file-preview-body">
       <PreviewPage doc={review.doc.doc} page={page} items={notes.items[page]} maxWidth={Math.min(820, window.innerWidth - 320)} />
       <div className="file-preview-assignments">

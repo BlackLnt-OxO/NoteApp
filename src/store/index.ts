@@ -104,6 +104,7 @@ export const useNoteStore = create<NoteStore>((set, get) => ({
       tag: partial.tag || 'general',
       images: partial.images || [],
       createdAt: Date.now(),
+      ...(partial.attachments?.length ? { attachments: partial.attachments } : {}),
       updatedAt: Date.now(),
       gridX: partial.gridX ?? 0,
       gridY: partial.gridY ?? 0,

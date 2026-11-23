@@ -5,6 +5,14 @@ declare global {
     electronAPI?: {
       pickLibraryFiles: (options?: { single?: boolean; imagesOnly?: boolean }) => Promise<string[]>;
       checkLibraryFiles: (paths: string[]) => Promise<boolean[]>;
+      getDroppedFilePath: (file: File) => string;
+      revealLibraryFile: (path: string) => Promise<void>;
+      dropOnFloatingNote: (id: string, paths: string[]) => Promise<void>;
+      openFloatingAttachment: (id: string, attachmentId: string) => Promise<void>;
+      onFloatingFileDrop: (callback: (data: { noteId: string; paths: string[] }) => void) => () => void;
+      onFloatingAttachmentOpen: (callback: (data: { noteId: string; attachmentId: string }) => void) => () => void;
+      syncFloatingMedia: (id: string, media: Pick<import('./types').Note, 'images' | 'attachments'>) => Promise<void>;
+      onFloatingMediaRemoved: (callback: (data: { noteId: string; itemId: string; kind: 'image' | 'attachment' }) => void) => () => void;
       readLibraryImage: (path: string) => Promise<{ mime: string; data: ArrayBuffer }>;
       prepareLibraryDocument: (paths: string[]) => Promise<{ ok: true; file: import('./components/FileLibrary/fileTypes').PreparedFile } | { ok: false; error: string; offline?: boolean }>;
       onStorageFlush: (callback: (id: number) => void) => () => void;

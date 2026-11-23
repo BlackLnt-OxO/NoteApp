@@ -1,8 +1,30 @@
-const { contextBridge, ipcRenderer } = require('electron');
+const { contextBridge, ipcRenderer, webUtils } = require('electron');
 
 contextBridge.exposeInMainWorld('electronAPI', {
   pickLibraryFiles: (options) => ipcRenderer.invoke('file-library:pick', options),
   checkLibraryFiles: (paths) => ipcRenderer.invoke('file-library:status', paths),
+  getDroppedFilePath: file => webUtils.getPathForFile(file),
+  revealLibraryFile: path => ipcRenderer.invoke('file-library:reveal', path),
+  dropOnFloatingNote: (id, paths) => ipcRenderer.invoke('floating:drop-files', id, paths),
+  openFloatingAttachment: (id, attachmentId) => ipcRenderer.invoke('floating:open-attachment', id, attachmentId),
+  syncFloatingMedia: (id, media) => ipcRenderer.invoke('floating:sync-media', id, media),
+  removeFloatingMedia: (id, itemId, kind) => ipcRenderer.invoke('floating:remove-media', id, itemId, kind),
+  onFloatingMedia: listener => ipcRenderer.on('floating:media', (_event, data) => listener(data)),
+  onFloatingMediaRemoved: listener => {
+    const callback = (_event, data) => listener(data);
+    ipcRenderer.on('floating:media-removed', callback);
+    return () => ipcRenderer.removeListener('floating:media-removed', callback);
+  },
+  onFloatingFileDrop: listener => {
+    const callback = (_event, data) => listener(data);
+    ipcRenderer.on('floating:file-drop', callback);
+    return () => ipcRenderer.removeListener('floating:file-drop', callback);
+  },
+  onFloatingAttachmentOpen: listener => {
+    const callback = (_event, data) => listener(data);
+    ipcRenderer.on('floating:attachment-open', callback);
+    return () => ipcRenderer.removeListener('floating:attachment-open', callback);
+  },
   readLibraryImage: (path) => ipcRenderer.invoke('file-library:image', path),
   prepareLibraryDocument: (paths) => ipcRenderer.invoke('file-library:prepare', paths),
   onStorageFlush: (callback) => {
@@ -38,6 +60,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   },
   onFloatTransparentChanged: (callback) => {
     ipcRenderer.on('float:transparentChanged', (event, enabled) => callback(enabled));
+  },
+  onFloatCloseVisibility: callback => {
+    ipcRenderer.on('float:closeVisibility', (_event, opacity) => callback(opacity));
   },
   onFloatContentUpdated: (callback) => {
     ipcRenderer.on('float:contentUpdated', (event, data) => callback(data));

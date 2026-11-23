@@ -1,4 +1,4 @@
-const { BrowserWindow, dialog, ipcMain, app } = require('electron');
+const { BrowserWindow, dialog, ipcMain, app, shell } = require('electron');
 const fs = require('node:fs/promises');
 const path = require('node:path');
 const { createHash } = require('node:crypto');
@@ -210,6 +210,17 @@ async function prepareDocument(files) {
 }
 
 function setupFileLibrary(getWindow) {
+  ipcMain.handle('file-library:reveal', async (_event, file) => {
+    const source = checkedPath(file);
+    const directory = path.dirname(source);
+    if ((await fs.stat(source).catch(() => null))?.isFile()) {
+      shell.showItemInFolder(source);
+      return;
+    }
+    if (!(await fs.stat(directory).catch(() => null))?.isDirectory()) throw new Error('找不到所在文件夹。');
+    const error = await shell.openPath(directory);
+    if (error) throw new Error(error);
+  });
   ipcMain.handle('file-library:pick', async (_event, options = {}) => {
     const types = options.imagesOnly ? [...imageTypes.keys()] : documentTypes;
     const result = await dialog.showOpenDialog(getWindow(), {

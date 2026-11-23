@@ -9,6 +9,24 @@ export interface OpenedPdf {
   dispose: () => void;
 }
 
+export const PDF_PAGE_READY = 'noteapp:pdf-page-ready';
+const PAGE_TIMEOUT = 30_000;
+
+export function awaitPdfOperation<T>(operation: Promise<T>, signal: AbortSignal | undefined, message: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout>;
+  let abort: () => void;
+  return new Promise<T>((resolve, reject) => {
+    abort = () => reject(signal?.reason);
+    timer = setTimeout(() => reject(new Error(message)), PAGE_TIMEOUT);
+    signal?.addEventListener('abort', abort, { once: true });
+    operation.then(resolve, reject);
+    if (signal?.aborted) abort();
+  }).finally(() => {
+    clearTimeout(timer);
+    signal?.removeEventListener('abort', abort);
+  });
+}
+
 export async function inspectPdf(data: ArrayBuffer, signal?: AbortSignal): Promise<OpenedPdf> {
   const { getDocument, PDFWorker } = await import('pdfjs-dist');
   signal?.throwIfAborted();
@@ -26,8 +44,8 @@ export async function inspectPdf(data: ArrayBuffer, signal?: AbortSignal): Promi
   };
   signal?.addEventListener('abort', dispose, { once: true });
   try {
-    const doc = await task.promise;
-    const page = await doc.getPage(1);
+    const doc = await awaitPdfOperation(task.promise, signal, '读取 PDF 超时，请重试。');
+    const page = await awaitPdfOperation(doc.getPage(1), signal, '读取 PDF 首页超时，请重试。');
     const { width, height } = page.getViewport({ scale: 1 });
     page.cleanup();
     return { doc, firstPage: { width, height }, dispose };
@@ -37,26 +55,52 @@ export async function inspectPdf(data: ArrayBuffer, signal?: AbortSignal): Promi
   }
 }
 
-export async function fingerprintPages(doc: PdfJsDocument, check: () => void): Promise<PageFingerprints> {
+interface FingerprintOptions {
+  signal: AbortSignal;
+  progress: (page: number, total: number) => void;
+  beforePage?: () => Promise<void>;
+  retainPage?: (page: number) => boolean;
+}
+
+export async function fingerprintPages(doc: PdfJsDocument, options: FingerprintOptions): Promise<PageFingerprints> {
   const canvas = document.createElement('canvas');
   const ctx = canvas.getContext('2d', { willReadFrequently: true });
   if (!ctx) throw new Error('无法生成页面指纹。');
   const pages: string[] = [];
   try {
     for (let number = 1; number <= doc.numPages; number++) {
-      check();
-      const page = await doc.getPage(number);
+      await options.beforePage?.();
+      options.signal.throwIfAborted();
+      options.progress(number, doc.numPages);
+      let page: Awaited<ReturnType<PdfJsDocument['getPage']>> | undefined;
+      let render: import('pdfjs-dist').RenderTask | undefined;
+      let active = true;
       try {
-        const base = page.getViewport({ scale: 1 });
-        const viewport = page.getViewport({ scale: Math.min(2, 3072 / Math.max(base.width, base.height)) });
-        canvas.width = Math.max(1, Math.ceil(viewport.width));
-        canvas.height = Math.max(1, Math.ceil(viewport.height));
-        await page.render({ canvasContext: ctx, viewport, background: '#fff' }).promise;
-        const pixelBytes = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
-        const hash = await crypto.subtle.digest('SHA-256', pixelBytes);
-        pages.push([base.width, base.height, canvas.width, canvas.height,
-          ...Array.from(new Uint8Array(hash), byte => byte.toString(16).padStart(2, '0'))].join(':'));
-      } finally { page.cleanup(); }
+        const key = await awaitPdfOperation((async () => {
+          page = await doc.getPage(number);
+          if (!active) {
+            if (!options.retainPage?.(number)) page.cleanup();
+            return '';
+          }
+          const base = page.getViewport({ scale: 1 });
+          const viewport = page.getViewport({ scale: Math.min(2, 3072 / Math.max(base.width, base.height)) });
+          canvas.width = Math.max(1, Math.ceil(viewport.width));
+          canvas.height = Math.max(1, Math.ceil(viewport.height));
+          render = page.render({ canvasContext: ctx, viewport, background: '#fff' });
+          await render.promise;
+          render = undefined;
+          if (!active) return '';
+          const pixelBytes = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
+          const hash = await crypto.subtle.digest('SHA-256', pixelBytes);
+          return [base.width, base.height, canvas.width, canvas.height,
+            ...Array.from(new Uint8Array(hash), byte => byte.toString(16).padStart(2, '0'))].join(':');
+        })(), options.signal, `第 ${number} 页处理超时。`);
+        pages.push(key);
+      } finally {
+        active = false;
+        render?.cancel();
+        if (!options.retainPage?.(number)) page?.cleanup();
+      }
     }
   } finally { canvas.width = canvas.height = 1; }
   return { version: 1, pages };

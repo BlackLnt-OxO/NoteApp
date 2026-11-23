@@ -11,12 +11,15 @@ export interface NoteImage {
 
 export interface Note {
   id: string;
+export interface NoteAttachment { id: string; path: string }
+
   content: string;
   color: string;
   tag: string;
   images: NoteImage[];
   createdAt: number;
   updatedAt: number;
+  attachments?: NoteAttachment[];
   // Grid position (for main view)
   gridX: number;
   gridY: number;
